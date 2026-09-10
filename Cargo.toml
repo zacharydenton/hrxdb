@@ -1,0 +1,35 @@
+[package]
+name = "hrxdb"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "GPU-resident exact FP16 cosine search on hrx-rs"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/zacharydenton/hrxdb"
+documentation = "https://docs.rs/hrxdb"
+keywords = ["vector-database", "nearest-neighbor", "gpu", "amdgpu", "loom"]
+categories = ["database", "science", "algorithms"]
+include = ["/src/**", "/kernels/**", "/examples/**", "/tests/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/CHANGELOG.md", "/RELEASE.md", "/LICENSE"]
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[dependencies]
+# This release is qualified against this runtime and Loom compiler bundle.
+hrx = { package = "hrx-rs", version = "=0.4.0" }
+half = "2"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[[bin]]
+name = "hrxdb-bench"
+path = "src/bin/bench.rs"

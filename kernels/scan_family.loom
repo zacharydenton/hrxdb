@@ -1,0 +1,112 @@
+// Shared schedule with compile-time selected cosine/read-control providers.
+// Loom owns dependent types and loop unrolling; Rust supplies configuration.
+amdgpu.target<gfx1151> @target {subgroup_size = 32}
+config.decl @db.scan.count : %value: index where [range(%value, 1, 1073741824)]
+config.decl @db.scan.dimensions : %value: index where [range(%value, 128, 16384), mul(%value, 128)]
+config.decl @db.scan.threads : %value: index where [range(%value, 128, 256), mul(%value, 128)]
+config.decl @db.scan.rows : %value: index where [range(%value, 1, 8)]
+config.decl @db.scan.width : %value: index where [range(%value, 2, 4), mul(%value, 2)]
+config.decl @db.scan.mode : %value: index where [range(%value, 0, 1)]
+
+template.decl @db.accumulate(%mode: index, %width: index, %d: index, %column: index, %data: buffer, %row: index, %query: buffer, %acc: f32) -> (f32)
+template.def<@db.accumulate> @db.cosine(%mode: index, %width: index, %d: index, %column: index, %data: buffer, %row: index, %query: buffer, %acc: f32) -> (f32) where [eq(%mode, 0)] {
+  %zero = index.constant 0 : offset
+  %last = index.sub %d, %width : index
+  %col = index.assume %column [le(%column, %last), mul(%column, 2)] : index
+  %n = config.get @db.scan.count : index
+  %zero_offset = index.constant 0 : offset
+  %xv = buffer.view %data[%zero_offset] : buffer -> view<[%n]x[%d]xf16>
+  %qv = buffer.view %query[%zero] : buffer -> view<[%d]xf32>
+  %h = vector.load %xv[%row, %col] : view<[%n]x[%d]xf16> -> vector<[%width]xf16>
+  %q = vector.load %qv[%col] : view<[%d]xf32> -> vector<[%width]xf32>
+  %x = vector.extf %h : vector<[%width]xf16> to vector<[%width]xf32>
+  %next = vector.dotf %x, %q, %acc : vector<[%width]xf32>, vector<[%width]xf32>, f32
+  template.return %next : f32
+}
+template.def<@db.accumulate> @db.read_control(%mode: index, %width: index, %d: index, %column: index, %data: buffer, %row: index, %query: buffer, %acc: f32) -> (f32) where [eq(%mode, 1)] {
+  %last = index.sub %d, %width : index
+  %col = index.assume %column [le(%column, %last), mul(%column, 2)] : index
+  %n = config.get @db.scan.count : index
+  %zero_offset = index.constant 0 : offset
+  %xv = buffer.view %data[%zero_offset] : buffer -> view<[%n]x[%d]xf16>
+  %h = vector.load %xv[%row, %col] : view<[%n]x[%d]xf16> -> vector<[%width]xf16>
+  %x = vector.extf %h : vector<[%width]xf16> to vector<[%width]xf32>
+  %next = vector.reduce<addf> %x, %acc : vector<[%width]xf32>, f32
+  template.return %next : f32
+}
+kernel.def target(@target) export("scan") @scan() {
+  %one = index.constant 1 : index
+  %threads = config.get @db.scan.threads : index
+  %count = config.get @db.scan.count : index
+  %rows = config.get @db.scan.rows : index
+  %c32 = index.constant 32 : index
+  %waves = index.div %threads, %c32 : index
+  %per_group = index.mul %waves, %rows : index
+  %extra = index.sub %per_group, %one : index
+  %rounded = index.add %count, %extra : index
+  %groups = index.div %rounded, %per_group : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%data: buffer, %query: buffer, %norms: buffer, %scores: buffer) {
+  %n = config.get @db.scan.count : index
+  %d = config.get @db.scan.dimensions : index
+  %threads = config.get @db.scan.threads : index
+  %rows = config.get @db.scan.rows : index
+  %width = config.get @db.scan.width : index
+  %mode = config.get @db.scan.mode : index
+  %zero = index.constant 0 : offset
+  %i0 = index.constant 0 : index
+  %i1 = index.constant 1 : index
+  %c32 = index.constant 32 : index
+  %f0 = scalar.constant 0.0 : f32
+  %initial = vector.splat %f0 : vector<[%rows]xf32>
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+  %wave = kernel.subgroup.id : index
+  %group = kernel.workgroup.id<x> : index
+  %waves = index.div %threads, %c32 : index
+  %rg = index.mul %waves, %rows : index
+  %group_row = index.mul %group, %rg : index
+  %wave_row = index.mul %wave, %rows : index
+  %first = index.add %group_row, %wave_row : index
+  %lane_col = index.mul %lane, %width : index
+  %step = index.mul %c32, %width : index
+  %data_global = buffer.assume.memory_space<global> %data : buffer
+  %query_global = buffer.assume.memory_space<global> %query : buffer
+  %norm_view = buffer.view %norms[%zero] : buffer -> view<[%n]xf32>
+  %score_view = buffer.view %scores[%zero] : buffer -> view<[%n]xf32>
+  %sums = scf.for %base_col = [%i0 to %d step %step](%accs = %initial : vector<[%rows]xf32>) -> (vector<[%rows]xf32>) unroll {
+    %col = index.add %base_col, %lane_col : index
+    %updated = scf.for %r = [%i0 to %rows step %i1](%values = %accs : vector<[%rows]xf32>) -> (vector<[%rows]xf32>) unroll {
+      %row = index.add %first, %r : index
+      %valid = index.cmp ult, %row, %n : index
+      %safe0 = scf.select %valid, %row, %i0 : index
+      %safe = index.assume %safe0 [range(%safe0, 0, 1073741823), lt(%safe0, %n)] : index
+      %previous = vector.extract %values[%r] : vector<[%rows]xf32> -> f32
+      %next = template.apply<@db.accumulate>(%mode, %width, %d, %col, %data_global, %safe, %query_global, %previous) : (index, index, index, index, buffer, index, buffer, f32) -> (f32)
+      %inserted = vector.insert %next into %values[%r] : f32, vector<[%rows]xf32>
+      scf.yield %inserted : vector<[%rows]xf32>
+    }
+    scf.yield %updated : vector<[%rows]xf32>
+  }
+  %totals = kernel.subgroup.reduce<addf> %sums : vector<[%rows]xf32>
+  %leader = index.cmp eq, %lane, %i0 : index
+  scf.for %r = [%i0 to %rows step %i1] unroll {
+    %row = index.add %first, %r : index
+    %valid = index.cmp ult, %row, %n : index
+    %store = scalar.andi %leader, %valid : i1
+    scf.if %store {
+      %at = index.assume %row [range(%row, 0, 1073741823), lt(%row, %n)] : index
+      %sum = vector.extract %totals[%r] : vector<[%rows]xf32> -> f32
+      %cosine = index.cmp eq, %mode, %i0 : index
+      %score = scf.if %cosine -> (f32) {
+        %inverse = view.load %norm_view[%at] : view<[%n]xf32> -> f32
+        %value = scalar.mulf %sum, %inverse : f32
+        scf.yield %value : f32
+      } else {
+        scf.yield %sum : f32
+      }
+      view.store %score, %score_view[%at] : f32, view<[%n]xf32>
+    }
+  }
+  kernel.return
+}

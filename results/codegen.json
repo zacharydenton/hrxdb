@@ -1,0 +1,202 @@
+{
+  "selection_rule": "within 1% of minimum full-search latency, then fewer VGPRs, then latency",
+  "selected_config": {
+    "threads": 128,
+    "rows_per_wave": 2,
+    "load_width": 4
+  },
+  "kernels": [
+    {
+      "config": {
+        "threads": 128,
+        "rows_per_wave": 1,
+        "load_width": 2
+      },
+      "artifact": "hrx-cache/kernels/fa187de38fe236070e5a3d890fd9ecfc1a9577d0fb047cbbc65c7c3d8a62c0ad/kernel.hsaco",
+      "vgpr_count": 22,
+      "sgpr_count": 18,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 128,
+        "rows_per_wave": 1,
+        "load_width": 4
+      },
+      "artifact": "hrx-cache/kernels/9a494c65b8f730e663b516208d476ed6730d3b60cff9f08728b63abb254ee959/kernel.hsaco",
+      "vgpr_count": 24,
+      "sgpr_count": 16,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 128,
+        "rows_per_wave": 2,
+        "load_width": 2
+      },
+      "artifact": "hrx-cache/kernels/22400ddb3b1338b9351e0f6fdcc659ccb28d145111223ac9a24e38693ddbf5cd/kernel.hsaco",
+      "vgpr_count": 27,
+      "sgpr_count": 30,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 128,
+        "rows_per_wave": 2,
+        "load_width": 4
+      },
+      "artifact": "hrx-cache/kernels/eec59d8b64f44c11b1a65bbb6991ef73038a9e5ec64ca5c0d9916633bcec4497/kernel.hsaco",
+      "vgpr_count": 28,
+      "sgpr_count": 20,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 128,
+        "rows_per_wave": 4,
+        "load_width": 2
+      },
+      "artifact": "hrx-cache/kernels/57ab93fddeea8d26855fb841df68c8a21559e76bd68073eefe9685885777d813/kernel.hsaco",
+      "vgpr_count": 43,
+      "sgpr_count": 54,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 128,
+        "rows_per_wave": 4,
+        "load_width": 4
+      },
+      "artifact": "hrx-cache/kernels/3519974da5283ffc11c42833d6a89dc3ae9fcbe81c19f6ef8e5a5102bf05fdd1/kernel.hsaco",
+      "vgpr_count": 39,
+      "sgpr_count": 32,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 128,
+        "rows_per_wave": 8,
+        "load_width": 2
+      },
+      "artifact": "hrx-cache/kernels/04034705a4c58f1d1d2514a28e1233932a0fb7099204b145732b75841cb8737d/kernel.hsaco",
+      "vgpr_count": 66,
+      "sgpr_count": 100,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 128,
+        "rows_per_wave": 8,
+        "load_width": 4
+      },
+      "artifact": "hrx-cache/kernels/5e928f56e0cdeb1c365e3f900ecdadaa9ecaf1638255135e76db678736edfdc0/kernel.hsaco",
+      "vgpr_count": 64,
+      "sgpr_count": 58,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 256,
+        "rows_per_wave": 1,
+        "load_width": 2
+      },
+      "artifact": "hrx-cache/kernels/013169684d0ff7bed512c9b3ce72250005233140ae25e3c19c054dac58e92f6a/kernel.hsaco",
+      "vgpr_count": 22,
+      "sgpr_count": 18,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 256,
+        "rows_per_wave": 1,
+        "load_width": 4
+      },
+      "artifact": "hrx-cache/kernels/474f2e919bd64bf9b0eb1e4062fe4045e5245f968dd7d9495e119c120f67d0ce/kernel.hsaco",
+      "vgpr_count": 24,
+      "sgpr_count": 16,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 256,
+        "rows_per_wave": 2,
+        "load_width": 2
+      },
+      "artifact": "hrx-cache/kernels/cd8e9c1e0b0ada860702ac5da21a1864ffc3cea12a7d63d2dd993593251a60e8/kernel.hsaco",
+      "vgpr_count": 27,
+      "sgpr_count": 30,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 256,
+        "rows_per_wave": 2,
+        "load_width": 4
+      },
+      "artifact": "hrx-cache/kernels/393108c73152a37f5ccee99db6565cd18e1ea75a8ebd578dd03ff3788db0bb07/kernel.hsaco",
+      "vgpr_count": 28,
+      "sgpr_count": 20,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 256,
+        "rows_per_wave": 4,
+        "load_width": 2
+      },
+      "artifact": "hrx-cache/kernels/0ad9f05fa7f682b5afe5707511324d3e5fdffc15daee45bc4425a1554d8d2b7e/kernel.hsaco",
+      "vgpr_count": 43,
+      "sgpr_count": 54,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 256,
+        "rows_per_wave": 4,
+        "load_width": 4
+      },
+      "artifact": "hrx-cache/kernels/e2cebb49dfb38041621b340e0a376c2c1a978eb3500189afc5e39f97d4beaf70/kernel.hsaco",
+      "vgpr_count": 39,
+      "sgpr_count": 32,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 256,
+        "rows_per_wave": 8,
+        "load_width": 2
+      },
+      "artifact": "hrx-cache/kernels/35e31d7af24fd887fb2964d4363b47c1a6b426d90665dbb9d6240220c224dde0/kernel.hsaco",
+      "vgpr_count": 66,
+      "sgpr_count": 100,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    },
+    {
+      "config": {
+        "threads": 256,
+        "rows_per_wave": 8,
+        "load_width": 4
+      },
+      "artifact": "hrx-cache/kernels/1af38b75493820e3a98312fe247ed7dffce698bd934dbc9fa61ec451c5c4d79c/kernel.hsaco",
+      "vgpr_count": 64,
+      "sgpr_count": 58,
+      "private_segment_fixed_size": 0,
+      "group_segment_fixed_size": 0
+    }
+  ]
+}

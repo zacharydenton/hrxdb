@@ -1,0 +1,1760 @@
+{
+  "target": "gfx1151",
+  "rows": 10000000,
+  "dimensions": 384,
+  "padded_dimensions": 384,
+  "k": 10,
+  "vector_bytes": 7680000000,
+  "norm_bytes": 40000000,
+  "score_bytes": 40000000,
+  "ingestion_and_compile_seconds": 19.141096903,
+  "timing": "Host wall time with explicit completion; three warmups; serialized changing queries; scan/control exclude query preparation; search includes normalization, query publication, selection and readback. GB/s uses unpadded FP16 vector bytes and decimal GB.",
+  "validation": "GPU selection checked against a CPU top-k over the entire GPU score array for each configuration. Sampled scores include the allocation tail and 4 GiB boundary; all returned scores checked against quantized CPU reference. This is not an exhaustive CPU recomputation of every dot product.",
+  "quantization_sample_rows": 8192,
+  "quantization_sample_top_k_overlap": 1.0,
+  "selected_config": {
+    "threads": 128,
+    "rows_per_wave": 2,
+    "load_width": 4
+  },
+  "trials": [
+    {
+      "config": {
+        "threads": 128,
+        "rows_per_wave": 2,
+        "load_width": 4
+      },
+      "scan_median_ms": 33.312116,
+      "scan_p95_ms": 41.811645,
+      "search_median_ms": 33.711235,
+      "search_p95_ms": 36.48693,
+      "read_control_median_ms": 32.892557000000004,
+      "scan_gb_s": 230.54674761579238,
+      "search_gb_s": 227.81722473234814,
+      "read_control_gb_s": 233.48747256104167,
+      "fraction_of_read_control": 0.9874052131662846,
+      "fraction_of_256_gb_s": 0.900573232874189,
+      "scan_target_met": true,
+      "resources": {
+        "vgpr_count": 28,
+        "sgpr_count": 20,
+        "private_segment_bytes": 0,
+        "workgroup_segment_bytes": 0
+      },
+      "compiler": [
+        {
+          "symbol": "scan",
+          "artifact": "hrx-cache/kernels/eec59d8b64f44c11b1a65bbb6991ef73038a9e5ec64ca5c0d9916633bcec4497/kernel.hsaco",
+          "report": {
+            "artifact": {
+              "byte_length": 9160,
+              "format": "elf",
+              "name": "module.hsaco"
+            },
+            "functions": [
+              {
+                "execution": {
+                  "subgroup_size": 32,
+                  "workgroup_size": [
+                    128,
+                    1,
+                    1
+                  ]
+                },
+                "interface": {
+                  "binding_count": 4,
+                  "constant_byte_length": 0,
+                  "parameter_count": 4
+                },
+                "name": "scan",
+                "targets": [
+                  "amdgpu-rdna3-5"
+                ]
+              }
+            ],
+            "kind": "loom.artifact_manifest",
+            "mode": "details",
+            "schema_version": 1,
+            "targets": [
+              {
+                "address_spaces": {
+                  "constant": 4,
+                  "descriptor": 7,
+                  "generic": 0,
+                  "global": 1,
+                  "private": 5,
+                  "workgroup": 3
+                },
+                "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                "default_pointer_bitwidth": 64,
+                "family": "amdgpu",
+                "index_bitwidth": 32,
+                "max_flat_grid_size": 4294967295,
+                "max_flat_workgroup_size": 1024,
+                "max_grid_size": {
+                  "x": 2147483647,
+                  "y": 65535,
+                  "z": 65535
+                },
+                "max_workgroup_count": {
+                  "x": 2147483647,
+                  "y": 65535,
+                  "z": 65535
+                },
+                "max_workgroup_size": {
+                  "x": 1024,
+                  "y": 1024,
+                  "z": 1024
+                },
+                "max_workgroup_storage_bytes": 65536,
+                "name": "amdgpu-rdna3-5",
+                "offset_bitwidth": 64,
+                "processor": "gfx1151",
+                "selector": "gfx1151",
+                "subgroup_size": 32
+              }
+            ]
+          },
+          "diagnostics": []
+        },
+        {
+          "symbol": "scan",
+          "artifact": "hrx-cache/kernels/b3eb48d810fba9a5cd35a67c3e979536c23524665c64e41dd0f391382de8aaeb/kernel.hsaco",
+          "report": {
+            "artifact": {
+              "byte_length": 9160,
+              "format": "elf",
+              "name": "module.hsaco"
+            },
+            "functions": [
+              {
+                "execution": {
+                  "subgroup_size": 32,
+                  "workgroup_size": [
+                    128,
+                    1,
+                    1
+                  ]
+                },
+                "interface": {
+                  "binding_count": 4,
+                  "constant_byte_length": 0,
+                  "parameter_count": 4
+                },
+                "name": "scan",
+                "targets": [
+                  "amdgpu-rdna3-5"
+                ]
+              }
+            ],
+            "kind": "loom.artifact_manifest",
+            "mode": "details",
+            "schema_version": 1,
+            "targets": [
+              {
+                "address_spaces": {
+                  "constant": 4,
+                  "descriptor": 7,
+                  "generic": 0,
+                  "global": 1,
+                  "private": 5,
+                  "workgroup": 3
+                },
+                "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                "default_pointer_bitwidth": 64,
+                "family": "amdgpu",
+                "index_bitwidth": 32,
+                "max_flat_grid_size": 4294967295,
+                "max_flat_workgroup_size": 1024,
+                "max_grid_size": {
+                  "x": 2147483647,
+                  "y": 65535,
+                  "z": 65535
+                },
+                "max_workgroup_count": {
+                  "x": 2147483647,
+                  "y": 65535,
+                  "z": 65535
+                },
+                "max_workgroup_size": {
+                  "x": 1024,
+                  "y": 1024,
+                  "z": 1024
+                },
+                "max_workgroup_storage_bytes": 65536,
+                "name": "amdgpu-rdna3-5",
+                "offset_bitwidth": 64,
+                "processor": "gfx1151",
+                "selector": "gfx1151",
+                "subgroup_size": 32
+              }
+            ]
+          },
+          "diagnostics": []
+        },
+        {
+          "symbol": "select",
+          "artifact": "hrx-cache/kernels/566b75e6356c3b833861c6cfe3393e6fb1801e0947deb56f8bee9f1d0b2df72e/kernel.hsaco",
+          "report": {
+            "artifact": {
+              "byte_length": 9160,
+              "format": "elf",
+              "name": "module.hsaco"
+            },
+            "functions": [
+              {
+                "execution": {
+                  "subgroup_size": 32,
+                  "workgroup_size": [
+                    256,
+                    1,
+                    1
+                  ]
+                },
+                "interface": {
+                  "binding_count": 4,
+                  "constant_byte_length": 8,
+                  "parameter_count": 6
+                },
+                "name": "select",
+                "targets": [
+                  "amdgpu-rdna3-5"
+                ]
+              }
+            ],
+            "kind": "loom.artifact_manifest",
+            "mode": "details",
+            "schema_version": 1,
+            "targets": [
+              {
+                "address_spaces": {
+                  "constant": 4,
+                  "descriptor": 7,
+                  "generic": 0,
+                  "global": 1,
+                  "private": 5,
+                  "workgroup": 3
+                },
+                "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                "default_pointer_bitwidth": 64,
+                "family": "amdgpu",
+                "index_bitwidth": 32,
+                "max_flat_grid_size": 4294967295,
+                "max_flat_workgroup_size": 1024,
+                "max_grid_size": {
+                  "x": 2147483647,
+                  "y": 65535,
+                  "z": 65535
+                },
+                "max_workgroup_count": {
+                  "x": 2147483647,
+                  "y": 65535,
+                  "z": 65535
+                },
+                "max_workgroup_size": {
+                  "x": 1024,
+                  "y": 1024,
+                  "z": 1024
+                },
+                "max_workgroup_storage_bytes": 65536,
+                "name": "amdgpu-rdna3-5",
+                "offset_bitwidth": 64,
+                "processor": "gfx1151",
+                "selector": "gfx1151",
+                "subgroup_size": 32
+              }
+            ]
+          },
+          "diagnostics": []
+        },
+        {
+          "symbol": "select",
+          "artifact": "hrx-cache/kernels/12a27c46ab742d6370f0f1dda0f2218befef5749a87af530500688c11b50486b/kernel.hsaco",
+          "report": {
+            "artifact": {
+              "byte_length": 9160,
+              "format": "elf",
+              "name": "module.hsaco"
+            },
+            "functions": [
+              {
+                "execution": {
+                  "subgroup_size": 32,
+                  "workgroup_size": [
+                    256,
+                    1,
+                    1
+                  ]
+                },
+                "interface": {
+                  "binding_count": 4,
+                  "constant_byte_length": 8,
+                  "parameter_count": 6
+                },
+                "name": "select",
+                "targets": [
+                  "amdgpu-rdna3-5"
+                ]
+              }
+            ],
+            "kind": "loom.artifact_manifest",
+            "mode": "details",
+            "schema_version": 1,
+            "targets": [
+              {
+                "address_spaces": {
+                  "constant": 4,
+                  "descriptor": 7,
+                  "generic": 0,
+                  "global": 1,
+                  "private": 5,
+                  "workgroup": 3
+                },
+                "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                "default_pointer_bitwidth": 64,
+                "family": "amdgpu",
+                "index_bitwidth": 32,
+                "max_flat_grid_size": 4294967295,
+                "max_flat_workgroup_size": 1024,
+                "max_grid_size": {
+                  "x": 2147483647,
+                  "y": 65535,
+                  "z": 65535
+                },
+                "max_workgroup_count": {
+                  "x": 2147483647,
+                  "y": 65535,
+                  "z": 65535
+                },
+                "max_workgroup_size": {
+                  "x": 1024,
+                  "y": 1024,
+                  "z": 1024
+                },
+                "max_workgroup_storage_bytes": 65536,
+                "name": "amdgpu-rdna3-5",
+                "offset_bitwidth": 64,
+                "processor": "gfx1151",
+                "selector": "gfx1151",
+                "subgroup_size": 32
+              }
+            ]
+          },
+          "diagnostics": []
+        }
+      ],
+      "samples": [
+        {
+          "scan_ms": 32.629095,
+          "search_ms": 34.050846,
+          "read_control_ms": 32.158667,
+          "neighbors": [
+            {
+              "id": 7428729,
+              "similarity": 0.25454956
+            },
+            {
+              "id": 4522417,
+              "similarity": 0.2516682
+            },
+            {
+              "id": 8121668,
+              "similarity": 0.24932231
+            },
+            {
+              "id": 2615486,
+              "similarity": 0.24662316
+            },
+            {
+              "id": 2951623,
+              "similarity": 0.24636006
+            },
+            {
+              "id": 7634572,
+              "similarity": 0.24380054
+            },
+            {
+              "id": 7225584,
+              "similarity": 0.24357513
+            },
+            {
+              "id": 8659379,
+              "similarity": 0.24231172
+            },
+            {
+              "id": 2860393,
+              "similarity": 0.23866743
+            },
+            {
+              "id": 7429175,
+              "similarity": 0.23862933
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.810633,
+          "search_ms": 33.479892,
+          "read_control_ms": 33.779283,
+          "neighbors": [
+            {
+              "id": 6322151,
+              "similarity": 0.25465873
+            },
+            {
+              "id": 5604602,
+              "similarity": 0.2518795
+            },
+            {
+              "id": 9317505,
+              "similarity": 0.2468539
+            },
+            {
+              "id": 808251,
+              "similarity": 0.24449074
+            },
+            {
+              "id": 6772013,
+              "similarity": 0.24393854
+            },
+            {
+              "id": 9221439,
+              "similarity": 0.24376576
+            },
+            {
+              "id": 4227418,
+              "similarity": 0.24244869
+            },
+            {
+              "id": 3586071,
+              "similarity": 0.24221487
+            },
+            {
+              "id": 6496733,
+              "similarity": 0.23939274
+            },
+            {
+              "id": 2223626,
+              "similarity": 0.23897849
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.352365,
+          "search_ms": 34.017538,
+          "read_control_ms": 32.904657,
+          "neighbors": [
+            {
+              "id": 4476369,
+              "similarity": 0.27617764
+            },
+            {
+              "id": 1320663,
+              "similarity": 0.27011904
+            },
+            {
+              "id": 3642474,
+              "similarity": 0.26285598
+            },
+            {
+              "id": 2982786,
+              "similarity": 0.25742766
+            },
+            {
+              "id": 5316325,
+              "similarity": 0.24784622
+            },
+            {
+              "id": 3549108,
+              "similarity": 0.24742669
+            },
+            {
+              "id": 6459443,
+              "similarity": 0.2464471
+            },
+            {
+              "id": 5995360,
+              "similarity": 0.2442266
+            },
+            {
+              "id": 895674,
+              "similarity": 0.24388896
+            },
+            {
+              "id": 1479007,
+              "similarity": 0.24283396
+            }
+          ]
+        },
+        {
+          "scan_ms": 32.973875,
+          "search_ms": 33.701986000000005,
+          "read_control_ms": 32.8181,
+          "neighbors": [
+            {
+              "id": 6113734,
+              "similarity": 0.27608904
+            },
+            {
+              "id": 280970,
+              "similarity": 0.257571
+            },
+            {
+              "id": 8834910,
+              "similarity": 0.25705937
+            },
+            {
+              "id": 881884,
+              "similarity": 0.25474307
+            },
+            {
+              "id": 5588892,
+              "similarity": 0.25443792
+            },
+            {
+              "id": 8544906,
+              "similarity": 0.2539581
+            },
+            {
+              "id": 539312,
+              "similarity": 0.24964964
+            },
+            {
+              "id": 7951032,
+              "similarity": 0.2422946
+            },
+            {
+              "id": 1632915,
+              "similarity": 0.24135411
+            },
+            {
+              "id": 8547295,
+              "similarity": 0.24097069
+            }
+          ]
+        },
+        {
+          "scan_ms": 32.934567,
+          "search_ms": 33.683056,
+          "read_control_ms": 32.79245,
+          "neighbors": [
+            {
+              "id": 3552825,
+              "similarity": 0.2793045
+            },
+            {
+              "id": 5961955,
+              "similarity": 0.24405147
+            },
+            {
+              "id": 4738410,
+              "similarity": 0.2432673
+            },
+            {
+              "id": 7771376,
+              "similarity": 0.24326085
+            },
+            {
+              "id": 6210831,
+              "similarity": 0.24268292
+            },
+            {
+              "id": 4252695,
+              "similarity": 0.24028783
+            },
+            {
+              "id": 8286124,
+              "similarity": 0.23943949
+            },
+            {
+              "id": 715483,
+              "similarity": 0.2385885
+            },
+            {
+              "id": 3242485,
+              "similarity": 0.23734654
+            },
+            {
+              "id": 6629285,
+              "similarity": 0.23656763
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.274017,
+          "search_ms": 33.87642099999999,
+          "read_control_ms": 32.70906299999999,
+          "neighbors": [
+            {
+              "id": 47509,
+              "similarity": 0.25570282
+            },
+            {
+              "id": 4559194,
+              "similarity": 0.25542283
+            },
+            {
+              "id": 484163,
+              "similarity": 0.25503105
+            },
+            {
+              "id": 4561218,
+              "similarity": 0.25500005
+            },
+            {
+              "id": 8850735,
+              "similarity": 0.25414604
+            },
+            {
+              "id": 3283416,
+              "similarity": 0.24978876
+            },
+            {
+              "id": 9097107,
+              "similarity": 0.24821627
+            },
+            {
+              "id": 5981849,
+              "similarity": 0.24692194
+            },
+            {
+              "id": 7195550,
+              "similarity": 0.24663304
+            },
+            {
+              "id": 1874157,
+              "similarity": 0.24500008
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.463092,
+          "search_ms": 33.418004,
+          "read_control_ms": 32.892557000000004,
+          "neighbors": [
+            {
+              "id": 9078279,
+              "similarity": 0.26555344
+            },
+            {
+              "id": 870293,
+              "similarity": 0.25480327
+            },
+            {
+              "id": 6081803,
+              "similarity": 0.25013846
+            },
+            {
+              "id": 9816016,
+              "similarity": 0.24983242
+            },
+            {
+              "id": 6122802,
+              "similarity": 0.24693312
+            },
+            {
+              "id": 4774229,
+              "similarity": 0.24492635
+            },
+            {
+              "id": 572476,
+              "similarity": 0.24484715
+            },
+            {
+              "id": 1188258,
+              "similarity": 0.24392307
+            },
+            {
+              "id": 340720,
+              "similarity": 0.24348684
+            },
+            {
+              "id": 9546305,
+              "similarity": 0.24046431
+            }
+          ]
+        },
+        {
+          "scan_ms": 32.960346,
+          "search_ms": 33.421013,
+          "read_control_ms": 32.698633,
+          "neighbors": [
+            {
+              "id": 3433138,
+              "similarity": 0.26905927
+            },
+            {
+              "id": 3604893,
+              "similarity": 0.26471177
+            },
+            {
+              "id": 6219231,
+              "similarity": 0.25816694
+            },
+            {
+              "id": 3061472,
+              "similarity": 0.25774598
+            },
+            {
+              "id": 5873681,
+              "similarity": 0.2554929
+            },
+            {
+              "id": 2469493,
+              "similarity": 0.2529578
+            },
+            {
+              "id": 682722,
+              "similarity": 0.25041962
+            },
+            {
+              "id": 8430929,
+              "similarity": 0.24947344
+            },
+            {
+              "id": 9290014,
+              "similarity": 0.24847095
+            },
+            {
+              "id": 3238239,
+              "similarity": 0.24473491
+            }
+          ]
+        },
+        {
+          "scan_ms": 32.972576000000004,
+          "search_ms": 33.384854,
+          "read_control_ms": 32.365631,
+          "neighbors": [
+            {
+              "id": 4836367,
+              "similarity": 0.25472865
+            },
+            {
+              "id": 6369915,
+              "similarity": 0.25436568
+            },
+            {
+              "id": 6585896,
+              "similarity": 0.25397143
+            },
+            {
+              "id": 6515764,
+              "similarity": 0.25280795
+            },
+            {
+              "id": 609334,
+              "similarity": 0.24455021
+            },
+            {
+              "id": 1422307,
+              "similarity": 0.24382691
+            },
+            {
+              "id": 234016,
+              "similarity": 0.24337256
+            },
+            {
+              "id": 2386299,
+              "similarity": 0.2428793
+            },
+            {
+              "id": 1161340,
+              "similarity": 0.24255185
+            },
+            {
+              "id": 9297538,
+              "similarity": 0.24206176
+            }
+          ]
+        },
+        {
+          "scan_ms": 41.811645,
+          "search_ms": 36.48693,
+          "read_control_ms": 34.090876,
+          "neighbors": [
+            {
+              "id": 7782836,
+              "similarity": 0.2511321
+            },
+            {
+              "id": 7639289,
+              "similarity": 0.24798146
+            },
+            {
+              "id": 8711859,
+              "similarity": 0.24586083
+            },
+            {
+              "id": 319181,
+              "similarity": 0.24568313
+            },
+            {
+              "id": 8346191,
+              "similarity": 0.24489681
+            },
+            {
+              "id": 9191413,
+              "similarity": 0.24432763
+            },
+            {
+              "id": 383832,
+              "similarity": 0.24422285
+            },
+            {
+              "id": 3710164,
+              "similarity": 0.24308953
+            },
+            {
+              "id": 9302730,
+              "similarity": 0.24218228
+            },
+            {
+              "id": 5543892,
+              "similarity": 0.24119662
+            }
+          ]
+        },
+        {
+          "scan_ms": 45.151305,
+          "search_ms": 40.595579,
+          "read_control_ms": 34.119944,
+          "neighbors": [
+            {
+              "id": 7198853,
+              "similarity": 0.27490368
+            },
+            {
+              "id": 2787634,
+              "similarity": 0.2616279
+            },
+            {
+              "id": 8130442,
+              "similarity": 0.24898095
+            },
+            {
+              "id": 8761786,
+              "similarity": 0.24636498
+            },
+            {
+              "id": 2018047,
+              "similarity": 0.2457439
+            },
+            {
+              "id": 8243201,
+              "similarity": 0.24351016
+            },
+            {
+              "id": 940856,
+              "similarity": 0.24296401
+            },
+            {
+              "id": 276819,
+              "similarity": 0.24262333
+            },
+            {
+              "id": 2646324,
+              "similarity": 0.24145174
+            },
+            {
+              "id": 3472216,
+              "similarity": 0.24111976
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.279458,
+          "search_ms": 33.631947000000004,
+          "read_control_ms": 32.576006,
+          "neighbors": [
+            {
+              "id": 3669689,
+              "similarity": 0.26432046
+            },
+            {
+              "id": 7427025,
+              "similarity": 0.26166576
+            },
+            {
+              "id": 8893737,
+              "similarity": 0.25208518
+            },
+            {
+              "id": 7689784,
+              "similarity": 0.24742337
+            },
+            {
+              "id": 6936873,
+              "similarity": 0.24603622
+            },
+            {
+              "id": 7281266,
+              "similarity": 0.24447449
+            },
+            {
+              "id": 9011693,
+              "similarity": 0.2432091
+            },
+            {
+              "id": 8309408,
+              "similarity": 0.24029417
+            },
+            {
+              "id": 9897083,
+              "similarity": 0.24023032
+            },
+            {
+              "id": 5564490,
+              "similarity": 0.2400072
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.55988,
+          "search_ms": 33.865481,
+          "read_control_ms": 32.916777,
+          "neighbors": [
+            {
+              "id": 8465295,
+              "similarity": 0.28665522
+            },
+            {
+              "id": 806030,
+              "similarity": 0.28060657
+            },
+            {
+              "id": 2538799,
+              "similarity": 0.27184817
+            },
+            {
+              "id": 8382361,
+              "similarity": 0.25616547
+            },
+            {
+              "id": 793438,
+              "similarity": 0.2549607
+            },
+            {
+              "id": 895383,
+              "similarity": 0.24839641
+            },
+            {
+              "id": 2414280,
+              "similarity": 0.24785937
+            },
+            {
+              "id": 9266769,
+              "similarity": 0.24728416
+            },
+            {
+              "id": 4928420,
+              "similarity": 0.24629438
+            },
+            {
+              "id": 3451150,
+              "similarity": 0.24452294
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.295597,
+          "search_ms": 33.620407,
+          "read_control_ms": 32.42955,
+          "neighbors": [
+            {
+              "id": 2705892,
+              "similarity": 0.25815573
+            },
+            {
+              "id": 9949817,
+              "similarity": 0.25476047
+            },
+            {
+              "id": 1989887,
+              "similarity": 0.25093392
+            },
+            {
+              "id": 9830285,
+              "similarity": 0.24908417
+            },
+            {
+              "id": 1515818,
+              "similarity": 0.24843912
+            },
+            {
+              "id": 9851446,
+              "similarity": 0.2482021
+            },
+            {
+              "id": 9930074,
+              "similarity": 0.244677
+            },
+            {
+              "id": 5655209,
+              "similarity": 0.24344216
+            },
+            {
+              "id": 9105001,
+              "similarity": 0.2421183
+            },
+            {
+              "id": 9277379,
+              "similarity": 0.24159802
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.009384000000004,
+          "search_ms": 33.669827,
+          "read_control_ms": 33.104932,
+          "neighbors": [
+            {
+              "id": 2010473,
+              "similarity": 0.2721304
+            },
+            {
+              "id": 2858010,
+              "similarity": 0.2532952
+            },
+            {
+              "id": 7999744,
+              "similarity": 0.24922372
+            },
+            {
+              "id": 9464436,
+              "similarity": 0.24696851
+            },
+            {
+              "id": 9955630,
+              "similarity": 0.24628966
+            },
+            {
+              "id": 6976603,
+              "similarity": 0.24492803
+            },
+            {
+              "id": 594321,
+              "similarity": 0.24454132
+            },
+            {
+              "id": 1593105,
+              "similarity": 0.24184316
+            },
+            {
+              "id": 5643250,
+              "similarity": 0.23976809
+            },
+            {
+              "id": 9137354,
+              "similarity": 0.23898727
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.393604,
+          "search_ms": 33.711235,
+          "read_control_ms": 32.45465,
+          "neighbors": [
+            {
+              "id": 1291091,
+              "similarity": 0.2767102
+            },
+            {
+              "id": 405624,
+              "similarity": 0.26136613
+            },
+            {
+              "id": 9080415,
+              "similarity": 0.2582203
+            },
+            {
+              "id": 4113555,
+              "similarity": 0.2576709
+            },
+            {
+              "id": 1565199,
+              "similarity": 0.25080752
+            },
+            {
+              "id": 4327223,
+              "similarity": 0.24774957
+            },
+            {
+              "id": 3503361,
+              "similarity": 0.24764392
+            },
+            {
+              "id": 807204,
+              "similarity": 0.24307305
+            },
+            {
+              "id": 9529377,
+              "similarity": 0.24283229
+            },
+            {
+              "id": 3893467,
+              "similarity": 0.2406464
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.237198,
+          "search_ms": 33.707726,
+          "read_control_ms": 33.043313999999995,
+          "neighbors": [
+            {
+              "id": 3088852,
+              "similarity": 0.29103
+            },
+            {
+              "id": 1533344,
+              "similarity": 0.25132522
+            },
+            {
+              "id": 3349835,
+              "similarity": 0.24987641
+            },
+            {
+              "id": 1255262,
+              "similarity": 0.24719825
+            },
+            {
+              "id": 1265335,
+              "similarity": 0.24465789
+            },
+            {
+              "id": 8590367,
+              "similarity": 0.24438632
+            },
+            {
+              "id": 7476236,
+              "similarity": 0.24401854
+            },
+            {
+              "id": 8606139,
+              "similarity": 0.24301085
+            },
+            {
+              "id": 1480350,
+              "similarity": 0.24250355
+            },
+            {
+              "id": 7934695,
+              "similarity": 0.24223459
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.250098,
+          "search_ms": 33.408514,
+          "read_control_ms": 32.904627,
+          "neighbors": [
+            {
+              "id": 1818653,
+              "similarity": 0.27624604
+            },
+            {
+              "id": 3284840,
+              "similarity": 0.2660567
+            },
+            {
+              "id": 7535709,
+              "similarity": 0.25813085
+            },
+            {
+              "id": 1051992,
+              "similarity": 0.25761175
+            },
+            {
+              "id": 2340708,
+              "similarity": 0.25741032
+            },
+            {
+              "id": 663123,
+              "similarity": 0.25680667
+            },
+            {
+              "id": 5327248,
+              "similarity": 0.25413275
+            },
+            {
+              "id": 8366382,
+              "similarity": 0.25401697
+            },
+            {
+              "id": 7256725,
+              "similarity": 0.25322253
+            },
+            {
+              "id": 3843007,
+              "similarity": 0.25242385
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.260687999999995,
+          "search_ms": 33.947968,
+          "read_control_ms": 32.896368,
+          "neighbors": [
+            {
+              "id": 8940758,
+              "similarity": 0.25136968
+            },
+            {
+              "id": 9217333,
+              "similarity": 0.24822678
+            },
+            {
+              "id": 2409290,
+              "similarity": 0.2479215
+            },
+            {
+              "id": 8038677,
+              "similarity": 0.24697202
+            },
+            {
+              "id": 3094441,
+              "similarity": 0.24585655
+            },
+            {
+              "id": 1827240,
+              "similarity": 0.24388508
+            },
+            {
+              "id": 3005192,
+              "similarity": 0.24378051
+            },
+            {
+              "id": 303404,
+              "similarity": 0.24263407
+            },
+            {
+              "id": 7447369,
+              "similarity": 0.24249522
+            },
+            {
+              "id": 7181375,
+              "similarity": 0.24058582
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.673396000000004,
+          "search_ms": 33.438383,
+          "read_control_ms": 33.035864,
+          "neighbors": [
+            {
+              "id": 8480399,
+              "similarity": 0.2599051
+            },
+            {
+              "id": 4708699,
+              "similarity": 0.25973243
+            },
+            {
+              "id": 4585839,
+              "similarity": 0.25323144
+            },
+            {
+              "id": 6081707,
+              "similarity": 0.2519514
+            },
+            {
+              "id": 9933495,
+              "similarity": 0.25060466
+            },
+            {
+              "id": 9210793,
+              "similarity": 0.24656883
+            },
+            {
+              "id": 8477447,
+              "similarity": 0.24605404
+            },
+            {
+              "id": 215589,
+              "similarity": 0.24587457
+            },
+            {
+              "id": 1506223,
+              "similarity": 0.24367489
+            },
+            {
+              "id": 3920246,
+              "similarity": 0.24238698
+            }
+          ]
+        },
+        {
+          "scan_ms": 32.927237,
+          "search_ms": 33.867051000000004,
+          "read_control_ms": 32.845369,
+          "neighbors": [
+            {
+              "id": 4899141,
+              "similarity": 0.2562392
+            },
+            {
+              "id": 7501430,
+              "similarity": 0.25472736
+            },
+            {
+              "id": 1320673,
+              "similarity": 0.2525272
+            },
+            {
+              "id": 2601232,
+              "similarity": 0.25094622
+            },
+            {
+              "id": 2644295,
+              "similarity": 0.25071505
+            },
+            {
+              "id": 6932714,
+              "similarity": 0.24267167
+            },
+            {
+              "id": 2852499,
+              "similarity": 0.24129032
+            },
+            {
+              "id": 8937342,
+              "similarity": 0.24122585
+            },
+            {
+              "id": 7701835,
+              "similarity": 0.24035816
+            },
+            {
+              "id": 5829178,
+              "similarity": 0.23762383
+            }
+          ]
+        },
+        {
+          "scan_ms": 36.11052,
+          "search_ms": 34.164143,
+          "read_control_ms": 36.182388,
+          "neighbors": [
+            {
+              "id": 9409710,
+              "similarity": 0.26262823
+            },
+            {
+              "id": 7350499,
+              "similarity": 0.25633794
+            },
+            {
+              "id": 1064856,
+              "similarity": 0.25508967
+            },
+            {
+              "id": 2478807,
+              "similarity": 0.25173774
+            },
+            {
+              "id": 7589470,
+              "similarity": 0.2504722
+            },
+            {
+              "id": 6238217,
+              "similarity": 0.25008982
+            },
+            {
+              "id": 9035422,
+              "similarity": 0.24410993
+            },
+            {
+              "id": 7944243,
+              "similarity": 0.24395688
+            },
+            {
+              "id": 6618339,
+              "similarity": 0.24253902
+            },
+            {
+              "id": 4202201,
+              "similarity": 0.24225532
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.512551,
+          "search_ms": 33.506711,
+          "read_control_ms": 32.685903,
+          "neighbors": [
+            {
+              "id": 9515401,
+              "similarity": 0.24989575
+            },
+            {
+              "id": 8955906,
+              "similarity": 0.24811256
+            },
+            {
+              "id": 9302014,
+              "similarity": 0.24486274
+            },
+            {
+              "id": 9513897,
+              "similarity": 0.2440031
+            },
+            {
+              "id": 5076997,
+              "similarity": 0.24398282
+            },
+            {
+              "id": 995741,
+              "similarity": 0.2398315
+            },
+            {
+              "id": 225109,
+              "similarity": 0.23980339
+            },
+            {
+              "id": 9991870,
+              "similarity": 0.23858783
+            },
+            {
+              "id": 3613076,
+              "similarity": 0.23832223
+            },
+            {
+              "id": 3330445,
+              "similarity": 0.23719065
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.362105,
+          "search_ms": 33.672546999999994,
+          "read_control_ms": 32.950295999999994,
+          "neighbors": [
+            {
+              "id": 2381939,
+              "similarity": 0.27891007
+            },
+            {
+              "id": 6355905,
+              "similarity": 0.2549409
+            },
+            {
+              "id": 1563473,
+              "similarity": 0.25161868
+            },
+            {
+              "id": 347775,
+              "similarity": 0.24971664
+            },
+            {
+              "id": 7824315,
+              "similarity": 0.24923572
+            },
+            {
+              "id": 1841715,
+              "similarity": 0.24606287
+            },
+            {
+              "id": 1252808,
+              "similarity": 0.24307577
+            },
+            {
+              "id": 5562318,
+              "similarity": 0.24271512
+            },
+            {
+              "id": 4488289,
+              "similarity": 0.24174823
+            },
+            {
+              "id": 3289348,
+              "similarity": 0.24086757
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.310246,
+          "search_ms": 33.746275,
+          "read_control_ms": 32.946086,
+          "neighbors": [
+            {
+              "id": 8706604,
+              "similarity": 0.26373217
+            },
+            {
+              "id": 6328701,
+              "similarity": 0.2536831
+            },
+            {
+              "id": 8707137,
+              "similarity": 0.24662305
+            },
+            {
+              "id": 7620791,
+              "similarity": 0.24445447
+            },
+            {
+              "id": 2652560,
+              "similarity": 0.24427794
+            },
+            {
+              "id": 8962058,
+              "similarity": 0.24133198
+            },
+            {
+              "id": 2064409,
+              "similarity": 0.24044465
+            },
+            {
+              "id": 4165809,
+              "similarity": 0.23985164
+            },
+            {
+              "id": 1253175,
+              "similarity": 0.23816003
+            },
+            {
+              "id": 6900882,
+              "similarity": 0.23758452
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.332235000000004,
+          "search_ms": 33.967359,
+          "read_control_ms": 32.758691999999996,
+          "neighbors": [
+            {
+              "id": 9252018,
+              "similarity": 0.25224918
+            },
+            {
+              "id": 9100712,
+              "similarity": 0.24744524
+            },
+            {
+              "id": 8206773,
+              "similarity": 0.2470397
+            },
+            {
+              "id": 274971,
+              "similarity": 0.24544528
+            },
+            {
+              "id": 1394823,
+              "similarity": 0.24540362
+            },
+            {
+              "id": 280137,
+              "similarity": 0.23630872
+            },
+            {
+              "id": 1567257,
+              "similarity": 0.23610394
+            },
+            {
+              "id": 9605081,
+              "similarity": 0.23606214
+            },
+            {
+              "id": 9067021,
+              "similarity": 0.23541982
+            },
+            {
+              "id": 8488559,
+              "similarity": 0.23530656
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.371784,
+          "search_ms": 33.767754,
+          "read_control_ms": 32.972346,
+          "neighbors": [
+            {
+              "id": 8688227,
+              "similarity": 0.27173787
+            },
+            {
+              "id": 1458792,
+              "similarity": 0.26616463
+            },
+            {
+              "id": 844078,
+              "similarity": 0.25787514
+            },
+            {
+              "id": 583581,
+              "similarity": 0.25497615
+            },
+            {
+              "id": 3889408,
+              "similarity": 0.2539526
+            },
+            {
+              "id": 2872895,
+              "similarity": 0.25277293
+            },
+            {
+              "id": 4593616,
+              "similarity": 0.25147808
+            },
+            {
+              "id": 1356808,
+              "similarity": 0.25099397
+            },
+            {
+              "id": 665765,
+              "similarity": 0.24234319
+            },
+            {
+              "id": 5092786,
+              "similarity": 0.23944424
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.699046,
+          "search_ms": 33.930178999999995,
+          "read_control_ms": 32.490479,
+          "neighbors": [
+            {
+              "id": 3729130,
+              "similarity": 0.24836497
+            },
+            {
+              "id": 5204454,
+              "similarity": 0.2473198
+            },
+            {
+              "id": 9828814,
+              "similarity": 0.24625465
+            },
+            {
+              "id": 5799855,
+              "similarity": 0.23977913
+            },
+            {
+              "id": 6811448,
+              "similarity": 0.23798944
+            },
+            {
+              "id": 757053,
+              "similarity": 0.23793356
+            },
+            {
+              "id": 1741061,
+              "similarity": 0.23766786
+            },
+            {
+              "id": 6705426,
+              "similarity": 0.23710299
+            },
+            {
+              "id": 2685236,
+              "similarity": 0.23665096
+            },
+            {
+              "id": 9217804,
+              "similarity": 0.23622043
+            }
+          ]
+        },
+        {
+          "scan_ms": 33.312116,
+          "search_ms": 34.181233,
+          "read_control_ms": 32.649794,
+          "neighbors": [
+            {
+              "id": 4643780,
+              "similarity": 0.26963472
+            },
+            {
+              "id": 6007157,
+              "similarity": 0.2644462
+            },
+            {
+              "id": 8450134,
+              "similarity": 0.26226118
+            },
+            {
+              "id": 2543904,
+              "similarity": 0.25858986
+            },
+            {
+              "id": 2628580,
+              "similarity": 0.25301462
+            },
+            {
+              "id": 4778837,
+              "similarity": 0.25208157
+            },
+            {
+              "id": 3144215,
+              "similarity": 0.25199318
+            },
+            {
+              "id": 4308687,
+              "similarity": 0.2512956
+            },
+            {
+              "id": 4224935,
+              "similarity": 0.24618752
+            },
+            {
+              "id": 7825009,
+              "similarity": 0.24390636
+            }
+          ]
+        },
+        {
+          "scan_ms": 34.077475,
+          "search_ms": 34.210612000000005,
+          "read_control_ms": 32.897158000000005,
+          "neighbors": [
+            {
+              "id": 3803750,
+              "similarity": 0.25230026
+            },
+            {
+              "id": 7258275,
+              "similarity": 0.25199044
+            },
+            {
+              "id": 9920833,
+              "similarity": 0.2511274
+            },
+            {
+              "id": 314244,
+              "similarity": 0.25081417
+            },
+            {
+              "id": 5446905,
+              "similarity": 0.24963777
+            },
+            {
+              "id": 5064237,
+              "similarity": 0.24897124
+            },
+            {
+              "id": 4540137,
+              "similarity": 0.24884026
+            },
+            {
+              "id": 1638059,
+              "similarity": 0.24403112
+            },
+            {
+              "id": 7727247,
+              "similarity": 0.24291298
+            },
+            {
+              "id": 2458801,
+              "similarity": 0.24048726
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
