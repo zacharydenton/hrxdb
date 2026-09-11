@@ -27,16 +27,24 @@
 //! IDs are insertion positions, not application IDs. The index does not persist
 //! vectors, map external IDs, or support updates, metadata filters, or approximate
 //! search. Query-time exclusions use insertion IDs.
+//! [`FlatIndex::corpus`] provides borrowed storage bindings for application-owned
+//! GPU kernels, side arrays, and reductions; see [`CorpusView`] for the contract.
 mod batch;
+mod corpus;
 mod host;
 mod kernels;
 use host::HostBuffer;
+
+// Compile application example code unchanged inside the corpus hardware tests.
+#[cfg(test)]
+extern crate self as hrxdb;
 
 use half::f16;
 use hrx::{Buffer, Constants, Kernel, Stream};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
+pub use corpus::{CorpusShardView, CorpusView};
 pub use hrx::{Device, Error, Result};
 
 const MAX_ROWS: usize = 1 << 30;

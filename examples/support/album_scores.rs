@@ -1,0 +1,122 @@
+//! Example application code, deliberately separate from hrxdb's search API.
+use hrx::loom::{Compiler, CompilerOptions, Specialization};
+use hrxdb::{CorpusView, Device, Error, Result};
+
+/// Best cosine per (query row, album), with negative infinity for absent albums.
+///
+/// This example accepts up to 64 queries and 1,024 albums. It scans album IDs
+/// once per output cell; it illustrates interoperability, not a tuned album
+/// search algorithm. Queries are row-major FP32. Ordinals follow insertion IDs.
+pub fn best_by_album(
+    device: &Device,
+    corpus: CorpusView<'_>,
+    ordinals: &[u32],
+    album_count: usize,
+    queries: &[f32],
+) -> Result<Vec<Vec<f32>>> {
+    let invalid = || Error::Message("invalid album example input".into());
+    let d = corpus.dimensions();
+    let padded = corpus.padded_dimensions();
+    if ordinals.len() != corpus.len()
+        || !(1..=1024).contains(&album_count)
+        || ordinals.iter().any(|&id| id as usize >= album_count)
+        || !queries.len().is_multiple_of(d)
+        || queries.len() / d > 64
+    {
+        return Err(invalid());
+    }
+    let count = queries.len() / d;
+    let mut query_bytes = Vec::with_capacity(count * padded * 4);
+    for query in queries.chunks_exact(d) {
+        let norm = query
+            .iter()
+            .map(|&v| (v as f64).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        if !norm.is_finite() || norm == 0.0 {
+            return Err(invalid());
+        }
+        query_bytes.extend(
+            query
+                .iter()
+                .flat_map(|&v| ((v as f64 / norm) as f32).to_le_bytes()),
+        );
+        query_bytes.resize(query_bytes.len() + (padded - d) * 4, 0);
+    }
+    let absent = vec![vec![f32::NEG_INFINITY; album_count]; count];
+    if count == 0 || corpus.is_empty() {
+        return Ok(absent);
+    }
+
+    // The stream, compiler, side arrays, query storage, and output belong to
+    // the application. The corpus stays in its original allocations.
+    let mut stream = device.stream()?;
+    let compiler = Compiler::with_options(
+        None,
+        CompilerOptions {
+            target: device.target().clone(),
+            ..Default::default()
+        },
+    )?;
+    let album_buffer = stream.allocate(ordinals.len() * 4)?;
+    let query_buffer = stream.allocate(query_bytes.len())?;
+    let output = stream.allocate(count * album_count * 4)?;
+    let album_bytes: Vec<_> = ordinals.iter().flat_map(|id| id.to_le_bytes()).collect();
+    let mut output_bytes: Vec<_> = absent
+        .iter()
+        .flatten()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    stream.upload(album_buffer.binding(), &album_bytes)?;
+    stream.upload(query_buffer.binding(), &query_bytes)?;
+    stream.upload(output.binding(), &output_bytes)?;
+
+    for shard in corpus.shards() {
+        let rows = shard.row_range();
+        let mut spec = Specialization::new("album_scores");
+        for (key, value) in [
+            ("album.rows", rows.len()),
+            ("album.dimensions", padded),
+            ("album.queries", count),
+            ("album.count", album_count),
+        ] {
+            spec.config.insert(key.into(), value.to_string());
+        }
+        let artifact = compiler
+            .module(include_str!("../album_scores.loom"))
+            .compile(&spec)?;
+        // SAFETY: trusted example source, specialized for this device.
+        let kernel = unsafe { stream.load_artifact(&artifact)? };
+        // SAFETY: all bindings have the specialized row/query/album extents.
+        // The kernel only reads the borrowed vectors/norms. One workgroup owns
+        // each output cell; shard dispatches on this stream execute in order.
+        unsafe {
+            stream.dispatch(
+                &kernel,
+                [album_count as u32, count as u32, 1],
+                [128, 1, 1],
+                &hrx::Constants::new(),
+                &[
+                    shard.vectors(),
+                    shard.inverse_norms(),
+                    album_buffer.try_slice(rows.start * 4, rows.len() * 4)?,
+                    query_buffer.binding(),
+                    output.binding(),
+                ],
+            )?;
+        }
+    }
+    // Completes the application stream, including all corpus reads, before
+    // returning. Only the query × album result is copied back to the host.
+    stream.read_blocking(output.binding(), &mut output_bytes)?;
+    Ok(output_bytes
+        .chunks_exact(album_count * 4)
+        .map(|row| {
+            row.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
+                .collect()
+        })
+        .collect())
+}

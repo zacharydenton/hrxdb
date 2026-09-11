@@ -188,6 +188,53 @@ Readback transfers four bytes per row and blocks until the output is ready.
 and host selection still cost more than device top-k. Score readback always
 returns all rows, regardless of exclusions supplied to previous searches.
 
+## Custom GPU computations
+
+`db.corpus()` returns a borrowed `CorpusView` over the existing GPU allocations.
+It performs no copy, allocation, compilation, or GPU work. Applications can bind
+their own Loom kernels to these vectors, together with their own side arrays
+and output buffers. Add `hrx = { package = "hrx-rs", version = "=0.4.0" }` to
+the application's dependencies to use the matching runtime and compiler API.
+
+```rust
+let corpus = db.corpus();
+for shard in corpus.shards() {
+    let rows = shard.row_range(); // Global insertion IDs; exclusive end.
+    let vectors = shard.vectors(); // Borrowed hrx::View, local rows 0..rows.len().
+    let inverse_norms = shard.inverse_norms(); // Same local row numbering.
+    let albums = album_buffer.try_slice(rows.start * 4, rows.len() * 4)?;
+    // Bind vectors, inverse_norms, albums, and application-owned output.
+}
+```
+
+`CorpusView` exposes `len`, `is_empty`, `dimensions`, `padded_dimensions`, and
+`shards`. `CorpusShardView` exposes `row_range`, `vectors`, and `inverse_norms`.
+Shard ranges cover all insertion IDs in order without gaps; an empty corpus
+has no shards. Each vector binding contains row-major little-endian FP16 with
+zero padding and a byte stride of `padded_dimensions() * 2`. Each norm binding
+contains one little-endian FP32 inverse norm per local row. Multiply the dot
+with a normalized query by this inverse norm for cosine similarity. These are
+the stored values: `build` normalizes before FP16 conversion, whereas
+`build_fp16` preserves its input values.
+
+Use a caller-owned stream from the same device used to build the index. Corpus
+uploads have completed when construction returns. Callers own compilation,
+submission, side data, scratch, and completion; borrowing a view does not wait
+for asynchronous GPU work. **Treat both corpus bindings as read-only.** HRX's
+binding type does not enforce this: writes are unsupported and invalidate the
+index's data invariants. Normal HRX dispatch safety requirements still apply.
+
+The runnable [album example](examples/album_scores.rs) binds an
+[application-owned kernel](examples/album_scores.loom) and an album ordinal per
+corpus row. It computes the best cosine for each `(query row, album)` directly
+on the device, merging maxima across shards and reading back only that result
+matrix. Missing albums produce negative infinity. The example favors clarity
+over throughput; album grouping and reduction remain application code.
+
+```sh
+HRX_OFFLINE=1 cargo run --locked --release --example album_scores
+```
+
 ## Kernel families
 
 [`scan_family.loom`](kernels/scan_family.loom) uses Loom configuration, dependent
@@ -315,6 +362,12 @@ Batch tests cover query widths, row-major input validation, shared exclusions,
 FP16 extremes and padded dimensions, exact ties, running selection across tiles
 and shards, workspace reuse, and ownership across threads. The faces-shape test
 also runs sixty queries across the 8 GiB shard boundary with bounded workspace.
+
+Corpus-view tests read and check every exported value, padding component, and
+inverse norm for both ingestion paths. They run the album example on a separate
+stream across unaligned shard boundaries, compare against built-in cosine
+scores, and verify subsequent searches still return the same results. Empty
+corpora expose no shards; a compile-fail doctest checks binding lifetimes.
 
 
 The repository's [release guide](RELEASE.md) covers packaging and publication.

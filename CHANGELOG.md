@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `FlatIndex::corpus`, `CorpusView`, and `CorpusShardView` for borrowed,
+  zero-copy access to resident FP16 vectors, shard-local FP32 inverse norms,
+  and global row ranges. Document layout, read-only access, and caller-owned
+  execution, with a custom Loom album-reduction example and shard tests.
 - Add `search_batch` and `search_batch_excluding` for up to 64 row-major queries
   with a shared exclusion set. A tiled FP16 × FP32 matrix kernel shares corpus
   reads across queries, with bounded score tiles and running device top-k.
