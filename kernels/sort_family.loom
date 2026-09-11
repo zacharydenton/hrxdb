@@ -1,0 +1,218 @@
+// Large-k selection: bitonic-sort 1024-row tiles in LDS, then repeatedly merge
+// pairs of sorted k-lists. Each merge halves the number of lists, even at k=1024.
+amdgpu.target<gfx1151> @target {subgroup_size = 32}
+
+kernel.def target(@target) export("sort_select") @sort_select(%count_arg: i32) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %tile = index.constant 1024 : index
+  %extra = index.constant 1023 : index
+  %raw = index.cast %count_arg : i32 to index
+  %count = index.assume %raw [range(%raw, 1, 1073741824)] : index
+  %rounded = index.add %count, %extra : index
+  %groups = index.div %rounded, %tile : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%count_arg: i32, %k_arg: i32, %scores: buffer, %out_scores: buffer, %out_ids: buffer) {
+  %zero = index.constant 0 : offset
+  %i0 = index.constant 0 : index
+  %i1 = index.constant 1 : index
+  %i2 = index.constant 2 : index
+  %i4 = index.constant 4 : index
+  %i11 = index.constant 11 : index
+  %c256 = index.constant 256 : index
+  %c1024 = index.constant 1024 : index
+  %c1023 = index.constant 1023 : index
+  %raw = index.cast %count_arg : i32 to index
+  %count = index.assume %raw [range(%raw, 1, 1073741824)] : index
+  %kraw = index.cast %k_arg : i32 to index
+  %k = index.assume %kraw [range(%kraw, 1, 1024)] : index
+  %tid0 = kernel.workitem.id<x> : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
+  %group0 = kernel.workgroup.id<x> : index
+  %group = index.assume %group0 [range(%group0, 0, 1048575)] : index
+  %base = index.mul %group, %c1024 : index
+  %rounded = index.add %count, %c1023 : index
+  %groups = index.div %rounded, %c1024 : index
+  %out_count = index.mul %groups, %k : index
+  %outbase = index.mul %group, %k : index
+  %sv = buffer.view %scores[%zero] : buffer -> view<[%count]xf32>
+  %os = buffer.view %out_scores[%zero] : buffer -> view<[%out_count]xf32>
+  %oi = buffer.view %out_ids[%zero] : buffer -> view<[%out_count]xi32>
+  %scratch_bytes = index.constant 4096 : offset
+  %scratch_s = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %scratch_i = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+  %ss = buffer.view %scratch_s[%zero] : buffer -> view<1024xf32>
+  %ii = buffer.view %scratch_i[%zero] : buffer -> view<1024xi32>
+  %badbits = scalar.constant -8388608 : i32
+  %neg = scalar.bitcast %badbits : i32 to f32
+  %sentinel = scalar.constant 2147483647 : i32
+  scf.for %j = [%i0 to %i4 step %i1] unroll {
+    %off = index.mul %j, %c256 : index
+    %local = index.add %tid, %off : index
+    %row = index.add %base, %local : index
+    %valid = index.cmp ult, %row, %count : index
+    %safe = scf.select %valid, %row, %i0 : index
+    %at = index.assume %safe [range(%safe, 0, 1073741823), lt(%safe, %count)] : index
+    %value = view.load %sv[%at] : view<[%count]xf32> -> f32
+    %id0 = index.cast %row : index to i32
+    %score = scf.select %valid, %value, %neg : f32
+    %id = scf.select %valid, %id0, %sentinel : i32
+    view.store %score, %ss[%local] : f32, view<1024xf32>
+    view.store %id, %ii[%local] : i32, view<1024xi32>
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+  scf.for %level = [%i1 to %i11 step %i1] {
+    %span = index.shli %i1, %level : index
+    scf.for %pass = [%i0 to %level step %i1] {
+      %remaining = index.sub %level, %pass : index
+      %shift = index.sub %remaining, %i1 : index
+      %stride0 = index.shli %i1, %shift : index
+      %stride = index.assume %stride0 [range(%stride0, 1, 512)] : index
+      %twice = index.mul %stride, %i2 : index
+      // Each thread owns two disjoint compare-exchange pairs. Only the
+      // inter-pass barrier is needed: no other thread writes either element.
+      scf.for %j = [%i0 to %i2 step %i1] unroll {
+        %off = index.mul %j, %c256 : index
+        %pair = index.add %tid, %off : index
+        %block = index.shrui %pair, %shift : index
+        %mask = index.sub %stride, %i1 : index
+        %within = index.andi %pair, %mask : index
+        %begin = index.mul %block, %twice : index
+        %lo0 = index.add %begin, %within : index
+        %hi0 = index.add %lo0, %stride : index
+        %lo = index.assume %lo0 [range(%lo0, 0, 1023)] : index
+        %hi = index.assume %hi0 [range(%hi0, 0, 1023)] : index
+        %a = view.load %ss[%lo] : view<1024xf32> -> f32
+        %b = view.load %ss[%hi] : view<1024xf32> -> f32
+        %ai = view.load %ii[%lo] : view<1024xi32> -> i32
+        %bi = view.load %ii[%hi] : view<1024xi32> -> i32
+        %greater = scalar.cmpf ogt, %a, %b : f32
+        %equal = scalar.cmpf oeq, %a, %b : f32
+        %earlier = scalar.cmpi ult, %ai, %bi : i32
+        %tie = scalar.andi %equal, %earlier : i1
+        %before = scalar.ori %greater, %tie : i1
+        %direction = index.andi %lo, %span : index
+        %descending = index.cmp eq, %direction, %i0 : index
+        %true = scalar.constant 1 : i1
+        %opposite = scalar.xori %before, %true : i1
+        %keep = scf.select %descending, %before, %opposite : i1
+        %ls = scf.select %keep, %a, %b : f32
+        %hs = scf.select %keep, %b, %a : f32
+        %li = scf.select %keep, %ai, %bi : i32
+        %hi_id = scf.select %keep, %bi, %ai : i32
+        view.store %ls, %ss[%lo] : f32, view<1024xf32>
+        view.store %hs, %ss[%hi] : f32, view<1024xf32>
+        view.store %li, %ii[%lo] : i32, view<1024xi32>
+        view.store %hi_id, %ii[%hi] : i32, view<1024xi32>
+      }
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    }
+  }
+  scf.for %j = [%i0 to %i4 step %i1] unroll {
+    %off = index.mul %j, %c256 : index
+    %local = index.add %tid, %off : index
+    %valid = index.cmp ult, %local, %k : index
+    scf.if %valid {
+      %at0 = index.add %outbase, %local : index
+      %at = index.assume %at0 [range(%at0, 0, 1073741823), lt(%at0, %out_count)] : index
+      %s = view.load %ss[%local] : view<1024xf32> -> f32
+      %id = view.load %ii[%local] : view<1024xi32> -> i32
+      view.store %s, %os[%at] : f32, view<[%out_count]xf32>
+      view.store %id, %oi[%at] : i32, view<[%out_count]xi32>
+    }
+  }
+  kernel.return
+}
+
+kernel.def target(@target) export("sorted_merge") @sorted_merge(%groups_arg: i32) {
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %threads = index.constant 256 : index
+  %raw = index.cast %groups_arg : i32 to index
+  %groups = index.assume %raw [range(%raw, 2, 1048576)] : index
+  %rounded = index.add %groups, %one : index
+  %outputs = index.div %rounded, %two : index
+  kernel.launch.config workgroups(%outputs, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%groups_arg: i32, %k_arg: i32, %scores: buffer, %ids: buffer, %out_scores: buffer, %out_ids: buffer) {
+  %zero = index.constant 0 : offset
+  %i0 = index.constant 0 : index
+  %i1 = index.constant 1 : index
+  %i2 = index.constant 2 : index
+  %i11 = index.constant 11 : index
+  %c256 = index.constant 256 : index
+  %raw = index.cast %groups_arg : i32 to index
+  %groups = index.assume %raw [range(%raw, 2, 1048576)] : index
+  %kraw = index.cast %k_arg : i32 to index
+  %k = index.assume %kraw [range(%kraw, 1, 1024)] : index
+  %count = index.mul %groups, %k : index
+  %rounded = index.add %groups, %i1 : index
+  %outputs = index.div %rounded, %i2 : index
+  %out_count = index.mul %outputs, %k : index
+  %tid0 = kernel.workitem.id<x> : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
+  %group0 = kernel.workgroup.id<x> : index
+  %group = index.assume %group0 [range(%group0, 0, 524287)] : index
+  %left = index.mul %group, %i2 : index
+  %right = index.add %left, %i1 : index
+  %outbase = index.mul %group, %k : index
+  %sv = buffer.view %scores[%zero] : buffer -> view<[%count]xf32>
+  %iv = buffer.view %ids[%zero] : buffer -> view<[%count]xi32>
+  %os = buffer.view %out_scores[%zero] : buffer -> view<[%out_count]xf32>
+  %oi = buffer.view %out_ids[%zero] : buffer -> view<[%out_count]xi32>
+  %twok = index.mul %k, %i2 : index
+  scf.for %candidate = [%tid to %twok step %c256] {
+    %from_right = index.cmp uge, %candidate, %k : index
+    %side = scf.select %from_right, %i1, %i0 : index
+    %relative = index.sub %candidate, %k : index
+    %position = scf.select %from_right, %relative, %candidate : index
+    %list = index.add %left, %side : index
+    %valid = index.cmp ult, %list, %groups : index
+    scf.if %valid {
+      %other = scf.select %from_right, %left, %right : index
+      %other_valid = index.cmp ult, %other, %groups : index
+      %other_len = scf.select %other_valid, %k, %i0 : index
+      %base = index.mul %list, %k : index
+      %at0 = index.add %base, %position : index
+      %at = index.assume %at0 [range(%at0, 0, 1073741823), lt(%at0, %count)] : index
+      %score = view.load %sv[%at] : view<[%count]xf32> -> f32
+      %id = view.load %iv[%at] : view<[%count]xi32> -> i32
+      %otherbase = index.mul %other, %k : index
+      // Binary-search the number of candidates preceding this one in the
+      // other list. Equal sentinel pairs prefer the left list, so even padded
+      // entries have unique output ranks. Eleven steps suffice for k <= 1024.
+      %rank_other, %end = scf.for %step = [%i0 to %i11 step %i1](%lo = %i0 : index, %hi = %other_len : index) -> (index, index) {
+        %sum0 = index.add %lo, %hi : index
+        %sum = index.assume %sum0 [range(%sum0, 0, 2048)] : index
+        %mid = index.div %sum, %i2 : index
+        %active = index.cmp ult, %lo, %hi : index
+        %peer0 = index.add %otherbase, %mid : index
+        %safe = scf.select %active, %peer0, %i0 : index
+        %peer = index.assume %safe [range(%safe, 0, 1073741823), lt(%safe, %count)] : index
+        %s = view.load %sv[%peer] : view<[%count]xf32> -> f32
+        %ident = view.load %iv[%peer] : view<[%count]xi32> -> i32
+        %greater = scalar.cmpf ogt, %s, %score : f32
+        %equal = scalar.cmpf oeq, %s, %score : f32
+        %earlier = scalar.cmpi ult, %ident, %id : i32
+        %same_id = scalar.cmpi eq, %ident, %id : i32
+        %left_first = scalar.andi %same_id, %from_right : i1
+        %id_before = scalar.ori %earlier, %left_first : i1
+        %tie = scalar.andi %equal, %id_before : i1
+        %before = scalar.ori %greater, %tie : i1
+        %advance = scalar.andi %active, %before : i1
+        %after_mid = index.add %mid, %i1 : index
+        %next_lo = scf.select %advance, %after_mid, %lo : index
+        %next_hi = scf.select %advance, %hi, %mid : index
+        scf.yield %next_lo, %next_hi : index, index
+      }
+      %rank = index.add %position, %rank_other : index
+      %keep = index.cmp ult, %rank, %k : index
+      scf.if %keep {
+        %out0 = index.add %outbase, %rank : index
+        %out = index.assume %out0 [range(%out0, 0, 1073741823), lt(%out0, %out_count)] : index
+        view.store %score, %os[%out] : f32, view<[%out_count]xf32>
+        view.store %id, %oi[%out] : i32, view<[%out_count]xi32>
+      }
+    }
+  }
+  kernel.return
+}

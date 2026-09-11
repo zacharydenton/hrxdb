@@ -1,10 +1,11 @@
 # hrxdb
 
 An immutable, GPU-resident flat vector index on [hrx-rs](https://github.com/zacharydenton/hrx-rs). It exhaustively
-searches FP16 vectors using FP32 cosine scores and returns the best 1–32 matches.
+searches FP16 vectors using FP32 cosine scores and returns the best 1–1,024 matches,
+with optional excluded IDs. Large corpora are sharded internally.
 The first target is **one query over 10 million 384-dimensional vectors** on Linux
 with a gfx1151 GPU (Strix Halo). This is a library and benchmark, with no server,
-persistence, updates, filtering, or ANN index yet.
+persistence, updates, metadata filters, or ANN index yet.
 
 ## Quick start
 
@@ -44,25 +45,103 @@ for neighbor in neighbors {
 }
 ```
 
+For a corpus already stored as FP16, use `build_fp16` (or
+`build_fp16_with_config`). Each row is an `AsRef<[u8]>` containing exactly
+`dimensions * 2` little-endian IEEE 754 binary16 bytes, without padding:
+
+```rust
+let db = FlatIndex::build_fp16(&device, dimensions, corpus_bytes.chunks_exact(dimensions * 2))?;
+```
+
+The bytes are preserved, zero padding is added, and inverse norms are computed
+in one pass. Rows need not be normalized. This avoids allocating FP32 rows and
+rounding them back to FP16. Reject incomplete trailing rows when reading a file:
+`chunks_exact` omits any remainder. Both constructors require an accurately
+sized iterator and upload in bounded chunks.
+
 `FlatIndex` is `Send`: build it on one thread and move it to a worker thread.
 It is not `Sync`; searches require `&mut self`. Use `Arc<Mutex<FlatIndex>>` when
 multiple callers should share one index with serialized queries. The index owns
 its device resources, so the original `Device` handle need not outlive it.
 See the runnable [search example](examples/search.rs).
 
-The constructor normalizes each row, rounds it to FP16, and stores an FP32
+The FP32 constructor normalizes each row, rounds it to FP16, and stores an FP32
 inverse norm for the rounded row. Queries are normalized to FP32. Scores are
 FP32 dot products corrected by that stored inverse norm. Search is exhaustive
 over this **quantized representation**; FP16 rounding and FP32 arithmetic can
 change rankings relative to the original vectors. Scores are not clamped.
+For `build_fp16`, the quantized representation is the supplied values; preserving
+them may produce different scores from normalizing FP32 rows before rounding.
 Equal computed scores prefer the lower ID. Small indexes return `min(k, len)`
 neighbors, and an empty index returns an empty vector for a valid query.
 
-Zero-norm and nonfinite vectors, dimension mismatches, and k outside 1–32 are
+Zero-norm and nonfinite vectors, dimension mismatches, and k outside 1–1,024 are
 errors. Logical dimensions are 1–16,384 and padded to a multiple of 128; the
-primary 384-dimensional case needs no padding. Row count is limited to 2^30.
+primary 384-dimensional case needs no padding. Row count is limited to 2^30,
+and each internal allocation contains at most **2^32 FP16 elements** (8 GiB
+of vector storage), respecting the compiler's 32-bit element-index limit.
+This is 8,388,608 rows per shard at 512 dimensions or 11,184,810 at 384.
+Both constructors automatically split larger corpora. For example, 8,942,135 ×
+512 faces use two shards while retaining one index and global insertion IDs.
+Scans write each shard's scores into its range of a shared score array; GPU
+selection finds the best k across the entire corpus. `shard_count()` reports
+the number of corpus allocations.
 Available GPU memory and compiler resources may impose tighter limits for large
 shapes. The tested dimension set is 1, 3, 127, 384, and 769.
+
+## Larger result sets and exclusions
+
+Request up to 1,024 candidates and collapse them using application metadata.
+For example, keep the highest-scoring photo from each album until a page is full:
+
+```rust
+db.reserve_search(1024)?; // Optional setup: reserve scratch before serving queries.
+let candidates = db.search(query, 1024)?;
+let mut seen_albums = std::collections::HashSet::new();
+let page: Vec<_> = candidates.into_iter()
+    .filter(|n| seen_albums.insert(album_ids[n.id as usize]))
+    .take(60)
+    .collect();
+```
+
+The page can contain fewer than 60 albums if the candidates do not cover that
+many distinct albums. A greedy similarity walk can exclude its visited IDs
+directly, without reading back the full score array:
+
+```rust
+let next = db.search_excluding(query, 1, &visited_ids)?;
+if let Some(neighbor) = next.first() {
+    visited_ids.push(neighbor.id);
+}
+```
+
+`search_excluding(query, k, excluded)` accepts unsorted, repeated insertion IDs.
+Out-of-range IDs are errors. It returns `min(k, remaining_rows)` matches, or an
+empty vector when every row is excluded. Exclusions apply to one query and
+compose with the full k range and internal sharding. Both search methods run
+selection on the GPU and read back at most k score/ID pairs.
+
+Construction reserves selection scratch for k=32. The first larger query grows
+it to the next power of two, then reuses that capacity. `reserve_search(k)` lets
+applications make that allocation during setup. Queries compile no kernels.
+
+## Full-score queries
+
+`scores` and `scores_into` are supported query entry points for larger result
+sets beyond 1,024 or custom host-side ranking.
+They return the same cosine scores used by `search`, in insertion-ID order.
+`scores` allocates a `Vec<f32>`; `scores_into` writes into an existing slice of
+exactly `db.len()` entries so it can be reused across queries:
+
+```rust
+let mut scores = vec![0.0; db.len()]; // Allocate once per worker, outside its query loop.
+db.scores_into(query, &mut scores)?;
+```
+
+Readback transfers four bytes per row and blocks until the output is ready.
+`scores_into` allocates no host score array or GPU buffer, but full score transfer
+and host selection still cost more than device top-k. Score readback always
+returns all rows, regardless of exclusions supplied to previous searches.
 
 ## Kernel families
 
@@ -75,8 +154,9 @@ The tuned default uses 128 threads, wave32, two rows per wave, and four adjacent
 FP16 components per lane per load. At dimension 384 each lane reads 12 components
 of each row, reuses query values, accumulates in FP32, and reduces within its
 wave. Corpus values go directly into registers, with no LDS staging. Loom's
-multidimensional views lower the corpus address into 64-bit pointer arithmetic;
+multidimensional views use 64-bit byte pointers with a 32-bit element index;
 tests place unique matches on both sides of 4 GiB and at the end of 7.68 GB.
+The 8,942,135 × 512 test covers the 8 GiB shard boundary and corpus tail.
 
 [`select_family.loom`](kernels/select_family.loom) partitions the score array
 into groups of 1,024. Each 256-thread group holds four candidates per thread,
@@ -84,14 +164,28 @@ repeatedly reduces to the maximum score and minimum matching ID, and invalidates
 the winner. Loom workgroup reductions handle subgroup exchange, LDS publication,
 and barriers. The same family selects from intermediate candidate pairs until
 only the final top-k remains. Keeping each partition's top-k preserves the
-global top-k. Invalid lanes use negative infinity and a sentinel ID.
+global top-k. This path serves k=1–32. Invalid lanes use negative infinity and
+a sentinel ID.
+
+For k=33–1,024, [`sort_family.loom`](kernels/sort_family.loom) bitonic-sorts
+1,024-row tiles in 8 KiB of workgroup memory and keeps each tile's top k.
+Pairwise merges rank each candidate by binary-searching the other sorted list,
+then retain the best k. Every round halves the number of lists, including at
+k=1,024. Both selection paths order equal scores by ascending insertion ID.
+
+Excluded IDs populate a reusable, imported host bitmap (one bit per row).
+[`mask.loom`](kernels/mask.loom) marks excluded scores as negative infinity on
+the GPU before selection. Search omits these entries from readback results.
+The following scan overwrites the scores, so exclusions cannot leak into later
+queries. Unmasked searches skip this dispatch entirely.
 
 At 10M × 384, storage is 7.68 GB of vectors, 40 MB of inverse norms, 40 MB of
-scores, and about 5 MB of selection scratch. Scoring writes and selection reads
+scores, a 1.25 MB exclusion bitmap, and about 5 MB of initial selection scratch
+(about 160 MB at k=1,024). Scoring writes and initial selection reads
 40 MB each, approximately 1% additional traffic relative to vectors. Corpus,
 query, result, and scratch allocations are reused. Query/result host memory is
 page-aligned and imported once into HRX, with explicit completion before host
-access. Searches compile no kernels and allocate no new GPU buffers. Returned
+access. Once selection capacity is reserved, searches allocate no new GPU buffers. Returned
 `Vec<Neighbor>` values allocate on the host.
 
 ## Benchmark
@@ -109,9 +203,14 @@ cargo run --release --bin hrxdb-bench -- --output default.json
 cargo run --release --bin hrxdb-bench -- --sweep --output sweep.json
 # A smaller run:
 cargo run --release --bin hrxdb-bench -- --rows 100000 --samples 10
+# Larger result sets, with the first 100,000 IDs excluded:
+cargo run --release --bin hrxdb-bench -- --k 1024 --exclude-first 100000 --output large-k.json
 ```
 
 Defaults: 10M rows, 384 dimensions, k=10, three warmups and 30 measured queries.
+`--k` accepts 1–1,024. `--exclude-first N` excludes IDs 0 through N−1 and must
+leave at least one row. Full-search timings include bitmap preparation and
+device masking. Scratch reservation happens before validation and timing.
 `--sweep` compares all 16 combinations of 128/256 threads, 1/2/4/8 rows per wave,
 and 2/4 components per load on the same corpus. It selects the minimum median
 full-search latency, preferring fewer VGPRs for results within 1%. Optional
@@ -151,8 +250,14 @@ cargo clippy --all-targets -- -D warnings
 Hardware tests cover all 16 schedules, CPU score/ranking comparisons, padded
 dimensions, tails, empty/small indexes, invalid vectors, repeated queries, ties,
 negative scores, all k values, and multi-level selection with exact synthetic
-scores. The 10M-row test allocates approximately 7.8 GB and checks unique matches
-around the 4 GiB boundary and at the allocation tail. Run hardware tests
+scores. FP16 ingestion tests cover byte preservation, norm correction, invalid
+rows, chunk boundaries, and reusable score readback. CPU tests check shard
+layouts without allocating large corpora. Hardware tests compare sharded and
+single-allocation results and exercise exclusions, growing walks, all-excluded
+queries, large k, and odd merge tails. The 10M-row test allocates approximately
+7.8 GB and checks unique matches around the 4 GiB boundary and at the allocation
+tail. The faces-shape test allocates about 9.4 GB and crosses the compiler's
+2^32-element boundary. Run hardware tests
 separately from performance measurements to avoid GPU contention.
 
 

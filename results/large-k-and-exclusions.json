@@ -1,0 +1,1923 @@
+{
+  "date": "2026-09-11",
+  "conditions": "Local gfx1151. Runs executed sequentially, with no concurrent hrxdb GPU tests or benchmarks. Other system activity and clocks were not controlled. Three warmups and ten measured queries per run.",
+  "retention": "All timing samples, result counts, aggregate statistics, and compiler reports are retained. Per-query neighbor arrays are omitted for compactness; each run passed the benchmark full-score CPU selection and returned-score validation.",
+  "commands": [
+    "HRX_OFFLINE=1 cargo run --locked --release --bin hrxdb-bench -- --k 10 --samples 10 --output small-k.json",
+    "HRX_OFFLINE=1 cargo run --locked --release --bin hrxdb-bench -- --k 1024 --samples 10 --output large-k.json",
+    "HRX_OFFLINE=1 cargo run --locked --release --bin hrxdb-bench -- --k 1024 --exclude-first 100000 --samples 10 --output large-k-excluded.json"
+  ],
+  "runs": [
+    {
+      "target": "gfx1151",
+      "rows": 10000000,
+      "dimensions": 384,
+      "padded_dimensions": 384,
+      "k": 10,
+      "excluded_rows": 0,
+      "shards": 1,
+      "vector_bytes": 7680000000,
+      "norm_bytes": 40000000,
+      "score_bytes": 40000000,
+      "ingestion_and_compile_seconds": 17.341986778,
+      "timing": "Host wall time with explicit completion; three warmups; serialized changing queries; scan/control exclude query preparation; search includes normalization, query publication, selection and readback. GB/s uses unpadded FP16 vector bytes and decimal GB.",
+      "validation": "GPU selection checked against a CPU top-k over the entire GPU score array for each configuration. Sampled scores include the allocation tail and 4 GiB boundary; all returned scores checked against quantized CPU reference. This is not an exhaustive CPU recomputation of every dot product.",
+      "quantization_sample_rows": 8192,
+      "quantization_sample_top_k_overlap": 1.0,
+      "selected_config": {
+        "threads": 128,
+        "rows_per_wave": 2,
+        "load_width": 4
+      },
+      "trials": [
+        {
+          "config": {
+            "threads": 128,
+            "rows_per_wave": 2,
+            "load_width": 4
+          },
+          "scan_median_ms": 32.05671,
+          "scan_p95_ms": 32.229976,
+          "search_median_ms": 32.513689,
+          "search_p95_ms": 32.699394,
+          "read_control_median_ms": 31.915052,
+          "scan_gb_s": 239.57542742221517,
+          "search_gb_s": 236.20820141325706,
+          "read_control_gb_s": 240.6388057898198,
+          "fraction_of_read_control": 0.9955810187633103,
+          "fraction_of_256_gb_s": 0.935841513368028,
+          "scan_target_met": true,
+          "resources": {
+            "vgpr_count": 28,
+            "sgpr_count": 20,
+            "private_segment_bytes": 0,
+            "workgroup_segment_bytes": 0
+          },
+          "compiler": [
+            {
+              "symbol": "scan",
+              "artifact": "hrx-cache/kernels/eec59d8b64f44c11b1a65bbb6991ef73038a9e5ec64ca5c0d9916633bcec4497/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9160,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        128,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 0,
+                      "parameter_count": 4
+                    },
+                    "name": "scan",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "scan",
+              "artifact": "hrx-cache/kernels/b3eb48d810fba9a5cd35a67c3e979536c23524665c64e41dd0f391382de8aaeb/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9160,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        128,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 0,
+                      "parameter_count": 4
+                    },
+                    "name": "scan",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "select",
+              "artifact": "hrx-cache/kernels/566b75e6356c3b833861c6cfe3393e6fb1801e0947deb56f8bee9f1d0b2df72e/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9160,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 8,
+                      "parameter_count": 6
+                    },
+                    "name": "select",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "select",
+              "artifact": "hrx-cache/kernels/12a27c46ab742d6370f0f1dda0f2218befef5749a87af530500688c11b50486b/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9160,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 8,
+                      "parameter_count": 6
+                    },
+                    "name": "select",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "sort_select",
+              "artifact": "hrx-cache/kernels/2c03a56ed1070f1f1319cc1e0b136bc37cfee655c618cae08efa5b059551865e/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9176,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 3,
+                      "constant_byte_length": 8,
+                      "parameter_count": 5
+                    },
+                    "name": "sort_select",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "sorted_merge",
+              "artifact": "hrx-cache/kernels/267460721a7c876facb88b161d8a7875080843299bde0c63ec7e5fdde3ebceec/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9176,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 8,
+                      "parameter_count": 6
+                    },
+                    "name": "sorted_merge",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "mask_scores",
+              "artifact": "hrx-cache/kernels/48c51fbe875dd55cc2cce854a2e4eabe19db136cba5a688f2c37b20c10fdec35/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9176,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 2,
+                      "constant_byte_length": 4,
+                      "parameter_count": 3
+                    },
+                    "name": "mask_scores",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            }
+          ],
+          "samples": [
+            {
+              "scan_ms": 32.03418,
+              "search_ms": 32.558698,
+              "read_control_ms": 31.894911999999998,
+              "neighbor_count": 10
+            },
+            {
+              "scan_ms": 32.140587,
+              "search_ms": 32.678896,
+              "read_control_ms": 31.848184000000003,
+              "neighbor_count": 10
+            },
+            {
+              "scan_ms": 32.028289,
+              "search_ms": 32.48973,
+              "read_control_ms": 31.891652999999998,
+              "neighbor_count": 10
+            },
+            {
+              "scan_ms": 32.041039,
+              "search_ms": 32.513689,
+              "read_control_ms": 31.884102999999996,
+              "neighbor_count": 10
+            },
+            {
+              "scan_ms": 32.090198,
+              "search_ms": 32.528839,
+              "read_control_ms": 32.03782,
+              "neighbor_count": 10
+            },
+            {
+              "scan_ms": 32.027308999999995,
+              "search_ms": 32.50994,
+              "read_control_ms": 31.915052,
+              "neighbor_count": 10
+            },
+            {
+              "scan_ms": 32.05671,
+              "search_ms": 32.699394,
+              "read_control_ms": 31.953881000000003,
+              "neighbor_count": 10
+            },
+            {
+              "scan_ms": 32.057649,
+              "search_ms": 32.505589,
+              "read_control_ms": 31.938651999999998,
+              "neighbor_count": 10
+            },
+            {
+              "scan_ms": 32.229976,
+              "search_ms": 32.563848,
+              "read_control_ms": 31.976650000000003,
+              "neighbor_count": 10
+            },
+            {
+              "scan_ms": 32.064879,
+              "search_ms": 32.501819000000005,
+              "read_control_ms": 31.929852,
+              "neighbor_count": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "target": "gfx1151",
+      "rows": 10000000,
+      "dimensions": 384,
+      "padded_dimensions": 384,
+      "k": 1024,
+      "excluded_rows": 0,
+      "shards": 1,
+      "vector_bytes": 7680000000,
+      "norm_bytes": 40000000,
+      "score_bytes": 40000000,
+      "ingestion_and_compile_seconds": 17.458460368,
+      "timing": "Host wall time with explicit completion; three warmups; serialized changing queries; scan/control exclude query preparation; search includes normalization, query publication, selection and readback. GB/s uses unpadded FP16 vector bytes and decimal GB.",
+      "validation": "GPU selection checked against a CPU top-k over the entire GPU score array for each configuration. Sampled scores include the allocation tail and 4 GiB boundary; all returned scores checked against quantized CPU reference. This is not an exhaustive CPU recomputation of every dot product.",
+      "quantization_sample_rows": 8192,
+      "quantization_sample_top_k_overlap": 0.9990234375,
+      "selected_config": {
+        "threads": 128,
+        "rows_per_wave": 2,
+        "load_width": 4
+      },
+      "trials": [
+        {
+          "config": {
+            "threads": 128,
+            "rows_per_wave": 2,
+            "load_width": 4
+          },
+          "scan_median_ms": 32.148595,
+          "scan_p95_ms": 32.186174,
+          "search_median_ms": 36.742124000000004,
+          "search_p95_ms": 36.943549,
+          "read_control_median_ms": 32.059917,
+          "scan_gb_s": 238.890688691061,
+          "search_gb_s": 209.02438846485845,
+          "read_control_gb_s": 239.55146234470914,
+          "fraction_of_read_control": 0.9972416212901372,
+          "fraction_of_256_gb_s": 0.933166752699457,
+          "scan_target_met": true,
+          "resources": {
+            "vgpr_count": 28,
+            "sgpr_count": 20,
+            "private_segment_bytes": 0,
+            "workgroup_segment_bytes": 0
+          },
+          "compiler": [
+            {
+              "symbol": "scan",
+              "artifact": "hrx-cache/kernels/eec59d8b64f44c11b1a65bbb6991ef73038a9e5ec64ca5c0d9916633bcec4497/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9160,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        128,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 0,
+                      "parameter_count": 4
+                    },
+                    "name": "scan",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "scan",
+              "artifact": "hrx-cache/kernels/b3eb48d810fba9a5cd35a67c3e979536c23524665c64e41dd0f391382de8aaeb/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9160,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        128,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 0,
+                      "parameter_count": 4
+                    },
+                    "name": "scan",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "select",
+              "artifact": "hrx-cache/kernels/566b75e6356c3b833861c6cfe3393e6fb1801e0947deb56f8bee9f1d0b2df72e/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9160,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 8,
+                      "parameter_count": 6
+                    },
+                    "name": "select",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "select",
+              "artifact": "hrx-cache/kernels/12a27c46ab742d6370f0f1dda0f2218befef5749a87af530500688c11b50486b/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9160,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 8,
+                      "parameter_count": 6
+                    },
+                    "name": "select",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "sort_select",
+              "artifact": "hrx-cache/kernels/2c03a56ed1070f1f1319cc1e0b136bc37cfee655c618cae08efa5b059551865e/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9176,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 3,
+                      "constant_byte_length": 8,
+                      "parameter_count": 5
+                    },
+                    "name": "sort_select",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "sorted_merge",
+              "artifact": "hrx-cache/kernels/267460721a7c876facb88b161d8a7875080843299bde0c63ec7e5fdde3ebceec/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9176,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 8,
+                      "parameter_count": 6
+                    },
+                    "name": "sorted_merge",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "mask_scores",
+              "artifact": "hrx-cache/kernels/48c51fbe875dd55cc2cce854a2e4eabe19db136cba5a688f2c37b20c10fdec35/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9176,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 2,
+                      "constant_byte_length": 4,
+                      "parameter_count": 3
+                    },
+                    "name": "mask_scores",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            }
+          ],
+          "samples": [
+            {
+              "scan_ms": 32.154824999999995,
+              "search_ms": 36.667775,
+              "read_control_ms": 32.036046999999996,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.186174,
+              "search_ms": 36.807832,
+              "read_control_ms": 32.059917,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.158514,
+              "search_ms": 36.742124000000004,
+              "read_control_ms": 32.054447,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.144425,
+              "search_ms": 36.548519,
+              "read_control_ms": 32.073836,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.171025,
+              "search_ms": 36.943549,
+              "read_control_ms": 32.177763999999996,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.119375,
+              "search_ms": 36.809023,
+              "read_control_ms": 32.094246,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.135955,
+              "search_ms": 36.661975999999996,
+              "read_control_ms": 31.986658000000002,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.148595,
+              "search_ms": 36.573798,
+              "read_control_ms": 32.030777,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.136335,
+              "search_ms": 36.896721,
+              "read_control_ms": 32.267922,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.148894999999996,
+              "search_ms": 36.877701,
+              "read_control_ms": 32.074225999999996,
+              "neighbor_count": 1024
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "target": "gfx1151",
+      "rows": 10000000,
+      "dimensions": 384,
+      "padded_dimensions": 384,
+      "k": 1024,
+      "excluded_rows": 100000,
+      "shards": 1,
+      "vector_bytes": 7680000000,
+      "norm_bytes": 40000000,
+      "score_bytes": 40000000,
+      "ingestion_and_compile_seconds": 17.243122467,
+      "timing": "Host wall time with explicit completion; three warmups; serialized changing queries; scratch reserved before timing; scan/control exclude query preparation; search includes normalization, query publication, optional exclusion bitmap preparation and masking, selection and readback. GB/s uses unpadded FP16 vector bytes and decimal GB.",
+      "validation": "GPU selection checked against a CPU top-k over the entire GPU score array after exclusions for each configuration. Sampled scores include the allocation tail and 4 GiB boundary; all returned scores checked against quantized CPU reference. This is not an exhaustive CPU recomputation of every dot product. Quantization overlap is measured without exclusions on a separate subset.",
+      "quantization_sample_rows": 8192,
+      "quantization_sample_top_k_overlap": 0.9990234375,
+      "selected_config": {
+        "threads": 128,
+        "rows_per_wave": 2,
+        "load_width": 4
+      },
+      "trials": [
+        {
+          "config": {
+            "threads": 128,
+            "rows_per_wave": 2,
+            "load_width": 4
+          },
+          "scan_median_ms": 32.023441999999996,
+          "scan_p95_ms": 32.636669,
+          "search_median_ms": 36.997783999999996,
+          "search_p95_ms": 37.114621,
+          "read_control_median_ms": 32.112590000000004,
+          "scan_gb_s": 239.82431370119428,
+          "search_gb_s": 207.57999992648212,
+          "read_control_gb_s": 239.15853563975995,
+          "fraction_of_read_control": 1.002783835666385,
+          "fraction_of_256_gb_s": 0.9368137253952902,
+          "scan_target_met": true,
+          "resources": {
+            "vgpr_count": 28,
+            "sgpr_count": 20,
+            "private_segment_bytes": 0,
+            "workgroup_segment_bytes": 0
+          },
+          "compiler": [
+            {
+              "symbol": "scan",
+              "artifact": "hrx-cache/kernels/eec59d8b64f44c11b1a65bbb6991ef73038a9e5ec64ca5c0d9916633bcec4497/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9160,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        128,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 0,
+                      "parameter_count": 4
+                    },
+                    "name": "scan",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "scan",
+              "artifact": "hrx-cache/kernels/b3eb48d810fba9a5cd35a67c3e979536c23524665c64e41dd0f391382de8aaeb/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9160,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        128,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 0,
+                      "parameter_count": 4
+                    },
+                    "name": "scan",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "select",
+              "artifact": "hrx-cache/kernels/566b75e6356c3b833861c6cfe3393e6fb1801e0947deb56f8bee9f1d0b2df72e/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9160,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 8,
+                      "parameter_count": 6
+                    },
+                    "name": "select",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "select",
+              "artifact": "hrx-cache/kernels/12a27c46ab742d6370f0f1dda0f2218befef5749a87af530500688c11b50486b/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9160,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 8,
+                      "parameter_count": 6
+                    },
+                    "name": "select",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "sort_select",
+              "artifact": "hrx-cache/kernels/2c03a56ed1070f1f1319cc1e0b136bc37cfee655c618cae08efa5b059551865e/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9176,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 3,
+                      "constant_byte_length": 8,
+                      "parameter_count": 5
+                    },
+                    "name": "sort_select",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "sorted_merge",
+              "artifact": "hrx-cache/kernels/267460721a7c876facb88b161d8a7875080843299bde0c63ec7e5fdde3ebceec/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9176,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 4,
+                      "constant_byte_length": 8,
+                      "parameter_count": 6
+                    },
+                    "name": "sorted_merge",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            },
+            {
+              "symbol": "mask_scores",
+              "artifact": "hrx-cache/kernels/48c51fbe875dd55cc2cce854a2e4eabe19db136cba5a688f2c37b20c10fdec35/kernel.hsaco",
+              "report": {
+                "artifact": {
+                  "byte_length": 9176,
+                  "format": "elf",
+                  "name": "module.hsaco"
+                },
+                "functions": [
+                  {
+                    "execution": {
+                      "subgroup_size": 32,
+                      "workgroup_size": [
+                        256,
+                        1,
+                        1
+                      ]
+                    },
+                    "interface": {
+                      "binding_count": 2,
+                      "constant_byte_length": 4,
+                      "parameter_count": 3
+                    },
+                    "name": "mask_scores",
+                    "targets": [
+                      "amdgpu-rdna3-5"
+                    ]
+                  }
+                ],
+                "kind": "loom.artifact_manifest",
+                "mode": "details",
+                "schema_version": 1,
+                "targets": [
+                  {
+                    "address_spaces": {
+                      "constant": 4,
+                      "descriptor": 7,
+                      "generic": 0,
+                      "global": 1,
+                      "private": 5,
+                      "workgroup": 3
+                    },
+                    "code_object_target": "amdgcn-amd-amdhsa--gfx1151",
+                    "default_pointer_bitwidth": 64,
+                    "family": "amdgpu",
+                    "index_bitwidth": 32,
+                    "max_flat_grid_size": 4294967295,
+                    "max_flat_workgroup_size": 1024,
+                    "max_grid_size": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_count": {
+                      "x": 2147483647,
+                      "y": 65535,
+                      "z": 65535
+                    },
+                    "max_workgroup_size": {
+                      "x": 1024,
+                      "y": 1024,
+                      "z": 1024
+                    },
+                    "max_workgroup_storage_bytes": 65536,
+                    "name": "amdgpu-rdna3-5",
+                    "offset_bitwidth": 64,
+                    "processor": "gfx1151",
+                    "selector": "gfx1151",
+                    "subgroup_size": 32
+                  }
+                ]
+              },
+              "diagnostics": []
+            }
+          ],
+          "samples": [
+            {
+              "scan_ms": 32.023441999999996,
+              "search_ms": 36.995274,
+              "read_control_ms": 32.11425,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.636669,
+              "search_ms": 36.962544,
+              "read_control_ms": 32.165659,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.037852,
+              "search_ms": 37.114241,
+              "read_control_ms": 32.119710000000005,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.017272,
+              "search_ms": 36.997783999999996,
+              "read_control_ms": 32.223268,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.034472,
+              "search_ms": 36.954623999999995,
+              "read_control_ms": 32.087751,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.042902,
+              "search_ms": 37.114621,
+              "read_control_ms": 32.031872,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.027462,
+              "search_ms": 37.026773,
+              "read_control_ms": 32.112590000000004,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.014582,
+              "search_ms": 36.981634,
+              "read_control_ms": 32.09475,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.012921999999996,
+              "search_ms": 37.086722,
+              "read_control_ms": 32.251577,
+              "neighbor_count": 1024
+            },
+            {
+              "scan_ms": 32.009043,
+              "search_ms": 37.080831,
+              "read_control_ms": 32.057751,
+              "neighbor_count": 1024
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

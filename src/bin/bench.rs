@@ -9,6 +9,7 @@ struct Options {
     dimensions: usize,
     samples: usize,
     k: usize,
+    exclude_first: usize,
     sweep: bool,
     output: Option<PathBuf>,
     config: ScanConfig,
@@ -20,6 +21,7 @@ fn options() -> Result<Options, String> {
         dimensions: 384,
         samples: 30,
         k: 10,
+        exclude_first: 0,
         sweep: false,
         output: None,
         config: ScanConfig::default(),
@@ -28,7 +30,7 @@ fn options() -> Result<Options, String> {
     while let Some(key) = args.next() {
         if key == "--help" {
             println!(
-                "hrxdb-bench [--rows 10000000] [--dimensions 384] [--samples 30] [--k 10]\n             [--sweep] [--threads 128] [--rows-per-wave 2] [--load-width 4] [--output results.json]\n             Builds once, checks sample scores, then measures completed single-query work.\n             --sweep tests all 16 schedules on the same corpus."
+                "hrxdb-bench [--rows 10000000] [--dimensions 384] [--samples 30] [--k 10] [--exclude-first 0]\n             [--sweep] [--threads 128] [--rows-per-wave 2] [--load-width 4] [--output results.json]\n             Builds once, checks sample scores, then measures completed single-query work.\n             --sweep tests all 16 schedules on the same corpus."
             );
             std::process::exit(0);
         }
@@ -51,14 +53,15 @@ fn options() -> Result<Options, String> {
             "--dimensions" => o.dimensions = value,
             "--samples" => o.samples = value,
             "--k" => o.k = value,
+            "--exclude-first" => o.exclude_first = value,
             "--threads" => o.config.threads = value,
             "--rows-per-wave" => o.config.rows_per_wave = value,
             "--load-width" => o.config.load_width = value,
             _ => return Err(format!("unknown option {key}")),
         }
     }
-    if o.rows == 0 || o.samples == 0 || !(1..=32).contains(&o.k) {
-        return Err("rows and samples must be positive; k must be in 1..=32".into());
+    if o.rows == 0 || o.samples == 0 || !(1..=1024).contains(&o.k) || o.exclude_first >= o.rows {
+        return Err("rows and samples must be positive; k must be in 1..=1024; exclude-first must be less than rows".into());
     }
     Ok(o)
 }
@@ -176,6 +179,8 @@ struct Report {
     dimensions: usize,
     padded_dimensions: usize,
     k: usize,
+    excluded_rows: usize,
+    shards: usize,
     vector_bytes: usize,
     norm_bytes: usize,
     score_bytes: usize,
@@ -204,6 +209,8 @@ fn run(o: Options) -> hrxdb::Result<()> {
         o.config,
     )?;
     let build_seconds = start.elapsed().as_secs_f64();
+    db.reserve_search(o.k)?;
+    let excluded: Vec<u32> = (0..o.exclude_first as u32).collect();
     eprintln!("Ingestion and compilation: {build_seconds:.2}s");
     let configs: Vec<_> = if o.sweep {
         ScanConfig::configurations().collect()
@@ -235,11 +242,14 @@ fn run(o: Options) -> hrxdb::Result<()> {
         }
         // Validate selection against every GPU score without an O(N log N) sort.
         // Traversal is by ascending ID, so equal scores retain the earlier ID.
-        let k = o.k.min(o.rows);
+        let k = o.k.min(o.rows - o.exclude_first);
         let mut expected: Vec<hrxdb::Neighbor> = Vec::with_capacity(k + 1);
         for (id, &similarity) in scores.iter().enumerate() {
             if !similarity.is_finite() {
                 return Err(hrxdb::Error::Message(format!("nonfinite score at {id}")));
+            }
+            if id < o.exclude_first {
+                continue;
             }
             if expected.len() == k && similarity <= expected[k - 1].similarity {
                 continue;
@@ -254,7 +264,7 @@ fn run(o: Options) -> hrxdb::Result<()> {
             );
             expected.truncate(k);
         }
-        let selected = db.search(&query, o.k)?;
+        let selected = db.search_excluding(&query, o.k, &excluded)?;
         if selected != expected {
             return Err(hrxdb::Error::Message(
                 "GPU top-k differs from CPU selection over the full score array".into(),
@@ -264,8 +274,8 @@ fn run(o: Options) -> hrxdb::Result<()> {
         let mut samples = Vec::new();
         for i in 0..o.samples + 3 {
             let query = row(o.rows + i + 1, o.dimensions);
-            let sample = db.measure(&query, o.k)?;
-            if sample.neighbors.len() != o.k.min(o.rows) {
+            let sample = db.measure_excluding(&query, o.k, &excluded)?;
+            if sample.neighbors.len() != k {
                 return Err(hrxdb::Error::Message("wrong result count".into()));
             }
             for pair in sample.neighbors.windows(2) {
@@ -278,7 +288,10 @@ fn run(o: Options) -> hrxdb::Result<()> {
                 }
             }
             for n in &sample.neighbors {
-                if n.id as usize >= o.rows || !n.similarity.is_finite() {
+                if (n.id as usize) < o.exclude_first
+                    || n.id as usize >= o.rows
+                    || !n.similarity.is_finite()
+                {
                     return Err(hrxdb::Error::Message("invalid neighbor returned".into()));
                 }
                 let reference = score(n.id as usize, o.dimensions, &query, true);
@@ -366,12 +379,14 @@ fn run(o: Options) -> hrxdb::Result<()> {
         dimensions: o.dimensions,
         padded_dimensions: db.padded_dimensions(),
         k: o.k,
+        excluded_rows: o.exclude_first,
+        shards: db.shard_count(),
         vector_bytes,
         norm_bytes: o.rows * 4,
         score_bytes: o.rows * 4,
         ingestion_and_compile_seconds: build_seconds,
-        timing: "Host wall time with explicit completion; three warmups; serialized changing queries; scan/control exclude query preparation; search includes normalization, query publication, selection and readback. GB/s uses unpadded FP16 vector bytes and decimal GB.",
-        validation: "GPU selection checked against a CPU top-k over the entire GPU score array for each configuration. Sampled scores include the allocation tail and 4 GiB boundary; all returned scores checked against quantized CPU reference. This is not an exhaustive CPU recomputation of every dot product.",
+        timing: "Host wall time with explicit completion; three warmups; serialized changing queries; scratch reserved before timing; scan/control exclude query preparation; search includes normalization, query publication, optional exclusion bitmap preparation and masking, selection and readback. GB/s uses unpadded FP16 vector bytes and decimal GB.",
+        validation: "GPU selection checked against a CPU top-k over the entire GPU score array after exclusions for each configuration. Sampled scores include the allocation tail and 4 GiB boundary; all returned scores checked against quantized CPU reference. This is not an exhaustive CPU recomputation of every dot product. Quantization overlap is measured without exclusions on a separate subset.",
         quantization_sample_rows: sample_n,
         quantization_sample_top_k_overlap: overlap,
         selected_config: best,

@@ -3,6 +3,13 @@ use crate::ScanConfig;
 use hrx::loom::Specialization;
 pub const SCAN: &str = include_str!("../kernels/scan_family.loom");
 pub const SELECT: &str = include_str!("../kernels/select_family.loom");
+pub const SORT: &str = include_str!("../kernels/sort_family.loom");
+pub const MASK: &str = include_str!("../kernels/mask.loom");
+pub fn named_spec(symbol: &str) -> Specialization {
+    let mut spec = Specialization::new(symbol);
+    spec.report = true;
+    spec
+}
 pub fn scan_spec(n: usize, d: usize, c: ScanConfig, control: bool) -> Specialization {
     let mut spec = Specialization::new("scan");
     for (key, value) in [

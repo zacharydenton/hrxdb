@@ -1,0 +1,47 @@
+// Mark excluded scores on the device. The next scan overwrites these scores.
+amdgpu.target<gfx1151> @target {subgroup_size = 32}
+kernel.def target(@target) export("mask_scores") @mask_scores(%count_arg: i32) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %extra = index.constant 255 : index
+  %raw = index.cast %count_arg : i32 to index
+  %count = index.assume %raw [range(%raw, 1, 1073741824)] : index
+  %rounded = index.add %count, %extra : index
+  %groups = index.div %rounded, %threads : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%count_arg: i32, %bitmap: buffer, %scores: buffer) {
+  %zero = index.constant 0 : offset
+  %c256 = index.constant 256 : index
+  %c32 = index.constant 32 : index
+  %c31 = index.constant 31 : index
+  %raw = index.cast %count_arg : i32 to index
+  %count = index.assume %raw [range(%raw, 1, 1073741824)] : index
+  %tid = kernel.workitem.id<x> : index
+  %group = kernel.workgroup.id<x> : index
+  %base = index.mul %group, %c256 : index
+  %row = index.add %base, %tid : index
+  %valid = index.cmp ult, %row, %count : index
+  %rounded = index.add %count, %c31 : index
+  %words = index.div %rounded, %c32 : index
+  %bv = buffer.view %bitmap[%zero] : buffer -> view<[%words]xi32>
+  %sv = buffer.view %scores[%zero] : buffer -> view<[%count]xf32>
+  scf.if %valid {
+    %at = index.assume %row [range(%row, 0, 1073741823), lt(%row, %count)] : index
+    %word0 = index.div %at, %c32 : index
+    %word = index.assume %word0 [range(%word0, 0, 33554431), lt(%word0, %words)] : index
+    %bit = index.rem %at, %c32 : index
+    %shift = index.cast %bit : index to i32
+    %bits = view.load %bv[%word] : view<[%words]xi32> -> i32
+    %shifted = scalar.shrui %bits, %shift : i32
+    %one = scalar.constant 1 : i32
+    %none = scalar.constant 0 : i32
+    %flag = scalar.andi %shifted, %one : i32
+    %excluded = scalar.cmpi ne, %flag, %none : i32
+    scf.if %excluded {
+      %badbits = scalar.constant -8388608 : i32
+      %neg = scalar.bitcast %badbits : i32 to f32
+      view.store %neg, %sv[%at] : f32, view<[%count]xf32>
+    }
+  }
+  kernel.return
+}

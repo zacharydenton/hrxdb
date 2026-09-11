@@ -41,6 +41,36 @@ query. A separate test placed unique matches around that boundary and at row
 9,999,999. The original-vs-quantized top-10 overlap was 100% on the generated
 8,192-row subset for this run; this is not a claim about embedding-model recall.
 
+## Large k and exclusions
+
+The updated implementation was measured on the same local gfx1151 on
+2026-09-11, using 10M × 384 generated rows, the default scan configuration,
+three warmups, and ten changing queries per run. Runs were sequential, without
+concurrent hrxdb hardware tests. These are host-completion measurements; system
+activity and GPU clocks were not controlled.
+
+| Query | Scan median | Full query median | Full query p95 |
+|---|---:|---:|---:|
+| Top-10 | 32.057 ms | 32.514 ms | 32.699 ms |
+| Top-1,024 | 32.149 ms | 36.742 ms | 36.944 ms |
+| Top-1,024, first 100,000 IDs excluded | 32.023 ms | 36.998 ms | 37.115 ms |
+
+Top-1,024 adds about 4.2 ms relative to top-10 in these runs. Exclusions add
+about 0.26 ms at k=1,024, including bitmap preparation and masking. Both paths
+perform selection on the GPU: top-1,024 reads back 8 KiB of score/ID pairs,
+versus 40 MB for a full score readback. Selection scratch was reserved before
+timing; at k=1,024 it occupies about 160 MB and is retained for reuse.
+
+The [benchmark records](large-k-and-exclusions.json) retain commands, timing
+samples, result counts, and compiler reports. Large per-query neighbor lists
+are omitted. Every run validated GPU selection against CPU top-k over all
+scores after exclusions, and checked returned scores against the quantized
+CPU reference. These timings describe generated data, not the photo library.
+
+The hardware suite also passes the reported 8,942,135 × 512 faces shape with
+two internal corpus allocations. It tests unique matches before, on, and after
+the 8 GiB boundary and at the final row, including k=1,024 and excluded IDs.
+
 ## Generated code
 
 The [resource inventory](codegen.json) records all sweep variants. The default
@@ -68,6 +98,10 @@ checked-in Loom sources and specialization values reproduce the kernels.
 
 `cargo test --release`, `cargo test --release -- --ignored --test-threads=1`,
 `cargo fmt --all -- --check`, and `cargo clippy --all-targets -- -D warnings`.
-Hardware coverage includes all scan configurations, padded dimensions,
-empty/small indexes, ties, negative scores, all k=1–32 values on exact synthetic
-scores, three-level selection, and the 7.68 GB allocation boundary test.
+The current suite has ten opt-in GPU tests. Coverage includes all scan
+configurations, padded dimensions, empty/small indexes, ties, negative scores,
+every k=1–1,024 on exact synthetic scores, odd merge tails, exclusions and
+growing walks, FP16 ingestion, cross-thread ownership, sharded/single-index
+equivalence, the 7.68 GB allocation test, and the 8,942,135 × 512 faces shape.
+Five CPU tests, Rust 1.88 compatibility, three doctests, warning-free Clippy
+and rustdoc, and formatting checks passed as well.
