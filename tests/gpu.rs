@@ -157,7 +157,7 @@ fn fp16_ingestion_and_reusable_scores() -> hrxdb::Result<()> {
     let mut db = FlatIndex::build_fp16_with_config(
         &device,
         3,
-        bytes.chunks_exact(6),
+        bytes.as_chunks::<6>().0,
         ScanConfig::default(),
     )?;
     assert_eq!(db.len(), rows.len());

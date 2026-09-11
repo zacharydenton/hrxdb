@@ -219,8 +219,8 @@ fn encode_fp16(row: &[u8], dimensions: usize, padded: usize, bytes: &mut Vec<u8>
         ));
     }
     let mut square_sum = 0.0f64;
-    for component in row.chunks_exact(2) {
-        let value = f16::from_le_bytes(component.try_into().unwrap()).to_f64();
+    for component in row.as_chunks::<2>().0 {
+        let value = f16::from_le_bytes(*component).to_f64();
         if !value.is_finite() {
             return Err(invalid("vectors must be finite"));
         }
@@ -305,7 +305,7 @@ impl FlatIndex {
     /// let device = Device::open(0)?;
     /// // Two 2D rows: [1, 0] and [0, 1], stored as little-endian FP16.
     /// let bytes = [0x00, 0x3c, 0, 0, 0, 0, 0x00, 0x3c];
-    /// let mut db = FlatIndex::build_fp16(&device, 2, bytes.chunks_exact(4))?;
+    /// let mut db = FlatIndex::build_fp16(&device, 2, bytes.as_chunks::<4>().0)?;
     /// let mut scores = vec![0.0; db.len()];
     /// db.scores_into(&[1.0, 0.0], &mut scores)?;
     /// assert_eq!(scores, [1.0, 0.0]);
@@ -593,7 +593,7 @@ impl FlatIndex {
         self.stream.synchronize()?;
         // SAFETY: the preceding synchronization completed all reads of the query.
         let target = unsafe { self.query.bytes_mut() };
-        for (&x, bytes) in query.iter().zip(target.chunks_exact_mut(4)) {
+        for (&x, bytes) in query.iter().zip(target.as_chunks_mut::<4>().0) {
             bytes.copy_from_slice(&((x as f64 / length) as f32).to_le_bytes());
         }
         Ok(k.min(self.count))
@@ -1068,8 +1068,10 @@ mod tests {
         let mut bytes = Vec::new();
         let inverse = encode(&[3.0, 4.0], 2, 128, &mut bytes).unwrap();
         let sum: f64 = bytes
-            .chunks_exact(2)
-            .map(|b| f16::from_le_bytes(b.try_into().unwrap()).to_f64().powi(2))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| f16::from_le_bytes(*b).to_f64().powi(2))
             .sum();
         assert!((sum.sqrt() * inverse as f64 - 1.0).abs() < 1e-7);
         assert!(bytes[4..].iter().all(|&b| b == 0));
@@ -1165,10 +1167,10 @@ mod tests {
         let mut fp16 = FlatIndex::build_encoded(
             &device,
             3,
-            encoded.chunks_exact(6),
+            encoded.as_chunks::<6>().0,
             single.config(),
             128 * 1025,
-            |row, d, p, bytes| encode_fp16(row, d, p, bytes),
+            |row, d, p, bytes| encode_fp16(*row, d, p, bytes),
         )?;
         assert_eq!(fp16.shard_count(), 4);
         assert_eq!(
