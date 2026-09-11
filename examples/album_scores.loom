@@ -1,27 +1,30 @@
 // Application-owned reduction: best cosine per (query row, album).
 // One workgroup owns each output cell, so consecutive shard dispatches can
 // merge into that cell without atomics. This favors clarity over scan throughput.
+// Full 256-row tiles read vector/norm/ordinal slack, then mask by logical row.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
 config.decl @album.rows : %v: index where [range(%v, 1, 1073741824)]
+config.decl @album.capacity : %v: index where [range(%v, 256, 1073741824), mul(%v, 256)]
 config.decl @album.dimensions : %v: index where [range(%v, 128, 16384), mul(%v, 128)]
 config.decl @album.queries : %v: index where [range(%v, 1, 64)]
 config.decl @album.count : %v: index where [range(%v, 1, 1024)]
 
 kernel.def target(@target) export("album_scores") @album_scores() {
   %one = index.constant 1 : index
-  %threads = index.constant 128 : index
+  %threads = index.constant 256 : index
   %albums = config.get @album.count : index
   %queries = config.get @album.queries : index
   kernel.launch.config workgroups(%albums, %queries, %one) workgroup_size(%threads, %one, %one) : index
 } launch(%data: buffer, %norms: buffer, %ordinals: buffer, %queries: buffer, %output: buffer) {
   %n = config.get @album.rows : index
+  %capacity = config.get @album.capacity : index
   %d = config.get @album.dimensions : index
   %q = config.get @album.queries : index
   %a = config.get @album.count : index
   %zero = index.constant 0 : offset
   %i0 = index.constant 0 : index
   %i2 = index.constant 2 : index
-  %threads = index.constant 128 : index
+  %threads = index.constant 256 : index
   %f0 = scalar.constant 0.0 : f32
   %badbits = scalar.constant -8388608 : i32
   %neg = scalar.bitcast %badbits : i32 to f32
@@ -31,40 +34,32 @@ kernel.def target(@target) export("album_scores") @album_scores() {
   %query0 = kernel.workgroup.id<y> : index
   %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %q)] : index
   %album_id = index.cast %album : index to i32
-  %xv = buffer.view %data[%zero] : buffer -> view<[%n]x[%d]xf16>
-  %nv = buffer.view %norms[%zero] : buffer -> view<[%n]xf32>
-  %av = buffer.view %ordinals[%zero] : buffer -> view<[%n]xi32>
+  %xv = buffer.view %data[%zero] : buffer -> view<[%capacity]x[%d]xf16>
+  %nv = buffer.view %norms[%zero] : buffer -> view<[%capacity]xf32>
+  %av = buffer.view %ordinals[%zero] : buffer -> view<[%capacity]xi32>
   %qv = buffer.view %queries[%zero] : buffer -> view<[%q]x[%d]xf32>
   %ov = buffer.view %output[%zero] : buffer -> view<[%q]x[%a]xf32>
-  %local = scf.for %base = [%i0 to %n step %threads](%best = %neg : f32) -> (f32) {
+  %local = scf.for %base = [%i0 to %capacity step %threads](%best = %neg : f32) -> (f32) {
     %row = index.add %base, %tid : index
-    %valid = index.cmp ult, %row, %n : index
-    %next = scf.if %valid -> (f32) {
-      %r = index.assume %row [range(%row, 0, 1073741823), lt(%row, %n)] : index
-      %ordinal = view.load %av[%r] : view<[%n]xi32> -> i32
-      %matches = scalar.cmpi eq, %ordinal, %album_id : i32
-      %candidate = scf.if %matches -> (f32) {
-        %dot = scf.for %col = [%i0 to %d step %i2](%sum = %f0 : f32) -> (f32) {
-          %last = index.sub %d, %i2 : index
-          %c = index.assume %col [le(%col, %last), mul(%col, 2)] : index
-          %h = vector.load %xv[%r, %c] : view<[%n]x[%d]xf16> -> vector<2xf16>
-          %x = vector.extf %h : vector<2xf16> to vector<2xf32>
-          %y = vector.load %qv[%query, %c] : view<[%q]x[%d]xf32> -> vector<2xf32>
-          %acc = vector.dotf %x, %y, %sum : vector<2xf32>, vector<2xf32>, f32
-          scf.yield %acc : f32
-        }
-        %inverse = view.load %nv[%r] : view<[%n]xf32> -> f32
-        %score = scalar.mulf %dot, %inverse : f32
-        %better = scalar.cmpf ogt, %score, %best : f32
-        %updated = scf.select %better, %score, %best : f32
-        scf.yield %updated : f32
-      } else {
-        scf.yield %best : f32
-      }
-      scf.yield %candidate : f32
-    } else {
-      scf.yield %best : f32
+    %r = index.assume %row [range(%row, 0, 1073741823), lt(%row, %capacity)] : index
+    %dot = scf.for %col = [%i0 to %d step %i2](%sum = %f0 : f32) -> (f32) {
+      %last = index.sub %d, %i2 : index
+      %c = index.assume %col [le(%col, %last), mul(%col, 2)] : index
+      %h = vector.load %xv[%r, %c] : view<[%capacity]x[%d]xf16> -> vector<2xf16>
+      %x = vector.extf %h : vector<2xf16> to vector<2xf32>
+      %y = vector.load %qv[%query, %c] : view<[%q]x[%d]xf32> -> vector<2xf32>
+      %acc = vector.dotf %x, %y, %sum : vector<2xf32>, vector<2xf32>, f32
+      scf.yield %acc : f32
     }
+    %inverse = view.load %nv[%r] : view<[%capacity]xf32> -> f32
+    %score = scalar.mulf %dot, %inverse : f32
+    %ordinal = view.load %av[%r] : view<[%capacity]xi32> -> i32
+    %matches = scalar.cmpi eq, %ordinal, %album_id : i32
+    %valid = index.cmp ult, %row, %n : index
+    %eligible = scalar.andi %valid, %matches : i1
+    %candidate = scf.select %eligible, %score, %neg : f32
+    %better = scalar.cmpf ogt, %candidate, %best : f32
+    %next = scf.select %better, %candidate, %best : f32
     scf.yield %next : f32
   }
   %best = kernel.workgroup.reduce<maxnumf> %local : f32

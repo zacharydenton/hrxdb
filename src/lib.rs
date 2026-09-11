@@ -49,6 +49,7 @@ pub use hrx::{Device, Error, Result};
 
 const MAX_ROWS: usize = 1 << 30;
 const MAX_ELEMENTS: usize = 1 << 32;
+const SHARD_ROW_ALIGNMENT: usize = 256;
 const MAX_K: usize = 1024;
 const MAX_DIMENSIONS: usize = 16_384;
 const CHUNK_BYTES: usize = 4 * 1024 * 1024;
@@ -143,7 +144,6 @@ pub struct FlatIndex {
     stream: Stream,
     compiler: hrx::loom::Compiler,
     shards: Vec<Shard>,
-    norms: Buffer,
     query: HostBuffer,
     readback: HostBuffer,
     exclusions: HostBuffer,
@@ -165,8 +165,10 @@ pub struct FlatIndex {
 
 struct Shard {
     data: Buffer,
+    norms: Buffer,
     start: usize,
     count: usize,
+    capacity: usize,
     scan: Kernel,
     control: Kernel,
 }
@@ -192,7 +194,15 @@ fn layout(dimensions: usize, count: usize) -> Result<(usize, usize)> {
 }
 
 fn shard_rows(padded: usize, element_limit: usize) -> usize {
-    (element_limit.min(MAX_ELEMENTS) / padded).max(1)
+    // Reserve room for whole 256-row tiles without exceeding Loom's 32-bit
+    // element limit. Smaller logical limits allow tests to force unaligned
+    // interior shards; their padded allocations still obey the real limit.
+    let maximum = (MAX_ELEMENTS / padded) / SHARD_ROW_ALIGNMENT * SHARD_ROW_ALIGNMENT;
+    (element_limit / padded).max(1).min(maximum)
+}
+
+fn shard_capacity(rows: usize) -> usize {
+    rows.div_ceil(SHARD_ROW_ALIGNMENT) * SHARD_ROW_ALIGNMENT
 }
 
 fn norm(row: &[f32], dimensions: usize) -> Result<f64> {
@@ -282,7 +292,9 @@ impl FlatIndex {
     /// the iterator must accurately report at most 2^30 rows. Larger corpora are
     /// split internally into allocations of at most 2^32 FP16 elements, keeping
     /// scan addresses within the compiler's element-index limit. IDs and query
-    /// results span the entire corpus.
+    /// results span the entire corpus. Vector and inverse-norm allocations
+    /// reserve whole 256-row tiles; extra rows are readable slack, not indexed
+    /// data. See [`CorpusShardView::capacity_rows`].
     /// The default scan schedule is tuned for 10M × 384 vectors. Construction
     /// allocates device storage, uploads the corpus, and compiles the kernels
     /// synchronously.
@@ -413,7 +425,6 @@ impl FlatIndex {
                 ..Default::default()
             },
         )?;
-        let norms = stream.allocate(count * 4)?;
         let chunk_rows = (CHUNK_BYTES / (padded * 2)).max(1);
         let mut chunk = Vec::with_capacity(chunk_rows * padded * 2);
         let mut norm_chunk = Vec::with_capacity(chunk_rows * 4);
@@ -423,7 +434,25 @@ impl FlatIndex {
         // Keep one zero-length shard for the empty index's compilation reports.
         for start in (0..count.max(1)).step_by(per_shard) {
             let shard_count = (count - start).min(per_shard);
-            let data = stream.allocate(shard_count * padded * 2)?;
+            let capacity = shard_capacity(shard_count);
+            let data = stream.allocate(capacity * padded * 2)?;
+            let norms = stream.allocate(capacity * 4)?;
+            if capacity > shard_count {
+                // Initialize only the slack; these are not indexed zero rows.
+                // Contents are deliberately not part of the public contract.
+                // The ingestion synchronization below also completes the fills.
+                stream.fill(
+                    data.try_slice(
+                        shard_count * padded * 2,
+                        (capacity - shard_count) * padded * 2,
+                    )?,
+                    0,
+                )?;
+                stream.fill(
+                    norms.try_slice(shard_count * 4, (capacity - shard_count) * 4)?,
+                    0,
+                )?;
+            }
             for local in (0..shard_count).step_by(chunk_rows) {
                 chunk.clear();
                 norm_chunk.clear();
@@ -435,10 +464,7 @@ impl FlatIndex {
                     norm_chunk.extend_from_slice(&inverse.to_le_bytes());
                 }
                 stream.upload(data.try_slice(local * padded * 2, chunk.len())?, &chunk)?;
-                stream.upload(
-                    norms.try_slice((start + local) * 4, norm_chunk.len())?,
-                    &norm_chunk,
-                )?;
+                stream.upload(norms.try_slice(local * 4, norm_chunk.len())?, &norm_chunk)?;
                 // Bound HRX's owned staging as well as the conversion buffers.
                 stream.synchronize()?;
             }
@@ -456,8 +482,10 @@ impl FlatIndex {
             )?;
             shards.push(Shard {
                 data,
+                norms,
                 start,
                 count: shard_count,
+                capacity,
                 scan,
                 control,
             });
@@ -506,7 +534,6 @@ impl FlatIndex {
             stream,
             compiler,
             shards,
-            norms,
             query,
             readback,
             exclusions,
@@ -622,8 +649,8 @@ impl FlatIndex {
                 .count
                 .div_ceil(self.config.threads / 32 * self.config.rows_per_wave);
             // SAFETY: each data shard fits the 32-bit element address limit.
-            // Norm and score slices use its global row range; the specialized
-            // kernel guards tail rows. All accesses are ordered on one stream.
+            // Norms are shard-local; scores use the global row range. The
+            // specialized kernel guards tail rows. One stream orders accesses.
             unsafe {
                 self.stream.dispatch(
                     if control { &shard.control } else { &shard.scan },
@@ -633,7 +660,7 @@ impl FlatIndex {
                     &[
                         shard.data.binding(),
                         self.query.buffer().binding(),
-                        self.norms.try_slice(shard.start * 4, shard.count * 4)?,
+                        shard.norms.binding(),
                         self.scores.try_slice(shard.start * 4, shard.count * 4)?,
                     ],
                 )?;
@@ -1011,11 +1038,12 @@ mod tests {
     }
     #[test]
     fn layout_and_shards_cover_large_corpora() {
-        for dimensions in [1, 128, 129, 384, 512, MAX_DIMENSIONS] {
+        for dimensions in (128..=MAX_DIMENSIONS).step_by(128) {
             let padded = dimensions.div_ceil(128) * 128;
             let maximum = shard_rows(padded, MAX_ELEMENTS);
             assert!(maximum * padded <= MAX_ELEMENTS);
-            assert!((maximum + 1) * padded > MAX_ELEMENTS);
+            assert!(maximum.is_multiple_of(SHARD_ROW_ALIGNMENT));
+            assert!((maximum + SHARD_ROW_ALIGNMENT) * padded > MAX_ELEMENTS);
             for count in [0, maximum - 1, maximum, maximum + 1, MAX_ROWS] {
                 assert_eq!(
                     layout(dimensions, count).unwrap(),
@@ -1026,13 +1054,19 @@ mod tests {
                     let size = (count - start).min(maximum);
                     assert_eq!(start, covered);
                     assert!(size * padded <= MAX_ELEMENTS);
+                    let capacity = shard_capacity(size);
+                    assert!(capacity >= size);
+                    assert!(capacity - size < SHARD_ROW_ALIGNMENT);
+                    assert!(capacity.is_multiple_of(SHARD_ROW_ALIGNMENT));
+                    assert!(capacity * padded <= MAX_ELEMENTS);
                     covered += size;
                 }
                 assert_eq!(covered, count);
             }
         }
         assert_eq!(shard_rows(512, MAX_ELEMENTS), 8_388_608);
-        assert_eq!(shard_rows(384, MAX_ELEMENTS), 11_184_810);
+        assert_eq!(shard_rows(384, MAX_ELEMENTS), 11_184_640);
+        assert_eq!(shard_capacity(0), 0);
         assert_eq!(layout(512, 8_942_135).unwrap(), (512, 9_156_746_240));
     }
 

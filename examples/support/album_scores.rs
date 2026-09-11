@@ -4,9 +4,10 @@ use hrxdb::{CorpusView, Device, Error, Result};
 
 /// Best cosine per (query row, album), with negative infinity for absent albums.
 ///
-/// This example accepts up to 64 queries and 1,024 albums. It scans album IDs
-/// once per output cell; it illustrates interoperability, not a tuned album
-/// search algorithm. Queries are row-major FP32. Ordinals follow insertion IDs.
+/// This example accepts up to 64 queries and 1,024 albums. It reads full 256-row
+/// tiles once per output cell and masks slack before reduction. It illustrates
+/// interoperability, not a tuned album search algorithm. Queries are row-major
+/// FP32. Ordinals follow insertion IDs.
 pub fn best_by_album(
     device: &Device,
     corpus: CorpusView<'_>,
@@ -58,10 +59,19 @@ pub fn best_by_album(
             ..Default::default()
         },
     )?;
-    let album_buffer = stream.allocate(ordinals.len() * 4)?;
+    // The global side array must also cover the last tile of every binding.
+    // Interior slack may overlap later logical rows; the kernel masks by its
+    // shard-local row count, independently of the ordinal's value.
+    let ordinal_capacity = corpus
+        .shards()
+        .map(|shard| shard.row_range().start + shard.capacity_rows())
+        .max()
+        .unwrap();
+    let album_buffer = stream.allocate(ordinal_capacity * 4)?;
     let query_buffer = stream.allocate(query_bytes.len())?;
     let output = stream.allocate(count * album_count * 4)?;
-    let album_bytes: Vec<_> = ordinals.iter().flat_map(|id| id.to_le_bytes()).collect();
+    let mut album_bytes: Vec<_> = ordinals.iter().flat_map(|id| id.to_le_bytes()).collect();
+    album_bytes.resize(ordinal_capacity * 4, 0xff); // Sentinel for trailing slack.
     let mut output_bytes: Vec<_> = absent
         .iter()
         .flatten()
@@ -76,6 +86,7 @@ pub fn best_by_album(
         let mut spec = Specialization::new("album_scores");
         for (key, value) in [
             ("album.rows", rows.len()),
+            ("album.capacity", shard.capacity_rows()),
             ("album.dimensions", padded),
             ("album.queries", count),
             ("album.count", album_count),
@@ -87,19 +98,19 @@ pub fn best_by_album(
             .compile(&spec)?;
         // SAFETY: trusted example source, specialized for this device.
         let kernel = unsafe { stream.load_artifact(&artifact)? };
-        // SAFETY: all bindings have the specialized row/query/album extents.
+        // SAFETY: all bindings have the specialized capacity/query/album extents.
         // The kernel only reads the borrowed vectors/norms. One workgroup owns
         // each output cell; shard dispatches on this stream execute in order.
         unsafe {
             stream.dispatch(
                 &kernel,
                 [album_count as u32, count as u32, 1],
-                [128, 1, 1],
+                [256, 1, 1],
                 &hrx::Constants::new(),
                 &[
                     shard.vectors(),
                     shard.inverse_norms(),
-                    album_buffer.try_slice(rows.start * 4, rows.len() * 4)?,
+                    album_buffer.try_slice(rows.start * 4, shard.capacity_rows() * 4)?,
                     query_buffer.binding(),
                     output.binding(),
                 ],

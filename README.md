@@ -80,7 +80,8 @@ errors. Logical dimensions are 1–16,384 and padded to a multiple of 128; the
 primary 384-dimensional case needs no padding. Row count is limited to 2^30,
 and each internal allocation contains at most **2^32 FP16 elements** (8 GiB
 of vector storage), respecting the compiler's 32-bit element-index limit.
-This is 8,388,608 rows per shard at 512 dimensions or 11,184,810 at 384.
+Shard capacity is rounded to 256 rows, including readable tail slack. This
+permits 8,388,608 logical rows per shard at 512 dimensions or 11,184,640 at 384.
 Both constructors automatically split larger corpora. For example, 8,942,135 ×
 512 faces use two shards while retaining one index and global insertion IDs.
 Scans write each shard's scores into its range of a shared score array; GPU
@@ -200,22 +201,37 @@ the application's dependencies to use the matching runtime and compiler API.
 let corpus = db.corpus();
 for shard in corpus.shards() {
     let rows = shard.row_range(); // Global insertion IDs; exclusive end.
-    let vectors = shard.vectors(); // Borrowed hrx::View, local rows 0..rows.len().
+    let capacity = shard.capacity_rows(); // Readable rows, including tail slack.
+    let vectors = shard.vectors(); // Borrowed hrx::View, local rows 0..capacity.
     let inverse_norms = shard.inverse_norms(); // Same local row numbering.
-    let albums = album_buffer.try_slice(rows.start * 4, rows.len() * 4)?;
+    // This caller-owned side array must also have enough readable tail space.
+    let albums = album_buffer.try_slice(rows.start * 4, capacity * 4)?;
     // Bind vectors, inverse_norms, albums, and application-owned output.
+    // Only local rows < rows.len() may contribute to the result.
 }
 ```
 
 `CorpusView` exposes `len`, `is_empty`, `dimensions`, `padded_dimensions`, and
-`shards`. `CorpusShardView` exposes `row_range`, `vectors`, and `inverse_norms`.
+`shards`. `CorpusShardView` exposes `row_range`, `capacity_rows`, `vectors`, and
+`inverse_norms`.
 Shard ranges cover all insertion IDs in order without gaps; an empty corpus
-has no shards. Each vector binding contains row-major little-endian FP16 with
-zero padding and a byte stride of `padded_dimensions() * 2`. Each norm binding
-contains one little-endian FP32 inverse norm per local row. Multiply the dot
+has no shards. Both bindings cover `capacity_rows()`, the logical shard length
+rounded up to a multiple of 256. Each logical vector row contains little-endian
+FP16 with zero dimension padding and a byte stride of `padded_dimensions() * 2`.
+Each logical norm entry is one little-endian FP32 inverse norm. Multiply the dot
 with a normalized query by this inverse norm for cosine similarity. These are
 the stored values: `build` normalizes before FP16 conversion, whereas
 `build_fp16` preserves its input values.
+
+Rows between `row_range().len()` and `capacity_rows()` are readable slack with
+**unspecified contents**, not indexed vectors. They have no insertion IDs.
+A fixed 256-row kernel can read its final tile in full, but must mask slack by
+local row index before reduction or selection. Do not rely on zero contents:
+a zero score could beat every real negative cosine. Side-array loads must also
+be in bounds; padding the ordinal array with a sentinel is one option. For other
+tile sizes, check `rows.len().div_ceil(tile_rows) * tile_rows <= capacity_rows()`.
+Each shard adds at most 255 rows of vector and norm storage; that capacity still
+respects the 2^32-element limit. Built-in searches process only logical rows.
 
 Use a caller-owned stream from the same device used to build the index. Corpus
 uploads have completed when construction returns. Callers own compilation,
@@ -228,7 +244,9 @@ The runnable [album example](examples/album_scores.rs) binds an
 [application-owned kernel](examples/album_scores.loom) and an album ordinal per
 corpus row. It computes the best cosine for each `(query row, album)` directly
 on the device, merging maxima across shards and reading back only that result
-matrix. Missing albums produce negative infinity. The example favors clarity
+matrix. It reads full 256-row tiles and masks slack, including when an interior
+shard's side-array slack overlaps the next shard's logical rows. Missing albums
+produce negative infinity. The example favors clarity
 over throughput; album grouping and reduction remain application code.
 
 ```sh
@@ -368,6 +386,9 @@ inverse norm for both ingestion paths. They run the album example on a separate
 stream across unaligned shard boundaries, compare against built-in cosine
 scores, and verify subsequent searches still return the same results. Empty
 corpora expose no shards; a compile-fail doctest checks binding lifetimes.
+Tiled tests cover 201- and 55-row tails, exact tile boundaries, and positive
+slack values that would otherwise outrank all-negative corpus scores. CPU tests
+check rounded shard capacities against the address limit at every padded dimension.
 
 
 The repository's [release guide](RELEASE.md) covers packaging and publication.

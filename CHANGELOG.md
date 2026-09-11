@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `CorpusShardView::capacity_rows` and round shard storage to 256 rows for
+  fixed-tile custom kernels. Both vector and inverse-norm bindings now include
+  readable slack with unspecified contents; logical row ranges and search
+  results exclude it. Keep padded capacity within the 2^32-element limit.
 - Add `FlatIndex::corpus`, `CorpusView`, and `CorpusShardView` for borrowed,
   zero-copy access to resident FP16 vectors, shard-local FP32 inverse norms,
   and global row ranges. Document layout, read-only access, and caller-owned

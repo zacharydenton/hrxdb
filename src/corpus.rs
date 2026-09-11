@@ -11,6 +11,8 @@ use std::ops::Range;
 /// inverse norm computed from its stored FP16 values. [`FlatIndex::build`]
 /// normalizes before quantization; [`FlatIndex::build_fp16`] preserves the
 /// supplied FP16 values. Neither accessor reconstructs the original FP32 input.
+/// Shard bindings include readable slack after their logical rows; see
+/// [`CorpusShardView::capacity_rows`]. Slack is not indexed corpus data.
 ///
 /// # Execution and access contract
 ///
@@ -53,6 +55,7 @@ pub struct CorpusShardView<'a> {
     inverse_norms: View<'a>,
     start: usize,
     count: usize,
+    capacity: usize,
 }
 
 impl FlatIndex {
@@ -69,8 +72,9 @@ impl FlatIndex {
     /// let corpus = index.corpus();
     /// for shard in corpus.shards() {
     ///     let rows = shard.row_range();
-    ///     assert_eq!(shard.vectors().len(), rows.len() * corpus.padded_dimensions() * 2);
-    ///     assert_eq!(shard.inverse_norms().len(), rows.len() * 4);
+    ///     assert!(shard.capacity_rows() >= rows.len());
+    ///     assert_eq!(shard.vectors().len(), shard.capacity_rows() * corpus.padded_dimensions() * 2);
+    ///     assert_eq!(shard.inverse_norms().len(), shard.capacity_rows() * 4);
     ///     // Bind these views to a custom kernel on a stream from `device`.
     ///     // Side arrays use the global insertion IDs in `rows`.
     /// }
@@ -117,12 +121,10 @@ impl<'a> CorpusView<'a> {
             .iter()
             .map(move |shard| CorpusShardView {
                 vectors: shard.data.binding(),
-                inverse_norms: index
-                    .norms
-                    .try_slice(shard.start * 4, shard.count * 4)
-                    .expect("corpus shard range lies within the inverse-norm allocation"),
+                inverse_norms: shard.norms.binding(),
                 start: shard.start,
                 count: shard.count,
+                capacity: shard.capacity,
             })
     }
 }
@@ -133,10 +135,30 @@ impl<'a> CorpusShardView<'a> {
         self.start..self.start + self.count
     }
 
+    /// Number of rows that may be read from both corpus bindings.
+    ///
+    /// At least [`row_range`](Self::row_range)`().len()`, rounded up to a
+    /// multiple of 256. Vector and inverse-norm bindings include this entire
+    /// capacity, and the vector capacity still fits within 2^32 FP16 elements.
+    ///
+    /// Rows at or beyond the logical row count are **not corpus data**. Their
+    /// contents are unspecified: mask them by local row index before reduction
+    /// or selection, even if they happen to contain zeros. They have no global
+    /// insertion IDs. Caller-owned side arrays must also cover every row a
+    /// kernel reads, or guard those loads separately.
+    ///
+    /// Tiles up to 256 rows whose size divides 256 can read the rounded-up final
+    /// tile in full. For other tile sizes, check that the tile's exclusive end
+    /// is no greater than this capacity; larger tiles are not guaranteed to fit.
+    pub fn capacity_rows(&self) -> usize {
+        self.capacity
+    }
+
     /// Read-only row-major FP16 vector binding, starting at local row zero.
     ///
-    /// Its byte length is `row_range().len() * corpus.padded_dimensions() * 2`.
-    /// Values are little-endian IEEE binary16; padding components are zero.
+    /// Its byte length is `capacity_rows() * corpus.padded_dimensions() * 2`.
+    /// Logical rows contain little-endian IEEE binary16 with zero dimension
+    /// padding. Extra rows have unspecified contents; see [`Self::capacity_rows`].
     /// HRX does not enforce read-only access; see [`CorpusView`]'s contract.
     pub fn vectors(&self) -> View<'a> {
         self.vectors
@@ -144,8 +166,10 @@ impl<'a> CorpusShardView<'a> {
 
     /// Read-only FP32 inverse-norm binding, starting at local row zero.
     ///
-    /// Contains exactly `row_range().len()` little-endian FP32 values. For local
-    /// row `r`, multiply its FP32 dot product with a unit query by element `r`
+    /// Contains `capacity_rows()` little-endian FP32 values; only the first
+    /// `row_range().len()` describe corpus rows. Extra values are unspecified.
+    /// For logical local row `r`, multiply its FP32 dot product with a unit
+    /// query by element `r`
     /// to obtain cosine similarity over the stored vector. For an unnormalized
     /// query, also divide by the query's norm. Accumulation order can affect
     /// rounding relative to built-in search; scores are not clamped.
@@ -229,8 +253,9 @@ mod tests {
                 reader.read_blocking(binding.slice(0, 2)?, &mut [0; 2])?;
                 for shard in corpus.shards() {
                     let range = shard.row_range();
-                    assert_eq!(shard.vectors().len(), range.len() * padded * 2);
-                    assert_eq!(shard.inverse_norms().len(), range.len() * 4);
+                    assert_eq!(shard.capacity_rows(), range.len().div_ceil(256) * 256);
+                    assert_eq!(shard.vectors().len(), shard.capacity_rows() * padded * 2);
+                    assert_eq!(shard.inverse_norms().len(), shard.capacity_rows() * 4);
                     let mut vectors = vec![0; shard.vectors().len()];
                     let mut norms = vec![0; shard.inverse_norms().len()];
                     reader.read_blocking(shard.vectors(), &mut vectors)?;
@@ -278,6 +303,82 @@ mod tests {
                     }
                 }
                 assert_eq!(index.search(&queries[..d], 5)?, before);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151"]
+    fn full_tiles_mask_slack_and_keep_the_last_real_row() -> Result<()> {
+        let device = Device::open(0)?;
+        // Include both reported tail sizes, exact tiles, and a one-row tail.
+        for n in [1, 255, 256, 257, 256 + 201, 2 * 257 + 55] {
+            let mut rows = vec![[-1.0, 0.0, 0.0]; n];
+            rows[n - 1] = [-0.6, -0.8, 0.0]; // Unique best, still negative.
+            let mut index = FlatIndex::build_encoded(
+                &device,
+                3,
+                &rows,
+                ScanConfig::default(),
+                257 * 128,
+                |r, d, p, bytes| encode(r.as_ref(), d, p, bytes),
+            )?;
+            assert_eq!(index.len(), n);
+            // Test-only writes to slack make an unmasked row beat every real
+            // score. The public API promises no particular slack contents.
+            let mut writer = device.stream()?;
+            for shard in &index.shards {
+                let extra = shard.capacity - shard.count;
+                if extra == 0 {
+                    continue;
+                }
+                let mut positive = vec![0; extra * 128 * 2];
+                for row in positive.as_chunks_mut::<256>().0 {
+                    row[..2].copy_from_slice(&f16::ONE.to_le_bytes());
+                }
+                let inverses: Vec<_> = (0..extra).flat_map(|_| 1.0f32.to_le_bytes()).collect();
+                writer.upload(
+                    shard
+                        .data
+                        .try_slice(shard.count * 128 * 2, positive.len())?,
+                    &positive,
+                )?;
+                writer.upload(
+                    shard.norms.try_slice(shard.count * 4, inverses.len())?,
+                    &inverses,
+                )?;
+            }
+            writer.synchronize()?;
+            let query = [1.0, 0.0, 0.0];
+            let scores = index.scores(&query)?;
+            assert_eq!(scores.len(), n);
+            let expected = scores[n - 1];
+            assert!(expected < 0.0);
+            let grouped =
+                album_example::best_by_album(&device, index.corpus(), &vec![0; n], 2, &query)?;
+            assert!(
+                (grouped[0][0] - expected).abs() < 3e-6,
+                "n={n}: {grouped:?}"
+            );
+            assert_eq!(grouped[0][1], f32::NEG_INFINITY);
+            let matches = index.search(&query, 1024)?;
+            assert_eq!(matches.len(), n);
+            assert_eq!(matches[0].id as usize, n - 1);
+            assert!(
+                matches
+                    .iter()
+                    .all(|m| (m.id as usize) < n && m.similarity < 0.0)
+            );
+            let batch = index.search_batch(&[1.0, 0.0, 0.0, 1.0, 0.0, 0.0], 1024)?;
+            for result in batch {
+                assert_eq!(result.len(), n);
+                assert_eq!(result[0].id as usize, n - 1);
+                assert!(
+                    result
+                        .iter()
+                        .all(|m| (m.id as usize) < n && m.similarity < 0.0)
+                );
             }
         }
         Ok(())

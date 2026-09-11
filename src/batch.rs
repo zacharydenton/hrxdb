@@ -296,8 +296,8 @@ impl FlatIndex {
                 constants.push(self.count as u32)?;
                 // SAFETY: the tile belongs to this shard, has at most TILE_ROWS
                 // rows, and its dimensions match the compiled kernel. The query
-                // and score buffers reserve width rows. Norms and the global
-                // bitmap use validated insertion positions, including shard tails.
+                // and score buffers reserve width rows. Norms use local row
+                // offsets; the exclusion bitmap uses global insertion IDs.
                 unsafe {
                     self.stream.dispatch(
                         &plan.scan,
@@ -309,7 +309,7 @@ impl FlatIndex {
                                 .data
                                 .try_slice(local * self.padded * 2, rows * self.padded * 2)?,
                             scratch.query.buffer().binding(),
-                            self.norms.try_slice(start * 4, rows * 4)?,
+                            shard.norms.try_slice(local * 4, rows * 4)?,
                             self.exclusions.buffer().binding(),
                             scratch.scores.binding(),
                         ],
