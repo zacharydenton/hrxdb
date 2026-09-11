@@ -1,6 +1,6 @@
 //! Example application code, deliberately separate from hrxdb's search API.
 use hrx::loom::{Compiler, CompilerOptions, Specialization};
-use hrxdb::{CorpusView, Device, Error, Result};
+use hrxdb::{CorpusView, Error, Result};
 
 /// Best cosine per (query row, album), with negative infinity for absent albums.
 ///
@@ -9,7 +9,6 @@ use hrxdb::{CorpusView, Device, Error, Result};
 /// interoperability, not a tuned album search algorithm. Queries are row-major
 /// FP32. Ordinals follow insertion IDs.
 pub fn best_by_album(
-    device: &Device,
     corpus: CorpusView<'_>,
     ordinals: &[u32],
     album_count: usize,
@@ -51,11 +50,11 @@ pub fn best_by_album(
 
     // The stream, compiler, side arrays, query storage, and output belong to
     // the application. The corpus stays in its original allocations.
-    let mut stream = device.stream()?;
+    let mut stream = corpus.stream()?;
     let compiler = Compiler::with_options(
         None,
         CompilerOptions {
-            target: device.target().clone(),
+            target: stream.target().clone(),
             ..Default::default()
         },
     )?;

@@ -199,6 +199,11 @@ the application's dependencies to use the matching runtime and compiler API.
 
 ```rust
 let corpus = db.corpus();
+let stream = corpus.stream()?; // A new stream on the index's device.
+let compiler_options = hrx::loom::CompilerOptions {
+    target: stream.target().clone(),
+    ..Default::default()
+};
 for shard in corpus.shards() {
     let rows = shard.row_range(); // Global insertion IDs; exclusive end.
     let capacity = shard.capacity_rows(); // Readable rows, including tail slack.
@@ -211,8 +216,8 @@ for shard in corpus.shards() {
 }
 ```
 
-`CorpusView` exposes `len`, `is_empty`, `dimensions`, `padded_dimensions`, and
-`shards`. `CorpusShardView` exposes `row_range`, `capacity_rows`, `vectors`, and
+`CorpusView` exposes `stream`, `len`, `is_empty`, `dimensions`, `padded_dimensions`,
+and `shards`. `CorpusShardView` exposes `row_range`, `capacity_rows`, `vectors`, and
 `inverse_norms`.
 Shard ranges cover all insertion IDs in order without gaps; an empty corpus
 has no shards. Both bindings cover `capacity_rows()`, the logical shard length
@@ -233,8 +238,15 @@ tile sizes, check `rows.len().div_ceil(tile_rows) * tile_rows <= capacity_rows()
 Each shard adds at most 255 rows of vector and norm storage; that capacity still
 respects the 2^32-element limit. Built-in searches process only logical rows.
 
-Use a caller-owned stream from the same device used to build the index. Corpus
-uploads have completed when construction returns. Callers own compilation,
+Create a stream with `db.stream()` or `corpus.stream()`; either returns a new,
+independent HRX stream on the device selected when the index was built. The
+original `Device` handle can already have been dropped, including when the
+index moves to another thread. Configure the compiler with `stream.target()`.
+Reuse the stream for repeated work instead of creating one per dispatch. The
+returned stream is owned and can outlive the index; corpus bindings still borrow
+the index. It does not expose or synchronize the internal search stream.
+
+Corpus uploads have completed when construction returns. Callers own compilation,
 submission, side data, scratch, and completion; borrowing a view does not wait
 for asynchronous GPU work. **Treat both corpus bindings as read-only.** HRX's
 binding type does not enforce this: writes are unsupported and invalidate the
@@ -248,6 +260,8 @@ matrix. It reads full 256-row tiles and masks slack, including when an interior
 shard's side-array slack overlaps the next shard's logical rows. Missing albums
 produce negative infinity. The example favors clarity
 over throughput; album grouping and reduction remain application code.
+Its custom operation takes only a `CorpusView` and application data, with no
+separate `Device` argument. The example drops the original device before calling it.
 
 ```sh
 HRX_OFFLINE=1 cargo run --locked --release --example album_scores
@@ -389,6 +403,9 @@ corpora expose no shards; a compile-fail doctest checks binding lifetimes.
 Tiled tests cover 201- and 55-row tails, exact tile boundaries, and positive
 slack values that would otherwise outrank all-negative corpus scores. CPU tests
 check rounded shard capacities against the address limit at every padded dimension.
+Stream tests drop the original device, move the index to another thread, verify
+device identity and independent streams, run a custom kernel, and use a returned
+stream after the index itself has been dropped.
 
 
 The repository's [release guide](RELEASE.md) covers packaging and publication.

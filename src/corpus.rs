@@ -1,6 +1,6 @@
 //! Borrowed access to the resident corpus for application-owned GPU kernels.
-use crate::FlatIndex;
-use hrx::View;
+use crate::{FlatIndex, Result};
+use hrx::{Stream, View};
 use std::ops::Range;
 
 /// A borrowed, zero-copy view of the vectors owned by a [`FlatIndex`].
@@ -16,9 +16,10 @@ use std::ops::Range;
 ///
 /// # Execution and access contract
 ///
-/// Corpus uploads complete before construction returns. Bindings may be read on
-/// a caller-owned HRX stream created from the same device used to build the
-/// index. The caller owns kernel compilation, side arrays, output buffers, and
+/// Corpus uploads complete before construction returns. Create a caller-owned
+/// stream on the corpus's device with [`Self::stream`] or [`FlatIndex::stream`].
+/// The original construction-time [`crate::Device`] handle need not be retained.
+/// The caller owns kernel compilation, side arrays, output buffers, and
 /// execution/completion; acquiring a view performs no allocation or GPU work.
 /// This view does not expose or synchronize the index's search workspace.
 ///
@@ -59,6 +60,42 @@ pub struct CorpusShardView<'a> {
 }
 
 impl FlatIndex {
+    /// Create an independent HRX stream on this index's device.
+    ///
+    /// The index retains the device selection supplied at construction, so the
+    /// original [`crate::Device`] handle may already have been dropped. Use the
+    /// returned stream's [`target`](Stream::target) when configuring a compiler.
+    ///
+    /// Every call creates a new stream. Reuse it for repeated custom operations;
+    /// it owns its resources and can outlive the index. Corpus bindings still
+    /// borrow the index. This does not expose the internal search stream or
+    /// workspace, synchronize searches, or copy corpus data. The caller owns
+    /// ordering and completion of work submitted to the returned stream.
+    ///
+    /// # Errors
+    /// Returns an error if HRX cannot create a stream on the selected device.
+    ///
+    /// ```no_run
+    /// use hrxdb::{Device, FlatIndex};
+    /// # fn main() -> hrxdb::Result<()> {
+    /// let index = {
+    ///     let device = Device::open(0)?;
+    ///     FlatIndex::build(&device, 3, [[1.0, 2.0, 3.0]])?
+    /// };
+    /// let mut stream = index.stream()?;
+    /// let compiler_options = hrx::loom::CompilerOptions {
+    ///     target: stream.target().clone(),
+    ///     ..Default::default()
+    /// };
+    /// // Compile and bind a custom kernel to `index.corpus()` on this stream.
+    /// stream.synchronize()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn stream(&self) -> Result<Stream> {
+        self.device.stream()
+    }
+
     /// Borrow the resident FP16 corpus for custom GPU computations.
     ///
     /// This allocates no storage and performs no copy, compilation, or GPU work.
@@ -75,7 +112,7 @@ impl FlatIndex {
     ///     assert!(shard.capacity_rows() >= rows.len());
     ///     assert_eq!(shard.vectors().len(), shard.capacity_rows() * corpus.padded_dimensions() * 2);
     ///     assert_eq!(shard.inverse_norms().len(), shard.capacity_rows() * 4);
-    ///     // Bind these views to a custom kernel on a stream from `device`.
+    ///     // Bind these views to a custom kernel on `corpus.stream()?`.
     ///     // Side arrays use the global insertion IDs in `rows`.
     /// }
     /// # Ok(())
@@ -87,6 +124,18 @@ impl FlatIndex {
 }
 
 impl<'a> CorpusView<'a> {
+    /// Create an independent HRX stream on the device that owns this corpus.
+    ///
+    /// Equivalent to [`FlatIndex::stream`]. The returned stream is owned, does
+    /// not borrow this view or the index, and provides the compiler target via
+    /// [`Stream::target`]. Reuse it across custom operations when possible.
+    ///
+    /// # Errors
+    /// Returns an error if HRX cannot create a stream on the selected device.
+    pub fn stream(&self) -> Result<Stream> {
+        self.index.stream()
+    }
+
     /// Total number of indexed vectors across all shards.
     pub fn len(&self) -> usize {
         self.index.len()
@@ -191,6 +240,66 @@ mod tests {
 
     #[test]
     #[ignore = "requires gfx1151"]
+    fn custom_streams_survive_device_drop_and_index_move() -> Result<()> {
+        for direct_fp16 in [false, true] {
+            let (mut index, expected_device) = {
+                // Exercise a non-default device when a second supported GPU is
+                // available; always check native identity, not just its target.
+                let device = match Device::open(1) {
+                    Ok(device) if device.target().as_str() == "gfx1151" => device,
+                    _ => Device::open(0)?,
+                };
+                let index = if direct_fp16 {
+                    let rows = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]].map(|row| {
+                        row.into_iter()
+                            .flat_map(|v| f16::from_f32(v).to_le_bytes())
+                            .collect::<Vec<_>>()
+                    });
+                    FlatIndex::build_fp16(&device, 3, rows)?
+                } else {
+                    FlatIndex::build(&device, 3, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])?
+                };
+                let identity = index.stream.device_id();
+                (index, identity)
+            }; // The original Device is gone before either public API is used.
+            std::thread::spawn(move || -> Result<()> {
+                let mut first = index.stream()?;
+                let second = index.corpus().stream()?;
+                assert_eq!(first.device_id(), expected_device);
+                assert_eq!(second.device_id(), expected_device);
+                assert_eq!(first.target(), index.stream.target());
+                assert_ne!(first.id(), second.id());
+                assert_ne!(first.id(), index.stream.id());
+                assert_ne!(second.id(), index.stream.id());
+
+                let binding = index.corpus().shards().next().unwrap().vectors();
+                let mut bytes = [0; 2];
+                first.read_blocking(binding.slice(0, 2)?, &mut bytes)?;
+                assert_eq!(bytes, f16::ONE.to_le_bytes());
+                drop(second);
+                let scores =
+                    album_example::best_by_album(index.corpus(), &[0, 1], 2, &[1.0, 0.0, 0.0])?;
+                assert_eq!(scores, [vec![1.0, 0.0]]);
+                assert_eq!(index.search(&[1.0, 0.0, 0.0], 1)?[0].id, 0);
+                drop(index);
+
+                // The returned stream is owned and usable after the index
+                // drops; no borrowed corpus binding is used past that point.
+                let buffer = first.allocate(4)?;
+                first.upload(buffer.binding(), &[1, 2, 3, 4])?;
+                let mut readback = [0; 4];
+                first.read_blocking(buffer.binding(), &mut readback)?;
+                assert_eq!(readback, [1, 2, 3, 4]);
+                Ok(())
+            })
+            .join()
+            .expect("custom kernel worker panicked")?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151"]
     fn custom_kernel_reads_shards_and_merges_album_scores() -> Result<()> {
         let device = Device::open(0)?;
         for d in [3usize, 129, 769] {
@@ -289,7 +398,7 @@ mod tests {
 
                 // Album 5 is absent; all other groups cross shard boundaries.
                 // Maxima must persist when later shards contain worse matches.
-                let actual = album_example::best_by_album(&device, corpus, &ordinals, 6, &queries)?;
+                let actual = album_example::best_by_album(corpus, &ordinals, 6, &queries)?;
                 for (q, query) in queries.chunks_exact(d).enumerate() {
                     let mut expected = [f32::NEG_INFINITY; 6];
                     for (score, &album) in index.scores(query)?.iter().zip(&ordinals) {
@@ -355,8 +464,7 @@ mod tests {
             assert_eq!(scores.len(), n);
             let expected = scores[n - 1];
             assert!(expected < 0.0);
-            let grouped =
-                album_example::best_by_album(&device, index.corpus(), &vec![0; n], 2, &query)?;
+            let grouped = album_example::best_by_album(index.corpus(), &vec![0; n], 2, &query)?;
             assert!(
                 (grouped[0][0] - expected).abs() < 3e-6,
                 "n={n}: {grouped:?}"
@@ -396,8 +504,9 @@ mod tests {
         assert_eq!(corpus.padded_dimensions(), 128);
         assert_eq!(corpus.shards().len(), 0);
         assert!(corpus.shards().next().is_none());
+        assert_eq!(corpus.stream()?.device_id(), index.stream.device_id());
         assert_eq!(
-            album_example::best_by_album(&device, corpus, &[], 2, &[1.0, 0.0, 0.0])?,
+            album_example::best_by_album(corpus, &[], 2, &[1.0, 0.0, 0.0])?,
             vec![vec![f32::NEG_INFINITY; 2]]
         );
         Ok(())

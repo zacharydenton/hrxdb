@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `FlatIndex::stream` and `CorpusView::stream` to create independent streams
+  on the index's device after the original `Device` handle has been dropped.
+  Update the custom-kernel example to obtain its stream and compiler target
+  from the corpus, without a separate device argument.
 - Add `CorpusShardView::capacity_rows` and round shard storage to 256 rows for
   fixed-tile custom kernels. Both vector and inverse-norm bindings now include
   readable slack with unspecified contents; logical row ranges and search

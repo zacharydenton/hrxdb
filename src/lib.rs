@@ -141,6 +141,7 @@ pub struct Compilation {
 /// require `&mut self`; the index is not [`Sync`]. A mutex can serialize shared
 /// ownership when needed.
 pub struct FlatIndex {
+    device: Device,
     stream: Stream,
     compiler: hrx::loom::Compiler,
     shards: Vec<Shard>,
@@ -531,6 +532,7 @@ impl FlatIndex {
         )?;
         reports.extend([fr, mr, ssr, smr, er]);
         Ok(Self {
+            device: device.clone(),
             stream,
             compiler,
             shards,

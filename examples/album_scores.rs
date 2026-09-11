@@ -15,10 +15,11 @@ fn main() -> hrxdb::Result<()> {
             [0.0, -1.0, 0.0],
         ],
     )?;
+    drop(device); // Later callers need only the index, not its original Device.
     // Albums are application metadata, independent of hrxdb's insertion IDs.
     let ordinals = [0, 1, 0, 2];
     let queries = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-    let scores = album_scores::best_by_album(&device, index.corpus(), &ordinals, 4, &queries)?;
+    let scores = album_scores::best_by_album(index.corpus(), &ordinals, 4, &queries)?;
     assert_eq!(
         scores,
         vec![
