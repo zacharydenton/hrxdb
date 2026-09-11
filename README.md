@@ -1,6 +1,6 @@
 # hrxdb
 
-An immutable, GPU-resident flat vector index on [hrx-rs](https://github.com/zacharydenton/hrx-rs). It exhaustively
+Shared GPU-resident vector storage, exact cosine search, and composable GPU top-k on [hrx-rs](https://github.com/zacharydenton/hrx-rs). It exhaustively
 searches FP16 vectors using FP32 cosine scores and returns the best 1–1,024 matches,
 with optional excluded IDs. Large corpora are sharded internally.
 The first target is **one query over 10 million 384-dimensional vectors** on Linux
@@ -17,15 +17,16 @@ hrxdb = "0.1"
 ```
 
 ```rust
-use hrxdb::{Device, FlatIndex};
+use hrxdb::{Corpus, Device};
 
 fn main() -> hrxdb::Result<()> {
     let device = Device::open(0)?;
-    let mut db = FlatIndex::build(&device, 3, [
+    let corpus = Corpus::build(&device, 3, [
         [1.0, 0.0, 0.0],
         [0.0, 1.0, 0.0],
         [0.8, 0.2, 0.0],
     ])?;
+    let mut db = corpus.searcher()?;
     let neighbors = db.search(&[1.0, 0.0, 0.0], 2)?;
     assert_eq!(neighbors[0].id, 0);
     Ok(())
@@ -45,12 +46,11 @@ for neighbor in neighbors {
 }
 ```
 
-For a corpus already stored as FP16, use `build_fp16` (or
-`build_fp16_with_config`). Each row is an `AsRef<[u8]>` containing exactly
+For a corpus already stored as FP16, use `Corpus::build_fp16`. Each row is an `AsRef<[u8]>` containing exactly
 `dimensions * 2` little-endian IEEE 754 binary16 bytes, without padding:
 
 ```rust
-let db = FlatIndex::build_fp16(&device, dimensions, corpus_bytes.chunks_exact(dimensions * 2))?;
+let corpus = Corpus::build_fp16(&device, dimensions, corpus_bytes.chunks_exact(dimensions * 2))?;
 ```
 
 The bytes are preserved, zero padding is added, and inverse norms are computed
@@ -59,11 +59,28 @@ rounding them back to FP16. Reject incomplete trailing rows when reading a file:
 `chunks_exact` omits any remainder. Both constructors require an accurately
 sized iterator and upload in bounded chunks.
 
-`FlatIndex` is `Send`: build it on one thread and move it to a worker thread.
-It is not `Sync`; searches require `&mut self`. Use `Arc<Mutex<FlatIndex>>` when
-multiple callers should share one index with serialized queries. The index owns
-its device resources, so the original `Device` handle need not outlive it.
+`Corpus` owns immutable storage and is `Clone + Send + Sync`. Cloning retains
+those allocations without copying vectors. Each `corpus.searcher()` creates a
+`Send` worker with its own ordered stream, kernels, and workspace; queries take
+`&mut self`. Workers can run independently on different threads. Keep a corpus
+clone as a snapshot, or replace the application's current corpus while existing
+workers finish using the old one. The original `Device` may be dropped.
+
+```rust
+let mut first = corpus.searcher()?;
+let mut second = corpus.searcher()?; // Shared vectors, independent scratch.
+let snapshot = corpus.clone();      // No new GPU allocation.
+```
+
+`Searcher::new(corpus)` takes ownership of a handle. `Searcher::on_stream`
+accepts an existing stream and `ScanConfig` for applications with an established
+queue. `Searcher::build` and `build_fp16` are convenience constructors combining
+storage and one worker; `Corpus::build` alone allocates no search workspace.
 See the runnable [search example](examples/search.rs).
+
+This redesign replaces `FlatIndex` and the borrowed `CorpusView`; there are no
+compatibility aliases. `searcher.corpus()` now returns `&Corpus`, which callers
+can clone to retain storage independently of the worker.
 
 The FP32 constructor normalizes each row, rounds it to FP16, and stores an FP32
 inverse norm for the rounded row. Queries are normalized to FP32. Scores are
@@ -88,7 +105,7 @@ Scans write each shard's scores into its range of a shared score array; GPU
 selection finds the best k across the entire corpus. `shard_count()` reports
 the number of corpus allocations.
 Available GPU memory and compiler resources may impose tighter limits for large
-shapes. The tested dimension set is 1, 3, 127, 384, and 769.
+shapes. Hardware coverage includes dimensions 1, 3, 127, 129, 384, 512, and 769.
 
 ## Larger result sets and exclusions
 
@@ -122,7 +139,12 @@ empty vector when every row is excluded. Exclusions apply to one query and
 compose with the full k range and internal sharding. Both search methods run
 selection on the GPU and read back at most k score/ID pairs.
 
-Construction reserves single-query selection scratch for k=32. The first larger query grows
+`search_into(query, k, &mut results)` and
+`search_excluding_into(query, k, excluded, &mut results)` reuse the capacity of
+a caller-owned `Vec<Neighbor>`. Their allocating counterparts are convenience
+wrappers.
+
+Searcher construction reserves single-query selection scratch for k=32. The first larger query grows
 it to the next power of two, then reuses that capacity. `reserve_search(k)` lets
 applications make that allocation during setup. Single-query searches compile no kernels.
 
@@ -145,6 +167,9 @@ is validated before GPU execution; incomplete rows, nonfinite or zero-norm
 queries, more than 64 queries, and out-of-range excluded IDs are errors. Empty
 batches return an empty vector; an empty index returns one empty result per
 valid query. A one-query batch uses the single-query scan.
+
+`search_batch_into` and `search_batch_excluding_into` accept a reusable
+`Vec<Vec<Neighbor>>`, retaining capacities of rows that survive a batch resize.
 
 The [matrix kernel](kernels/batch_scan.loom) loads a tile of 64 corpus rows into workgroup memory and
 reuses it across the queries. Corpus values expand from FP16 to FP32 in that
@@ -191,7 +216,7 @@ returns all rows, regardless of exclusions supplied to previous searches.
 
 ## Custom GPU computations
 
-`db.corpus()` returns a borrowed `CorpusView` over the existing GPU allocations.
+`db.corpus()` returns `&Corpus` over the existing GPU allocations.
 It performs no copy, allocation, compilation, or GPU work. Applications can bind
 their own Loom kernels to these vectors, together with their own side arrays
 and output buffers. Add `hrx = { package = "hrx-rs", version = "=0.4.0" }` to
@@ -216,7 +241,7 @@ for shard in corpus.shards() {
 }
 ```
 
-`CorpusView` exposes `stream`, `len`, `is_empty`, `dimensions`, `padded_dimensions`,
+`Corpus` exposes `stream`, `len`, `is_empty`, `dimensions`, `padded_dimensions`,
 and `shards`. `CorpusShardView` exposes `row_range`, `capacity_rows`, `vectors`, and
 `inverse_norms`.
 Shard ranges cover all insertion IDs in order without gaps; an empty corpus
@@ -238,13 +263,16 @@ tile sizes, check `rows.len().div_ceil(tile_rows) * tile_rows <= capacity_rows()
 Each shard adds at most 255 rows of vector and norm storage; that capacity still
 respects the 2^32-element limit. Built-in searches process only logical rows.
 
-Create a stream with `db.stream()` or `corpus.stream()`; either returns a new,
-independent HRX stream on the device selected when the index was built. The
-original `Device` handle can already have been dropped, including when the
-index moves to another thread. Configure the compiler with `stream.target()`.
-Reuse the stream for repeated work instead of creating one per dispatch. The
-returned stream is owned and can outlive the index; corpus bindings still borrow
-the index. It does not expose or synchronize the internal search stream.
+`corpus.stream()` creates an independent, owned stream on the original device,
+including after the original `Device` is dropped or a corpus clone moves to
+another thread. Configure the compiler with `stream.target()` and reuse the
+stream for repeated work. The stream can outlive the corpus, but borrowed
+bindings require a live corpus handle.
+
+`db.stream()` borrows the searcher's **existing ordered stream**. Submit custom
+producers, device searches, and consumers there to preserve execution order.
+For separate streams, record a producer event and call `wait_event` on the
+consumer stream. No accessor implicitly waits for work on another queue.
 
 Corpus uploads have completed when construction returns. Callers own compilation,
 submission, side data, scratch, and completion; borrowing a view does not wait
@@ -255,17 +283,136 @@ index's data invariants. Normal HRX dispatch safety requirements still apply.
 The runnable [album example](examples/album_scores.rs) binds an
 [application-owned kernel](examples/album_scores.loom) and an album ordinal per
 corpus row. It computes the best cosine for each `(query row, album)` directly
-on the device, merging maxima across shards and reading back only that result
-matrix. It reads full 256-row tiles and masks slack, including when an interior
-shard's side-array slack overlaps the next shard's logical rows. Missing albums
-produce negative infinity. The example favors clarity
-over throughput; album grouping and reduction remain application code.
-Its custom operation takes only a `CorpusView` and application data, with no
-separate `Device` argument. The example drops the original device before calling it.
+on the device, merges maxima across shards, and passes the score matrix to
+`TopK`. Only the selected albums are read back. Its custom kernel reads full
+256-row tiles and masks slack, including when an interior shard's side-array
+slack overlaps the next shard's logical rows. Missing albums produce negative
+infinity. The example favors clarity over throughput; album grouping and
+reduction remain application code. It needs a corpus and an ordered stream,
+and drops the original device before calling the operation.
 
 ```sh
 HRX_OFFLINE=1 cargo run --locked --release --example album_scores
 ```
+
+## Device inputs, outputs, and iterative retrieval
+
+See the runnable [device search example](examples/device_search.rs).
+
+`DeviceQueries` describes borrowed row-major FP32 input, including a row stride
+in elements. `search_device` normalizes on the GPU and writes into reusable
+`DeviceNeighbors`. The returned HRX event marks completion; submission performs
+no result readback. Reserve anticipated shapes before latency-sensitive work:
+
+```rust
+use hrxdb::{DeviceExclusions, DeviceNeighbors, DeviceQueries};
+
+let mut db = corpus.searcher()?;
+db.reserve_device(1, 5)?;
+let mut results = DeviceNeighbors::new(db.stream(), 1, 5)?;
+let mut visited = DeviceExclusions::new(db.stream(), corpus.len())?;
+// query_buffer contains dimensions FP32 values produced on db.stream().
+let done = db.search_device(
+    DeviceQueries::new(query_buffer.binding(), 1, corpus.dimensions(), corpus.dimensions())?,
+    Some(visited.binding()),
+    &mut results,
+)?;
+// Same-stream consumers can run immediately, without a host wait.
+visited.insert_device(db.stream(), results.ids(), results.batch_size() * results.k())?;
+// A separate stream must explicitly wait for the result producer.
+let mut consumer = corpus.stream()?;
+consumer.wait_event(&done)?;
+let matches = results.read(&mut consumer)?;
+```
+
+`DeviceNeighbors` owns FP32 scores and u32 IDs in `[batch, k]` order, plus one
+u32 count and status per query. These regions share one allocation and a single
+host readback transfer. Slots after the valid count contain negative
+infinity and `u32::MAX`. Status is 0 on success; a nonfinite or zero-norm device
+query produces status 1 and zero matches. Host `read`/`read_into` reports invalid
+queries as errors; kernels can inspect status directly. `read_into` retains its
+host staging and surviving result-row capacities. GPU-only consumers allocate
+no host readback staging. Do not overwrite inputs or outputs until prior uses
+complete; views and mutable Rust borrows do not establish GPU completion.
+
+Device normalization uses scaled FP32 reductions to handle extreme finite
+magnitudes, including entirely subnormal rows. Its rounding can differ from
+host FP64 normalization, and tiny relative components can underflow. Both paths
+search exhaustively with FP32 scores; very close rankings can differ. Up to
+64 queries and k=1–1,024 are supported. First use may allocate, compile, or wait
+when replacing imported host workspace; fully reserved submissions do not wait
+on the host.
+
+`DeviceExclusions` retains one bit per insertion ID. `insert`/`remove` validate
+host IDs and upload only those updates; `insert_device`/`remove_device` consume
+u32 IDs without host transfers, ignoring out-of-range values including the
+result sentinel. Atomic updates preserve duplicate IDs and shared bitmap words.
+`clear` resets the set. Use the same stream, or events between streams. Device
+search also accepts an application-owned bitmap with this layout.
+
+## Standalone selection
+
+`TopK` consumes a `ScoreBatch`: a contiguous row-major FP32 matrix with up to
+64 queries and 2^30 candidate columns. It requires no corpus or cosine metric:
+
+```rust
+use hrxdb::{DeviceNeighbors, ScoreBatch, TopK};
+
+let mut topk = TopK::new(&stream)?;
+topk.reserve(&stream, query_count, album_count, 60)?;
+let mut winners = DeviceNeighbors::new(&stream, query_count, 60)?;
+// Run application scoring on this stream, writing score_buffer.
+let done = topk.select(
+    &mut stream,
+    ScoreBatch::new(score_buffer.binding(), query_count, album_count)?,
+    &mut winners,
+)?;
+```
+
+IDs are score-column ordinals: album IDs in this example. Higher scores win;
+equal scores prefer lower columns. NaN and negative infinity are absent;
+positive infinity is valid. A row with fewer than k eligible values has a
+smaller count. The scores remain in their original allocation. Large matrices
+use bounded 262,144-column tiles and running GPU top-k; scratch does not grow
+with the total column count beyond that tile size. Plans and buffers are reused.
+Order a `TopK` worker's submissions on one stream, or establish completion
+before reusing its scratch on another stream.
+
+## Adopting resident vectors
+
+`Corpus::from_device(&device, &mut stream, dimensions, shards)` consumes owned
+FP16 `ResidentShard { vectors, rows }` allocations. This avoids copying a
+resident corpus through host memory or into replacement vector buffers.
+
+Each allocation uses `ceil(dimensions/128)*128` FP16 elements per row, with
+capacity divisible by 256, enough room for its logical rows, and at most 2^32
+FP16 elements. Logical rows must be finite and nonzero, with zero dimension
+padding; tail row slack is unspecified. Shard order determines insertion IDs.
+An empty shard list creates an empty corpus; individual shards cannot be empty.
+
+The import kernel validates logical rows and computes inverse norms using FP32
+accumulation. It reads back only a four-byte validation result and completes
+the supplied stream before publishing the corpus. FP32 norm rounding can differ
+from `build_fp16`'s host calculation. Producer writes on another stream require
+an event dependency first. Ownership transfers even if validation fails.
+
+## Memory accounting
+
+`corpus.memory_usage()` separates logical FP16 vectors, dimension padding,
+vector slack, logical FP32 norms, and norm slack. `db.memory_usage()` reports
+that shared corpus separately from the worker's query, score, selection,
+readback, exclusion, batch, and device-query allocations:
+
+```rust
+let shared_bytes = corpus.memory_usage().total(); // Count once across workers.
+let worker_bytes = db.memory_usage().workspace.total();
+```
+
+Reports describe reserved buffer bytes, including page rounding of imported
+host buffers. They exclude native allocation granularity, compiler/runtime
+bookkeeping and staging, and caller-owned inputs/outputs. `DeviceNeighbors`,
+`DeviceExclusions`, and `TopK` expose their own device-buffer byte totals.
+Accounting does not synchronize or query the GPU.
 
 ## Kernel families
 
@@ -309,8 +456,8 @@ scores, a 1.25 MB exclusion bitmap, and about 5 MB of initial selection scratch
 40 MB each, approximately 1% additional traffic relative to vectors. Corpus,
 query, result, and scratch allocations are reused. Query/result host memory is
 page-aligned and imported once into HRX, with explicit completion before host
-access. Once selection capacity is reserved, searches allocate no new GPU buffers. Returned
-`Vec<Neighbor>` values allocate on the host.
+access. Once selection capacity is reserved, searches allocate no new GPU buffers. Allocating convenience methods return fresh host vectors; `_into` methods
+reuse caller-owned capacity.
 
 ## Benchmark
 
@@ -395,11 +542,11 @@ FP16 extremes and padded dimensions, exact ties, running selection across tiles
 and shards, workspace reuse, and ownership across threads. The faces-shape test
 also runs sixty queries across the 8 GiB shard boundary with bounded workspace.
 
-Corpus-view tests read and check every exported value, padding component, and
+Corpus-binding tests read and check every exported value, padding component, and
 inverse norm for both ingestion paths. They run the album example on a separate
 stream across unaligned shard boundaries, compare against built-in cosine
 scores, and verify subsequent searches still return the same results. Empty
-corpora expose no shards; a compile-fail doctest checks binding lifetimes.
+corpora expose no shards; borrowed bindings remain tied to a live corpus handle.
 Tiled tests cover 201- and 55-row tails, exact tile boundaries, and positive
 slack values that would otherwise outrank all-negative corpus scores. CPU tests
 check rounded shard capacities against the address limit at every padded dimension.
@@ -407,6 +554,11 @@ Stream tests drop the original device, move the index to another thread, verify
 device identity and independent streams, run a custom kernel, and use a returned
 stream after the index itself has been dropped.
 
+Device pipeline tests cover independent shared-storage workers, snapshot
+ownership, zero-copy FP16 import and rejection of invalid rows, strided inputs,
+widths through 64, extreme magnitudes, device status, cross-stream event
+consumption, incremental GPU exclusions, and standalone selection across large
+matrix tiles. They verify bounded workspace and repeated output reuse.
 
 The repository's [release guide](RELEASE.md) covers packaging and publication.
 See [CHANGELOG.md](CHANGELOG.md) for version history. Contributions should include

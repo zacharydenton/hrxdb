@@ -80,7 +80,9 @@ kernel.def target(@target) export("select") @select(%count_arg: i32) {
     %at = index.assume %safe [range(%safe, 0, 1073741823), lt(%safe, %count)] : index
     %value = view.load %sv[%at] : view<[%count]xf32> -> f32
     %ident = template.apply<@db.candidate_id>(%first, %ids, %count, %at, %input_offset, %row_base) : (index, buffer, index, index, offset, index) -> (i32)
-    %score = scf.select %valid, %value, %neg : f32
+    %ordered = scalar.cmpf ord, %value, %value : f32
+    %live = scalar.andi %valid, %ordered : i1
+    %score = scf.select %live, %value, %neg : f32
     %id = scf.select %valid, %ident, %sentinel : i32
     %next_s = vector.insert %score into %ss[%j] : f32, vector<4xf32>
     %next_i = vector.insert %id into %ii[%j] : i32, vector<4xi32>

@@ -1,0 +1,56 @@
+// Incremental bitmap updates, including IDs produced by a preceding top-k.
+amdgpu.target<gfx1151> @target {subgroup_size = 32}
+kernel.def target(@target) export("update_exclusions") @update_exclusions(%count_arg:i32) {
+ %one=index.constant 1 : index
+ %threads=index.constant 256 : index
+ %extra=index.constant 255 : index
+ %raw=index.cast %count_arg : i32 to index
+ %n=index.assume %raw [range(%raw,1,1073741824)] : index
+ %rounded=index.add %n,%extra : index
+ %groups=index.div %rounded,%threads : index
+ kernel.launch.config workgroups(%groups,%one,%one) workgroup_size(%threads,%one,%one) : index
+} launch(%count_arg:i32,%rows_arg:i32,%remove_arg:i32,%ids:buffer,%bitmap:buffer) {
+ %zero=index.constant 0 : offset
+ %i0=index.constant 0 : index
+ %c256=index.constant 256 : index
+ %c32=index.constant 32 : index
+ %c31=index.constant 31 : index
+ %n0=index.cast %count_arg : i32 to index
+ %n=index.assume %n0 [range(%n0,1,1073741824)] : index
+ %rows0=index.cast %rows_arg : i32 to index
+ %rows=index.assume %rows0 [range(%rows0,1,1073741824)] : index
+ %rounded=index.add %rows,%c31 : index
+ %words=index.div %rounded,%c32 : index
+ %tid=kernel.workitem.id<x> : index
+ %group=kernel.workgroup.id<x> : index
+ %base=index.mul %group,%c256 : index
+ %pos=index.add %base,%tid : index
+ %iv=buffer.view %ids[%zero] : buffer -> view<[%n]xi32>
+ %bv=buffer.view %bitmap[%zero] : buffer -> view<[%words]xi32>
+ %valid=index.cmp ult,%pos,%n : index
+ scf.if %valid {
+  %at=index.assume %pos [range(%pos,0,1073741823),lt(%pos,%n)] : index
+  %id=view.load %iv[%at] : view<[%n]xi32> -> i32
+  %bound=scalar.cmpi ult,%id,%rows_arg : i32
+  scf.if %bound {
+   %r0=index.cast %id : i32 to index
+   %r=index.assume %r0 [range(%r0,0,1073741823),lt(%r0,%rows)] : index
+   %word0=index.div %r,%c32 : index
+   %word=index.assume %word0 [range(%word0,0,33554431),lt(%word0,%words)] : index
+   %bit=index.rem %r,%c32 : index
+   %shift=index.cast %bit : index to i32
+   %one=scalar.constant 1 : i32
+   %mask=scalar.shli %one,%shift : i32
+   %int0=scalar.constant 0 : i32
+   %remove=scalar.cmpi ne,%remove_arg,%int0 : i32
+   scf.if %remove {
+    %all=scalar.constant -1 : i32
+    %keep=scalar.xori %mask,%all : i32
+    view.atomic.reduce<andi> %keep,%bv[%word] {ordering = relaxed, scope = device} : i32,view<[%words]xi32>
+   } else {
+    view.atomic.reduce<ori> %mask,%bv[%word] {ordering = relaxed, scope = device} : i32,view<[%words]xi32>
+   }
+  }
+ }
+ kernel.return
+}

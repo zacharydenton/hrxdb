@@ -46,7 +46,7 @@ HRX_OFFLINE=1 cargo run --locked --release --example search
 HRX_OFFLINE=1 cargo run --locked --release --bin hrxdb-bench -- --output default.json
 ```
 
-The full hardware suite allocates about 7.8 GB. Preserve the JSON from any new
+The full hardware suite includes a faces-shape case allocating about 9.4 GB. Preserve the JSON from any new
 performance qualification, including percentiles, schedule, and compiler
 metadata. Runtime/compiler changes require hardware qualification; the initial
 dependency is pinned because the kernels were qualified against that bundle.

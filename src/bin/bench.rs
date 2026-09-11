@@ -1,5 +1,5 @@
 //! Reproducible host-completion benchmark. No compilation or ingestion is timed.
-use hrxdb::{FlatIndex, Measurement, ScanConfig};
+use hrxdb::{Measurement, ScanConfig, Searcher};
 use serde::Serialize;
 use std::{path::PathBuf, time::Instant};
 
@@ -211,7 +211,7 @@ fn run(o: Options) -> hrxdb::Result<()> {
         device.target().as_str()
     );
     let start = Instant::now();
-    let mut db = FlatIndex::build_with_config(
+    let mut db = Searcher::build_with_config(
         &device,
         o.dimensions,
         (0..o.rows).map(|i| row(i, o.dimensions)),
@@ -434,7 +434,7 @@ fn run_batch(o: Options) -> hrxdb::Result<()> {
         o.rows, o.dimensions, o.batch
     );
     let start = Instant::now();
-    let mut db = FlatIndex::build_with_config(
+    let mut db = Searcher::build_with_config(
         &device,
         o.dimensions,
         (0..o.rows).map(|i| row(i, o.dimensions)),

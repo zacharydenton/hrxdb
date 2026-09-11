@@ -2,38 +2,30 @@
 
 ## Unreleased
 
-- Add `FlatIndex::stream` and `CorpusView::stream` to create independent streams
-  on the index's device after the original `Device` handle has been dropped.
-  Update the custom-kernel example to obtain its stream and compiler target
-  from the corpus, without a separate device argument.
-- Add `CorpusShardView::capacity_rows` and round shard storage to 256 rows for
-  fixed-tile custom kernels. Both vector and inverse-norm bindings now include
-  readable slack with unspecified contents; logical row ranges and search
-  results exclude it. Keep padded capacity within the 2^32-element limit.
-- Add `FlatIndex::corpus`, `CorpusView`, and `CorpusShardView` for borrowed,
-  zero-copy access to resident FP16 vectors, shard-local FP32 inverse norms,
-  and global row ranges. Document layout, read-only access, and caller-owned
-  execution, with a custom Loom album-reduction example and shard tests.
-- Add `search_batch` and `search_batch_excluding` for up to 64 row-major queries
-  with a shared exclusion set. A tiled FP16 × FP32 matrix kernel shares corpus
-  reads across queries, with bounded score tiles and running device top-k.
-- Add `reserve_batch`, `batch_workspace_bytes`, and a `--batch` benchmark that
-  compares batched and sequential queries, including numerical validation.
-
-- Automatically shard corpora into allocations of at most 2^32 FP16 elements,
-  preserving global insertion IDs and device selection across the full index.
-- Add `build_fp16` and `build_fp16_with_config` for little-endian FP16 byte rows,
-  preserving values and computing inverse norms without FP32 row allocations.
-- Support full-score queries for host selection through `scores` and the new
-  `scores_into`, which reuses a caller-owned FP32 output buffer and avoids the
-  temporary byte array and conversion copy.
-- Extend device top-k to 1,024 with workgroup sorting and pairwise sorted merges.
-  Keep the existing reduction path for k=1–32; reuse selection scratch and allow
-  explicit preallocation with `reserve_search`.
-- Add `search_excluding` for per-query excluded IDs, including duplicates,
-  empty result sets, large k, and sharded corpora. A reusable bitmap masks
-  scores on the GPU; only selected score/ID pairs are read back.
-- Add `measure_excluding` and benchmark support for larger k and `--exclude-first`.
+- Replace `FlatIndex` and `CorpusView` with a cheaply cloned `Corpus` and
+  independent `Searcher` workers. Corpus handles are `Send + Sync` and retain
+  snapshots without copying vectors; each worker owns its stream and scratch.
+- Expose immutable shard bindings, global row ranges, padded dimensions, and
+  readable 256-row capacity. `Corpus::stream` creates an independent stream;
+  `Searcher::stream` borrows the worker's ordered queue.
+- Add asynchronous `DeviceQueries` → `DeviceNeighbors` search with GPU
+  normalization, per-query validity/counts, and completion events. Add persistent
+  `DeviceExclusions` with incremental host/device updates for iterative retrieval.
+- Add standalone reusable `TopK` over application-defined batched GPU scores.
+  Large matrices use bounded tiles and running selection; results remain on the
+  device. Update the album example to compose custom scoring with GPU top-k.
+- Add zero-copy `Corpus::from_device` adoption of owned FP16 allocations,
+  validating logical rows and computing norms on the GPU before publication.
+  Device normalization/import use FP32 reductions, with documented rounding
+  differences from host ingestion and query normalization.
+- Separate shared corpus memory from worker allocations in detailed accounting.
+  Add reusable single/batch host result outputs and device-result readback.
+- Support up to 64 batched queries with shared corpus reads and exclusions,
+  bounded score tiles, cached width-specific kernels, and running device top-k.
+  Add batch reservation, memory reporting, and comparative benchmarks.
+- Automatically shard corpora at the 2^32-FP16-element allocation limit while
+  preserving global insertion IDs. Add native FP16 byte ingestion, full-score
+  queries with reusable readback, top-k through 1,024, and per-query exclusions.
 
 ## 0.1.0 — Initial release
 

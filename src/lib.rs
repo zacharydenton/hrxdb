@@ -1,6 +1,7 @@
 //! Exhaustive GPU cosine search with FP16 storage and FP32 accumulation.
 //!
-//! An index owns an immutable corpus and serializes queries through `&mut self`.
+//! A shared [`Corpus`] owns immutable storage. Each [`Searcher`] owns its stream
+//! and reusable workspace. [`TopK`] selects from application-defined GPU scores.
 //! Scores describe the quantized corpus, not the original FP32 rows.
 //!
 //! Execution requires Linux x86_64, a gfx1151 AMD GPU, and the native runtime
@@ -8,14 +9,15 @@
 //! Building and generating documentation do not initialize GPU hardware.
 //!
 //! ```no_run
-//! use hrxdb::{Device, FlatIndex};
+//! use hrxdb::{Corpus, Device};
 //!
 //! # fn main() -> hrxdb::Result<()> {
 //! let device = Device::open(0)?;
-//! let mut index = FlatIndex::build(&device, 3, [
+//! let corpus = Corpus::build(&device, 3, [
 //!     [1.0, 0.0, 0.0],
 //!     [0.0, 1.0, 0.0],
 //! ])?;
+//! let mut index = corpus.searcher()?;
 //! let external_ids = ["document-a", "document-b"];
 //! for neighbor in index.search(&[1.0, 0.0, 0.0], 2)? {
 //!     println!("{}: {}", external_ids[neighbor.id as usize], neighbor.similarity);
@@ -27,13 +29,24 @@
 //! IDs are insertion positions, not application IDs. The index does not persist
 //! vectors, map external IDs, or support updates, metadata filters, or approximate
 //! search. Query-time exclusions use insertion IDs.
-//! [`FlatIndex::corpus`] provides borrowed storage bindings for application-owned
-//! GPU kernels, side arrays, and reductions; see [`CorpusView`] for the contract.
+//! [`Searcher::corpus`] provides borrowed storage bindings for application-owned
+//! GPU kernels, side arrays, and reductions; see [`Corpus`] for the contract.
 mod batch;
 mod corpus;
 mod host;
 mod kernels;
+mod storage;
+pub use storage::ResidentShard;
+mod device;
+mod exclusions;
+mod memory;
+mod queries;
+mod selection;
+pub use device::{DeviceNeighbors, ScoreBatch, TopK};
+pub use exclusions::DeviceExclusions;
 use host::HostBuffer;
+pub use memory::{CorpusMemory, SearcherMemory, WorkspaceMemory};
+pub use queries::DeviceQueries;
 
 // Compile application example code unchanged inside the corpus hardware tests.
 #[cfg(test)]
@@ -44,7 +57,8 @@ use hrx::{Buffer, Constants, Kernel, Stream};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
-pub use corpus::{CorpusShardView, CorpusView};
+use corpus::CorpusStorage;
+pub use corpus::{Corpus, CorpusShardView};
 pub use hrx::{Device, Error, Result};
 
 const MAX_ROWS: usize = 1 << 30;
@@ -100,12 +114,12 @@ impl ScanConfig {
     }
 }
 
-/// A cosine match, sorted by descending similarity then ascending insertion ID.
+/// A ranked match, ordered by descending score then ascending ID.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Neighbor {
-    /// Zero-based insertion position. Use this to index a separate external-ID array.
+    /// Zero-based corpus insertion position, or score column for standalone [`TopK`].
     pub id: u32,
-    /// Unclamped cosine score over the quantized row using FP32 arithmetic.
+    /// Unclamped FP32 cosine score, or the application score supplied to [`TopK`].
     pub similarity: f32,
 }
 
@@ -135,16 +149,16 @@ pub struct Compilation {
     pub diagnostics: Vec<String>,
 }
 
-/// Immutable GPU-resident vector corpus. Query and result scratch are reused.
+/// Independent search worker over a shared immutable [`Corpus`].
 ///
-/// The index is [`Send`]: ownership may move to another thread. Query operations
-/// require `&mut self`; the index is not [`Sync`]. A mutex can serialize shared
-/// ownership when needed.
-pub struct FlatIndex {
-    device: Device,
+/// Owns an ordered stream, compiled kernels, and reusable query/result workspace.
+/// A searcher is [`Send`] but not [`Sync`]; operations require `&mut self`. Create
+/// multiple workers from the same corpus to submit queries independently.
+pub struct Searcher {
+    corpus: Corpus,
     stream: Stream,
     compiler: hrx::loom::Compiler,
-    shards: Vec<Shard>,
+    scans: Vec<(Kernel, Kernel)>,
     query: HostBuffer,
     readback: HostBuffer,
     exclusions: HostBuffer,
@@ -162,6 +176,7 @@ pub struct FlatIndex {
     config: ScanConfig,
     reports: Vec<Compilation>,
     batch: Option<batch::BatchScratch>,
+    device_queries: Option<queries::QueryWorkspace>,
 }
 
 struct Shard {
@@ -170,8 +185,6 @@ struct Shard {
     start: usize,
     count: usize,
     capacity: usize,
-    scan: Kernel,
-    control: Kernel,
 }
 
 fn invalid(message: &str) -> Error {
@@ -285,7 +298,7 @@ fn allocate_candidates(stream: &Stream, count: usize, k: usize) -> Result<[(Buff
     ])
 }
 
-impl FlatIndex {
+impl Searcher {
     /// Build from a sized stream of rows without retaining a host corpus copy.
     /// A row is accepted as any `AsRef<[f32]>`, including borrowed slices.
     ///
@@ -323,12 +336,12 @@ impl FlatIndex {
     /// normalizing FP32 values before rounding in [`Self::build`].
     ///
     /// ```no_run
-    /// # use hrxdb::{Device, FlatIndex};
+    /// # use hrxdb::{Device, Searcher};
     /// # fn main() -> hrxdb::Result<()> {
     /// let device = Device::open(0)?;
     /// // Two 2D rows: [1, 0] and [0, 1], stored as little-endian FP16.
     /// let bytes = [0x00, 0x3c, 0, 0, 0, 0, 0x00, 0x3c];
-    /// let mut db = FlatIndex::build_fp16(&device, 2, bytes.as_chunks::<4>().0)?;
+    /// let mut db = Searcher::build_fp16(&device, 2, bytes.as_chunks::<4>().0)?;
     /// let mut scores = vec![0.0; db.len()];
     /// db.scores_into(&[1.0, 0.0], &mut scores)?;
     /// assert_eq!(scores, [1.0, 0.0]);
@@ -405,95 +418,64 @@ impl FlatIndex {
         rows: I,
         config: ScanConfig,
         element_limit: usize,
-        mut encode_row: impl FnMut(&R, usize, usize, &mut Vec<u8>) -> Result<f32>,
+        encode_row: impl FnMut(&R, usize, usize, &mut Vec<u8>) -> Result<f32>,
     ) -> Result<Self>
     where
         I: IntoIterator<Item = R>,
         I::IntoIter: ExactSizeIterator,
     {
         config.validate()?;
-        if device.target().as_str() != "gfx1151" {
-            return Err(invalid("hrxdb currently targets gfx1151"));
+        Self::with_config(
+            Corpus::build_encoded(device, dimensions, rows, element_limit, encode_row)?,
+            config,
+        )
+    }
+
+    /// Create an independent searcher over shared corpus storage.
+    pub fn new(corpus: Corpus) -> Result<Self> {
+        Self::with_config(corpus, ScanConfig::default())
+    }
+
+    /// Create a searcher with a chosen single-query scan schedule.
+    pub fn with_config(corpus: Corpus, config: ScanConfig) -> Result<Self> {
+        let stream = corpus.stream()?;
+        Self::on_stream(corpus, stream, config)
+    }
+
+    /// Take ownership of a caller's stream to compose custom kernels and search.
+    /// The stream must belong to the corpus's device. Pending work stays ordered.
+    pub fn on_stream(corpus: Corpus, stream: Stream, config: ScanConfig) -> Result<Self> {
+        config.validate()?;
+        if stream.device_id() != corpus.inner.device_id {
+            return Err(invalid("stream belongs to another device"));
         }
-        let mut rows = rows.into_iter();
-        let count = rows.len();
-        let (padded, _) = layout(dimensions, count)?;
-        let mut stream = device.stream()?;
+        let count = corpus.len();
+        let dimensions = corpus.dimensions();
+        let padded = corpus.padded_dimensions();
         let compiler = hrx::loom::Compiler::with_options(
             None,
             hrx::loom::CompilerOptions {
-                target: device.target().clone(),
+                target: stream.target().clone(),
                 ..Default::default()
             },
         )?;
-        let chunk_rows = (CHUNK_BYTES / (padded * 2)).max(1);
-        let mut chunk = Vec::with_capacity(chunk_rows * padded * 2);
-        let mut norm_chunk = Vec::with_capacity(chunk_rows * 4);
-        let mut shards = Vec::new();
+        let mut scans = Vec::new();
         let mut reports = Vec::new();
-        let per_shard = shard_rows(padded, element_limit);
-        // Keep one zero-length shard for the empty index's compilation reports.
-        for start in (0..count.max(1)).step_by(per_shard) {
-            let shard_count = (count - start).min(per_shard);
-            let capacity = shard_capacity(shard_count);
-            let data = stream.allocate(capacity * padded * 2)?;
-            let norms = stream.allocate(capacity * 4)?;
-            if capacity > shard_count {
-                // Initialize only the slack; these are not indexed zero rows.
-                // Contents are deliberately not part of the public contract.
-                // The ingestion synchronization below also completes the fills.
-                stream.fill(
-                    data.try_slice(
-                        shard_count * padded * 2,
-                        (capacity - shard_count) * padded * 2,
-                    )?,
-                    0,
-                )?;
-                stream.fill(
-                    norms.try_slice(shard_count * 4, (capacity - shard_count) * 4)?,
-                    0,
-                )?;
-            }
-            for local in (0..shard_count).step_by(chunk_rows) {
-                chunk.clear();
-                norm_chunk.clear();
-                for _ in local..(local + chunk_rows).min(shard_count) {
-                    let row = rows
-                        .next()
-                        .ok_or_else(|| invalid("row iterator returned fewer rows than declared"))?;
-                    let inverse = encode_row(&row, dimensions, padded, &mut chunk)?;
-                    norm_chunk.extend_from_slice(&inverse.to_le_bytes());
-                }
-                stream.upload(data.try_slice(local * padded * 2, chunk.len())?, &chunk)?;
-                stream.upload(norms.try_slice(local * 4, norm_chunk.len())?, &norm_chunk)?;
-                // Bound HRX's owned staging as well as the conversion buffers.
-                stream.synchronize()?;
-            }
+        for shard in &corpus.inner.shards {
             let (scan, sr) = compile(
                 &compiler,
                 &stream,
                 kernels::SCAN,
-                kernels::scan_spec(shard_count.max(1), padded, config, false),
+                kernels::scan_spec(shard.count, padded, config, false),
             )?;
             let (control, cr) = compile(
                 &compiler,
                 &stream,
                 kernels::SCAN,
-                kernels::scan_spec(shard_count.max(1), padded, config, true),
+                kernels::scan_spec(shard.count, padded, config, true),
             )?;
-            shards.push(Shard {
-                data,
-                norms,
-                start,
-                count: shard_count,
-                capacity,
-                scan,
-                control,
-            });
+            scans.push((scan, control));
             reports.extend([sr, cr]);
-        }
-        if rows.next().is_some() {
-            return Err(invalid("row iterator returned more rows than declared"));
         }
         let query = HostBuffer::new(&stream, padded * 4)?;
         let readback = HostBuffer::new(&stream, MAX_K * 8)?;
@@ -532,10 +514,10 @@ impl FlatIndex {
         )?;
         reports.extend([fr, mr, ssr, smr, er]);
         Ok(Self {
-            device: device.clone(),
+            corpus,
             stream,
             compiler,
-            shards,
+            scans,
             query,
             readback,
             exclusions,
@@ -553,6 +535,7 @@ impl FlatIndex {
             config,
             reports,
             batch: None,
+            device_queries: None,
         })
     }
 
@@ -577,7 +560,7 @@ impl FlatIndex {
         if self.is_empty() {
             0
         } else {
-            self.shards.len()
+            self.corpus.inner.shards.len()
         }
     }
     /// Currently selected scan schedule.
@@ -600,8 +583,8 @@ impl FlatIndex {
     pub fn configure(&mut self, config: ScanConfig) -> Result<()> {
         config.validate()?;
         self.stream.synchronize()?;
-        let mut compiled = Vec::with_capacity(self.shards.len());
-        for shard in &self.shards {
+        let mut compiled = Vec::with_capacity(self.corpus.inner.shards.len());
+        for shard in &self.corpus.inner.shards {
             let (scan, sr) = compile(
                 &self.compiler,
                 &self.stream,
@@ -616,11 +599,9 @@ impl FlatIndex {
             )?;
             compiled.push((scan, sr, control, cr));
         }
-        for (i, (shard, (scan, sr, control, cr))) in
-            self.shards.iter_mut().zip(compiled).enumerate()
+        for (i, (shard, (scan, sr, control, cr))) in self.scans.iter_mut().zip(compiled).enumerate()
         {
-            shard.scan = scan;
-            shard.control = control;
+            *shard = (scan, control);
             self.reports[i * 2] = sr;
             self.reports[i * 2 + 1] = cr;
         }
@@ -643,10 +624,14 @@ impl FlatIndex {
     }
 
     fn dispatch_scan(&self, control: bool) -> Result<()> {
+        self.dispatch_scan_from(control, self.query.buffer().binding())
+    }
+
+    fn dispatch_scan_from(&self, control: bool, query: hrx::View<'_>) -> Result<()> {
         if self.count == 0 {
             return Ok(());
         }
-        for shard in &self.shards {
+        for (shard, (scan, control_kernel)) in self.corpus.inner.shards.iter().zip(&self.scans) {
             let groups = shard
                 .count
                 .div_ceil(self.config.threads / 32 * self.config.rows_per_wave);
@@ -655,13 +640,13 @@ impl FlatIndex {
             // specialized kernel guards tail rows. One stream orders accesses.
             unsafe {
                 self.stream.dispatch(
-                    if control { &shard.control } else { &shard.scan },
+                    if control { control_kernel } else { scan },
                     [groups as u32, 1, 1],
                     [self.config.threads as u32, 1, 1],
                     &Constants::new(),
                     &[
                         shard.data.binding(),
-                        self.query.buffer().binding(),
+                        query,
                         shard.norms.binding(),
                         self.scores.try_slice(shard.start * 4, shard.count * 4)?,
                     ],
@@ -796,6 +781,10 @@ impl FlatIndex {
     }
 
     fn apply_exclusions(&self) -> Result<()> {
+        self.apply_exclusions_from(self.exclusions.buffer().binding())
+    }
+
+    fn apply_exclusions_from(&self, bitmap: hrx::View<'_>) -> Result<()> {
         let mut constants = Constants::new();
         constants.push(self.count as u32)?;
         // SAFETY: mask_scores guards every row, reads ceil(count/32) bitmap
@@ -806,12 +795,17 @@ impl FlatIndex {
                 [self.count.div_ceil(256) as u32, 1, 1],
                 [256, 1, 1],
                 &constants,
-                &[self.exclusions.buffer().binding(), self.scores.binding()],
+                &[bitmap, self.scores.binding()],
             )
         }
     }
 
-    fn read_neighbors(&mut self, output: usize, k: usize) -> Result<Vec<Neighbor>> {
+    fn read_neighbors_into(
+        &mut self,
+        output: usize,
+        k: usize,
+        neighbors: &mut Vec<Neighbor>,
+    ) -> Result<()> {
         self.stream.copy(
             self.readback.buffer().try_slice(0, k * 4)?,
             self.candidates[output].0.try_slice(0, k * 4)?,
@@ -823,7 +817,8 @@ impl FlatIndex {
         self.stream.synchronize()?;
         // SAFETY: the copies into readback completed on this stream.
         let bytes = unsafe { self.readback.bytes() };
-        let mut neighbors = Vec::with_capacity(k);
+        neighbors.clear();
+        neighbors.reserve(k);
         for i in 0..k {
             let neighbor = Neighbor {
                 id: u32::from_le_bytes(
@@ -837,7 +832,7 @@ impl FlatIndex {
                 neighbors.push(neighbor);
             }
         }
-        Ok(neighbors)
+        Ok(())
     }
 
     /// Search with device-side top-k, without compiling kernels.
@@ -865,7 +860,7 @@ impl FlatIndex {
     /// the selected neighbors are read back, including when k exceeds 32.
     ///
     /// ```no_run
-    /// # fn step(db: &mut hrxdb::FlatIndex, query: &[f32], visited: &mut Vec<u32>) -> hrxdb::Result<()> {
+    /// # fn step(db: &mut hrxdb::Searcher, query: &[f32], visited: &mut Vec<u32>) -> hrxdb::Result<()> {
     /// if let Some(next) = db.search_excluding(query, 1, visited)?.first() {
     ///     visited.push(next.id);
     /// }
@@ -882,13 +877,39 @@ impl FlatIndex {
         k: usize,
         excluded: &[u32],
     ) -> Result<Vec<Neighbor>> {
+        let mut output = Vec::new();
+        self.search_excluding_into(query, k, excluded, &mut output)?;
+        Ok(output)
+    }
+
+    /// Reuse a host output vector; successful calls replace its contents while
+    /// retaining capacity. Invalid inputs leave it unchanged; runtime errors may
+    /// leave partial output. This waits for GPU completion.
+    pub fn search_into(
+        &mut self,
+        query: &[f32],
+        k: usize,
+        output: &mut Vec<Neighbor>,
+    ) -> Result<()> {
+        self.search_excluding_into(query, k, &[], output)
+    }
+
+    /// Search with exclusions into reusable host output. See `search_into`.
+    pub fn search_excluding_into(
+        &mut self,
+        query: &[f32],
+        k: usize,
+        excluded: &[u32],
+        output: &mut Vec<Neighbor>,
+    ) -> Result<()> {
         if excluded.iter().any(|&id| id as usize >= self.count) {
             return Err(invalid("excluded ID is outside the index"));
         }
         let mut k = self.prepare_query(query, k)?;
         if k == 0 {
             self.stream.synchronize()?;
-            return Ok(Vec::new());
+            output.clear();
+            return Ok(());
         }
         if !excluded.is_empty() {
             // SAFETY: prepare_query completed the stream before this host
@@ -906,7 +927,8 @@ impl FlatIndex {
             }
             k = k.min(remaining);
             if k == 0 {
-                return Ok(Vec::new());
+                output.clear();
+                return Ok(());
             }
         }
         self.reserve_search(k)?;
@@ -914,8 +936,8 @@ impl FlatIndex {
         if !excluded.is_empty() {
             self.apply_exclusions()?;
         }
-        let output = self.select(k)?;
-        self.read_neighbors(output, k)
+        let selected = self.select(k)?;
+        self.read_neighbors_into(selected, k, output)
     }
 
     /// Measure separate, completed control/scan/full-search invocations.
@@ -1017,7 +1039,7 @@ impl FlatIndex {
     }
 }
 
-impl Drop for FlatIndex {
+impl Drop for Searcher {
     fn drop(&mut self) {
         if self.stream.synchronize().is_err() {
             self.query.abandon();
@@ -1036,7 +1058,7 @@ mod tests {
     #[test]
     fn index_can_move_between_threads() {
         fn assert_send<T: Send>() {}
-        assert_send::<FlatIndex>();
+        assert_send::<Searcher>();
     }
     #[test]
     fn layout_and_shards_cover_large_corpora() {
@@ -1143,7 +1165,7 @@ mod tests {
     fn every_k_matches_exact_scores_with_masked_and_padded_tails() -> Result<()> {
         let device = Device::open(0)?;
         let count = 2057;
-        let mut db = FlatIndex::build(&device, 1, (0..count).map(|_| [1.0]))?;
+        let mut db = Searcher::build(&device, 1, (0..count).map(|_| [1.0]))?;
         db.reserve_search(MAX_K)?;
         let values: Vec<f32> = (0..count)
             .map(|i| match i % 5 {
@@ -1171,7 +1193,9 @@ mod tests {
         });
         for k in 1..=MAX_K {
             let output = db.select(k)?;
-            assert_eq!(db.read_neighbors(output, k)?, expected[..k], "k={k}");
+            let mut actual = Vec::new();
+            db.read_neighbors_into(output, k, &mut actual)?;
+            assert_eq!(actual, expected[..k], "k={k}");
         }
         Ok(())
     }
@@ -1183,8 +1207,8 @@ mod tests {
         let rows: Vec<_> = (0..4099)
             .map(|i| [((i * 37) % 101) as f32 - 50.0, 1.0, (i % 7) as f32])
             .collect();
-        let mut single = FlatIndex::build(&device, 3, &rows)?;
-        let mut sharded = FlatIndex::build_encoded(
+        let mut single = Searcher::build(&device, 3, &rows)?;
+        let mut sharded = Searcher::build_encoded(
             &device,
             3,
             &rows,
@@ -1219,7 +1243,7 @@ mod tests {
         for row in &rows {
             encode(row, 3, 3, &mut encoded)?;
         }
-        let mut fp16 = FlatIndex::build_encoded(
+        let mut fp16 = Searcher::build_encoded(
             &device,
             3,
             encoded.as_chunks::<6>().0,
@@ -1244,7 +1268,7 @@ mod tests {
     fn selection_matches_exact_scores_across_three_levels() -> Result<()> {
         let device = Device::open(0)?;
         let count = 65_537;
-        let mut db = FlatIndex::build(&device, 1, (0..count).map(|_| [1.0]))?;
+        let mut db = Searcher::build(&device, 1, (0..count).map(|_| [1.0]))?;
         let values: Vec<f32> = (0..count)
             .map(|i| match i % 9 {
                 0 => -f32::MAX,
@@ -1262,7 +1286,8 @@ mod tests {
         for k in (1..=32).chain([33, 63, 64, 65, 127, 255, 511, 1000, 1023, 1024]) {
             db.reserve_search(k)?;
             let output = db.select(k)?;
-            let actual = db.read_neighbors(output, k)?;
+            let mut actual = Vec::new();
+            db.read_neighbors_into(output, k, &mut actual)?;
             for (got, &(id, &value)) in actual.iter().zip(&expected) {
                 assert_eq!(got.id, id as u32);
                 assert_eq!(got.similarity, value);

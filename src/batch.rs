@@ -12,7 +12,7 @@ pub(crate) struct BatchScratch {
     readback: HostBuffer,
     scores: Buffer,
     candidates: [(Buffer, Buffer); 2],
-    running: (Buffer, Buffer),
+    pub(crate) running: (Buffer, Buffer),
     joined: (Buffer, Buffer),
     plans: Vec<BatchPlan>,
 }
@@ -20,10 +20,7 @@ pub(crate) struct BatchScratch {
 struct BatchPlan {
     width: usize,
     scan: Kernel,
-    first: Kernel,
-    merge: Kernel,
-    sort: Kernel,
-    sorted_merge: Kernel,
+    selection: crate::selection::SelectionPlan,
     running_merge: Kernel,
 }
 
@@ -75,7 +72,7 @@ fn batch_size(dimensions: usize, values: usize, k: usize) -> Result<usize> {
     Ok(count)
 }
 
-impl FlatIndex {
+impl Searcher {
     /// Bytes reserved in batch query, score, selection, and readback buffers.
     ///
     /// This is additional to the corpus and single-query workspace. Returns
@@ -118,6 +115,11 @@ impl FlatIndex {
         let width = query_count.next_power_of_two().max(8);
         let capacity = k.min(self.count).next_power_of_two();
         let tile_rows = self.count.min(TILE_ROWS);
+        if self.batch.as_ref().is_some_and(|s| {
+            s.width >= width && s.k >= capacity && s.plans.iter().any(|p| p.width == width)
+        }) {
+            return Ok(());
+        }
         self.stream.synchronize()?;
         if self
             .batch
@@ -164,22 +166,18 @@ impl FlatIndex {
             .config
             .insert("db.scan.dimensions".into(), self.padded.to_string());
         let scan = build(kernels::BATCH_SCAN, scan_spec, width)?;
-        let first = build(kernels::SELECT, kernels::select_spec(true), width)?;
-        let merge = build(kernels::SELECT, kernels::select_spec(false), width)?;
-        let sort = build(kernels::SORT, kernels::named_spec("sort_select"), width)?;
-        let sorted_merge = build(kernels::SORT, kernels::named_spec("sorted_merge"), width)?;
         let mut running_spec = kernels::named_spec("sorted_merge");
         running_spec
             .config
             .insert("db.merge.planar".into(), "1".into());
         let running_merge = build(kernels::SORT, running_spec, 1)?;
+        let (selection, selection_reports) =
+            crate::selection::SelectionPlan::new(&self.compiler, &self.stream, width, TILE_ROWS)?;
+        reports.extend(selection_reports);
         self.batch.as_mut().unwrap().plans.push(BatchPlan {
             width,
             scan,
-            first,
-            merge,
-            sort,
-            sorted_merge,
+            selection,
             running_merge,
         });
         self.reports.extend(reports);
@@ -200,10 +198,10 @@ impl FlatIndex {
     /// allocate and compile; [`Self::reserve_batch`] can prepare it in advance.
     ///
     /// ```no_run
-    /// # use hrxdb::{Device, FlatIndex};
+    /// # use hrxdb::{Device, Searcher};
     /// # fn main() -> hrxdb::Result<()> {
     /// let device = Device::open(0)?;
-    /// let mut db = FlatIndex::build(&device, 3, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])?;
+    /// let mut db = Searcher::build(&device, 3, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])?;
     /// db.reserve_batch(2, 5)?;
     /// let queries = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     /// let results = db.search_batch(&queries, 5)?;
@@ -234,6 +232,30 @@ impl FlatIndex {
         k: usize,
         excluded: &[u32],
     ) -> Result<Vec<Vec<Neighbor>>> {
+        let mut output = Vec::new();
+        self.search_batch_excluding_into(queries, k, excluded, &mut output)?;
+        Ok(output)
+    }
+
+    /// Replace a reusable batch output, retaining the capacity of surviving rows.
+    /// Invalid input leaves output unchanged; runtime failures may partially write it.
+    pub fn search_batch_into(
+        &mut self,
+        queries: &[f32],
+        k: usize,
+        output: &mut Vec<Vec<Neighbor>>,
+    ) -> Result<()> {
+        self.search_batch_excluding_into(queries, k, &[], output)
+    }
+
+    /// Batch search with shared exclusions into reusable host output.
+    pub fn search_batch_excluding_into(
+        &mut self,
+        queries: &[f32],
+        k: usize,
+        excluded: &[u32],
+        result: &mut Vec<Vec<Neighbor>>,
+    ) -> Result<()> {
         let count = batch_size(self.dimensions, queries.len(), k)?;
         if excluded.iter().any(|&id| id as usize >= self.count) {
             return Err(invalid("excluded ID is outside the index"));
@@ -242,14 +264,18 @@ impl FlatIndex {
         for (i, row) in queries.chunks_exact(self.dimensions).enumerate() {
             lengths[i] = norm(row, self.dimensions)?;
         }
+        result.resize_with(count, Vec::new);
+        for row in result.iter_mut() {
+            row.clear();
+        }
         if count == 0 {
-            return Ok(Vec::new());
+            return Ok(());
         }
         if self.is_empty() {
-            return Ok(vec![Vec::new(); count]);
+            return Ok(());
         }
         if count == 1 {
-            return Ok(vec![self.search_excluding(queries, k, excluded)?]);
+            return self.search_excluding_into(queries, k, excluded, &mut result[0]);
         }
         self.stream.synchronize()?;
         let mut remaining = self.count;
@@ -268,12 +294,13 @@ impl FlatIndex {
         }
         let k = k.min(remaining);
         if k == 0 {
-            return Ok(vec![Vec::new(); count]);
+            return Ok(());
         }
         self.reserve_batch(count, k)?;
         let width = count.next_power_of_two().max(8);
         let scratch = self.batch.as_mut().unwrap();
-        // SAFETY: reserve_batch synchronizes the stream before host publication.
+        // SAFETY: this call synchronized before preparing exclusions/reserving
+        // workspace; no GPU work has been submitted since that synchronization.
         let bytes = unsafe { scratch.query.bytes_mut() };
         bytes.fill(0);
         for (q, row) in queries.chunks_exact(self.dimensions).enumerate() {
@@ -283,90 +310,18 @@ impl FlatIndex {
                     .copy_from_slice(&((value as f64 / lengths[q]) as f32).to_le_bytes());
             }
         }
-        let plan = scratch.plans.iter().find(|p| p.width == width).unwrap();
-        let mut started = false;
-        for shard in &self.shards {
-            for local in (0..shard.count).step_by(scratch.tile_rows) {
-                let rows = (shard.count - local).min(scratch.tile_rows);
-                let start = shard.start + local;
-                let mut constants = Constants::new();
-                constants.push(rows as u32)?;
-                constants.push(u32::from(!excluded.is_empty()))?;
-                constants.push(start as u32)?;
-                constants.push(self.count as u32)?;
-                // SAFETY: the tile belongs to this shard, has at most TILE_ROWS
-                // rows, and its dimensions match the compiled kernel. The query
-                // and score buffers reserve width rows. Norms use local row
-                // offsets; the exclusion bitmap uses global insertion IDs.
-                unsafe {
-                    self.stream.dispatch(
-                        &plan.scan,
-                        [rows.div_ceil(64) as u32, 1, 1],
-                        [(width * 4) as u32, 1, 1],
-                        &constants,
-                        &[
-                            shard
-                                .data
-                                .try_slice(local * self.padded * 2, rows * self.padded * 2)?,
-                            scratch.query.buffer().binding(),
-                            shard.norms.try_slice(local * 4, rows * 4)?,
-                            self.exclusions.buffer().binding(),
-                            scratch.scores.binding(),
-                        ],
-                    )?;
-                }
-                let output = select_tile(&self.stream, scratch, plan, rows, start, k)?;
-                let bytes = width * k * 4;
-                if !started {
-                    self.stream.copy(
-                        scratch.running.0.try_slice(0, bytes)?,
-                        scratch.candidates[output].0.try_slice(0, bytes)?,
-                    )?;
-                    self.stream.copy(
-                        scratch.running.1.try_slice(0, bytes)?,
-                        scratch.candidates[output].1.try_slice(0, bytes)?,
-                    )?;
-                    started = true;
-                } else {
-                    for (joined, running, tile) in [
-                        (
-                            &scratch.joined.0,
-                            &scratch.running.0,
-                            &scratch.candidates[output].0,
-                        ),
-                        (
-                            &scratch.joined.1,
-                            &scratch.running.1,
-                            &scratch.candidates[output].1,
-                        ),
-                    ] {
-                        self.stream
-                            .copy(joined.try_slice(0, bytes)?, running.try_slice(0, bytes)?)?;
-                        self.stream
-                            .copy(joined.try_slice(bytes, bytes)?, tile.try_slice(0, bytes)?)?;
-                    }
-                    let mut constants = Constants::new();
-                    constants.push((width * 2) as u32)?;
-                    constants.push(k as u32)?;
-                    // SAFETY: planar merge pairs each query's running list with
-                    // that query's tile list; output is a separate width*k pair.
-                    unsafe {
-                        self.stream.dispatch(
-                            &plan.running_merge,
-                            [width as u32, 1, 1],
-                            [256, 1, 1],
-                            &constants,
-                            &[
-                                scratch.joined.0.binding(),
-                                scratch.joined.1.binding(),
-                                scratch.running.0.binding(),
-                                scratch.running.1.binding(),
-                            ],
-                        )?;
-                    }
-                }
-            }
-        }
+        scratch.scan(
+            &self.stream,
+            &self.corpus,
+            scratch.query.buffer().binding(),
+            if excluded.is_empty() {
+                None
+            } else {
+                Some(self.exclusions.buffer().binding())
+            },
+            width,
+            k,
+        )?;
         let bytes = count * k * 4;
         self.stream.copy(
             scratch.readback.buffer().try_slice(0, bytes)?,
@@ -379,9 +334,8 @@ impl FlatIndex {
         self.stream.synchronize()?;
         // SAFETY: the stream completed both copies to this owned readback buffer.
         let readback = unsafe { scratch.readback.bytes() };
-        let mut result = Vec::with_capacity(count);
-        for q in 0..count {
-            let mut neighbors = Vec::with_capacity(k);
+        for (q, neighbors) in result.iter_mut().enumerate() {
+            neighbors.reserve(k);
             for rank in 0..k {
                 let at = (q * k + rank) * 4;
                 let similarity = f32::from_le_bytes(readback[at..at + 4].try_into().unwrap());
@@ -391,9 +345,8 @@ impl FlatIndex {
                     neighbors.push(Neighbor { id, similarity });
                 }
             }
-            result.push(neighbors);
         }
-        Ok(result)
+        Ok(())
     }
 }
 
@@ -405,89 +358,106 @@ fn select_tile(
     start: usize,
     k: usize,
 ) -> Result<usize> {
-    let mut count = rows;
-    let mut output = 0;
-    let mut first = true;
-    loop {
-        let groups = count.div_ceil(1024);
-        let mut constants = Constants::new();
-        constants.push(count as u32)?;
-        constants.push(k as u32)?;
-        constants.push(if first { start as u32 } else { 0 })?;
-        let (input_scores, input_ids) = if first {
-            (&scratch.scores, &scratch.scores)
-        } else {
-            (
-                &scratch.candidates[1 - output].0,
-                &scratch.candidates[1 - output].1,
-            )
-        };
-        let (out_scores, out_ids) = &scratch.candidates[output];
-        // SAFETY: per-query selection uses packed count/ceil(count/1024)*k
-        // strides, all within the reserved width * tile capacity. Input and
-        // output never alias. Only the first pass assigns global insertion IDs.
-        unsafe {
-            if k > 32 {
-                stream.dispatch(
-                    &plan.sort,
-                    [groups as u32, plan.width as u32, 1],
-                    [256, 1, 1],
-                    &constants,
-                    &[
-                        input_scores.binding(),
-                        out_scores.binding(),
-                        out_ids.binding(),
-                    ],
-                )?;
-            } else {
-                stream.dispatch(
-                    if first { &plan.first } else { &plan.merge },
-                    [groups as u32, plan.width as u32, 1],
-                    [256, 1, 1],
-                    &constants,
-                    &[
-                        input_scores.binding(),
-                        input_ids.binding(),
-                        out_scores.binding(),
-                        out_ids.binding(),
-                    ],
-                )?;
-            }
-        }
-        if k > 32 {
-            let mut lists = groups;
-            while lists > 1 {
-                let next = 1 - output;
+    crate::selection::select_scores(
+        stream,
+        &scratch.candidates,
+        &plan.selection,
+        crate::selection::SelectionInput {
+            scores: scratch.scores.binding(),
+            rows,
+            start,
+            k,
+            batch: plan.width,
+        },
+    )
+}
+
+impl BatchScratch {
+    pub(crate) fn scan(
+        &self,
+        stream: &Stream,
+        corpus: &Corpus,
+        query: hrx::View<'_>,
+        exclusions: Option<hrx::View<'_>>,
+        width: usize,
+        k: usize,
+    ) -> Result<()> {
+        let plan = self.plans.iter().find(|p| p.width == width).unwrap();
+        let mut started = false;
+        for shard in &corpus.inner.shards {
+            for local in (0..shard.count).step_by(self.tile_rows) {
+                let rows = (shard.count - local).min(self.tile_rows);
+                let start = shard.start + local;
                 let mut constants = Constants::new();
-                constants.push(lists as u32)?;
-                constants.push(k as u32)?;
-                // SAFETY: each query merges its own adjacent sorted k-lists;
-                // the number of lists halves, and outputs use the other pair.
+                constants.push(rows as u32)?;
+                constants.push(u32::from(exclusions.is_some()))?;
+                constants.push(start as u32)?;
+                constants.push(corpus.len() as u32)?;
+                // SAFETY: the tile belongs to this shard, has at most TILE_ROWS
+                // rows, and its dimensions match the compiled kernel. The query
+                // and score buffers reserve width rows. Norms use local row
+                // offsets; the exclusion bitmap uses global insertion IDs.
                 unsafe {
                     stream.dispatch(
-                        &plan.sorted_merge,
-                        [lists.div_ceil(2) as u32, plan.width as u32, 1],
-                        [256, 1, 1],
+                        &plan.scan,
+                        [rows.div_ceil(64) as u32, 1, 1],
+                        [(width * 4) as u32, 1, 1],
                         &constants,
                         &[
-                            scratch.candidates[output].0.binding(),
-                            scratch.candidates[output].1.binding(),
-                            scratch.candidates[next].0.binding(),
-                            scratch.candidates[next].1.binding(),
+                            shard.data.try_slice(
+                                local * corpus.padded_dimensions() * 2,
+                                rows * corpus.padded_dimensions() * 2,
+                            )?,
+                            query,
+                            shard.norms.try_slice(local * 4, rows * 4)?,
+                            exclusions.unwrap_or(self.scores.binding()),
+                            self.scores.binding(),
                         ],
                     )?;
                 }
-                lists = lists.div_ceil(2);
-                output = next;
+                let output = select_tile(stream, self, plan, rows, start, k)?;
+                let bytes = width * k * 4;
+                if !started {
+                    stream.copy(
+                        self.running.0.try_slice(0, bytes)?,
+                        self.candidates[output].0.try_slice(0, bytes)?,
+                    )?;
+                    stream.copy(
+                        self.running.1.try_slice(0, bytes)?,
+                        self.candidates[output].1.try_slice(0, bytes)?,
+                    )?;
+                    started = true;
+                } else {
+                    for (joined, running, tile) in [
+                        (&self.joined.0, &self.running.0, &self.candidates[output].0),
+                        (&self.joined.1, &self.running.1, &self.candidates[output].1),
+                    ] {
+                        stream.copy(joined.try_slice(0, bytes)?, running.try_slice(0, bytes)?)?;
+                        stream.copy(joined.try_slice(bytes, bytes)?, tile.try_slice(0, bytes)?)?;
+                    }
+                    let mut constants = Constants::new();
+                    constants.push((width * 2) as u32)?;
+                    constants.push(k as u32)?;
+                    // SAFETY: planar merge pairs each query's running list with
+                    // that query's tile list; output is a separate width*k pair.
+                    unsafe {
+                        stream.dispatch(
+                            &plan.running_merge,
+                            [width as u32, 1, 1],
+                            [256, 1, 1],
+                            &constants,
+                            &[
+                                self.joined.0.binding(),
+                                self.joined.1.binding(),
+                                self.running.0.binding(),
+                                self.running.1.binding(),
+                            ],
+                        )?;
+                    }
+                }
             }
-            return Ok(output);
         }
-        if groups == 1 {
-            return Ok(output);
-        }
-        count = groups * k;
-        output = 1 - output;
-        first = false;
+        Ok(())
     }
 }
 
@@ -516,7 +486,7 @@ mod tests {
                 row
             })
             .collect();
-        let mut db = FlatIndex::build_encoded(
+        let mut db = Searcher::build_encoded(
             &device,
             3,
             &rows,
@@ -551,7 +521,7 @@ mod tests {
     #[ignore = "requires gfx1151"]
     fn batch_validates_all_queries_and_reuses_workspace() -> Result<()> {
         let device = Device::open(0)?;
-        let mut db = FlatIndex::build(&device, 3, [[1.0, 0.0, 0.0]; 67])?;
+        let mut db = Searcher::build(&device, 3, [[1.0, 0.0, 0.0]; 67])?;
         assert_eq!(db.batch_workspace_bytes(), 0);
         let valid = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         for bad in [
@@ -581,7 +551,7 @@ mod tests {
         assert_eq!(db.batch_workspace_bytes(), bytes);
         assert!(first[0].iter().all(|n| n.similarity == 1.0));
         assert!(first[1].iter().all(|n| n.similarity == 0.0));
-        let mut empty = FlatIndex::build(&device, 3, std::iter::empty::<[f32; 3]>())?;
+        let mut empty = Searcher::build(&device, 3, std::iter::empty::<[f32; 3]>())?;
         assert_eq!(empty.search_batch(&valid, 1024)?, vec![vec![], vec![]]);
         assert!(empty.search_batch(&[0.0; 6], 5).is_err());
         assert!(empty.search_batch_excluding(&valid, 5, &[0]).is_err());
@@ -616,7 +586,7 @@ mod tests {
                         .collect()
                 })
                 .collect();
-            let mut db = FlatIndex::build_fp16(&device, d, &raw)?;
+            let mut db = Searcher::build_fp16(&device, d, &raw)?;
             let queries: Vec<_> = (0..9)
                 .flat_map(|q| (0..d).map(move |j| ((q * 43 + j * 11) % 97) as f32 - 47.25))
                 .collect();

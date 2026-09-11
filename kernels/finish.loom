@@ -1,0 +1,70 @@
+// Convert packed selected lists into fixed-stride public outputs and row counts.
+amdgpu.target<gfx1151> @target {subgroup_size = 32}
+kernel.def target(@target) export("finish") @finish(%batch_arg:i32) {
+ %one=index.constant 1 : index
+ %threads=index.constant 256 : index
+ %raw=index.cast %batch_arg : i32 to index
+ %batch=index.assume %raw [range(%raw,1,64)] : index
+ kernel.launch.config workgroups(%batch,%one,%one) workgroup_size(%threads,%one,%one) : index
+} launch(%batch_arg:i32,%selected_arg:i32,%k_arg:i32,%scores:buffer,%ids:buffer,%status:buffer,%out_scores:buffer,%out_ids:buffer,%counts:buffer) {
+ %zero=index.constant 0 : offset
+ %i0=index.constant 0 : index
+ %i1=index.constant 1 : index
+ %i4=index.constant 4 : index
+ %c256=index.constant 256 : index
+ %b0=index.cast %batch_arg : i32 to index
+ %b=index.assume %b0 [range(%b0,1,64)] : index
+ %m0=index.cast %selected_arg : i32 to index
+ %m=index.assume %m0 [range(%m0,0,1024)] : index
+ %k0=index.cast %k_arg : i32 to index
+ %k=index.assume %k0 [range(%k0,1,1024)] : index
+ %has=index.cmp ugt,%m,%i0 : index
+ %ms0=scf.select %has,%m,%i1 : index
+ %ms=index.assume %ms0 [range(%ms0,1,1024)] : index
+ %q0=kernel.workgroup.id<x> : index
+ %q=index.assume %q0 [range(%q0,0,63),lt(%q0,%b)] : index
+ %tid=kernel.workitem.id<x> : index
+ %sv=buffer.view %scores[%zero] : buffer -> view<[%b]x[%ms]xf32>
+ %iv=buffer.view %ids[%zero] : buffer -> view<[%b]x[%ms]xi32>
+ %os=buffer.view %out_scores[%zero] : buffer -> view<[%b]x[%k]xf32>
+ %oi=buffer.view %out_ids[%zero] : buffer -> view<[%b]x[%k]xi32>
+ %cv=buffer.view %counts[%zero] : buffer -> view<[%b]xi32>
+ %st=buffer.view %status[%zero] : buffer -> view<[%b]xi32>
+ %s=view.load %st[%q] : view<[%b]xi32> -> i32
+ %int0=scalar.constant 0 : i32
+ %int1=scalar.constant 1 : i32
+ %ok=scalar.cmpi eq,%s,%int0 : i32
+ %negbits=scalar.constant -8388608 : i32
+ %neg=scalar.bitcast %negbits : i32 to f32
+ %invalid=scalar.constant -1 : i32
+ %total=scf.for %j=[%i0 to %i4 step %i1](%acc=%int0 : i32) -> (i32) unroll {
+  %off=index.mul %j,%c256 : index
+  %r=index.add %tid,%off : index
+  %in_output=index.cmp ult,%r,%k : index
+  %in_input=index.cmp ult,%r,%m : index
+  %safe0=scf.select %in_input,%r,%i0 : index
+  %pos=index.assume %safe0 [range(%safe0,0,1023),lt(%safe0,%ms)] : index
+  %v=view.load %sv[%q,%pos] : view<[%b]x[%ms]xf32> -> f32
+  %id=view.load %iv[%q,%pos] : view<[%b]x[%ms]xi32> -> i32
+  %present=scalar.cmpf ogt,%v,%neg : f32
+  %input_ok=scalar.andi %in_input,%ok : i1
+  %in_range=scalar.andi %input_ok,%in_output : i1
+  %live=scalar.andi %in_range,%present : i1
+  %clean_id=scf.select %live,%id,%invalid : i32
+  %clean_score=scf.select %live,%v,%neg : f32
+  scf.if %in_output {
+   %at=index.assume %r [range(%r,0,1023),lt(%r,%k)] : index
+   view.store %clean_score,%os[%q,%at] : f32,view<[%b]x[%k]xf32>
+   view.store %clean_id,%oi[%q,%at] : i32,view<[%b]x[%k]xi32>
+  }
+  %increment=scf.select %live,%int1,%int0 : i32
+  %next=scalar.addi %acc,%increment : i32
+  scf.yield %next : i32
+ }
+ %totalf=scalar.sitofp %total : i32 to f32
+ %sumf=kernel.workgroup.reduce<addf> %totalf : f32
+ %sum=scalar.fptoui %sumf : f32 to i32
+ %leader=index.cmp eq,%tid,%i0 : index
+ scf.if %leader { view.store %sum,%cv[%q] : i32,view<[%b]xi32> }
+ kernel.return
+}

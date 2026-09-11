@@ -1,19 +1,21 @@
 //! Example application code, deliberately separate from hrxdb's search API.
 use hrx::loom::{Compiler, CompilerOptions, Specialization};
-use hrxdb::{CorpusView, Error, Result};
+use hrxdb::{Corpus, Error, Result};
 
 /// Best cosine per (query row, album), with negative infinity for absent albums.
 ///
 /// This example accepts up to 64 queries and 1,024 albums. It reads full 256-row
 /// tiles once per output cell and masks slack before reduction. It illustrates
 /// interoperability, not a tuned album search algorithm. Queries are row-major
-/// FP32. Ordinals follow insertion IDs.
-pub fn best_by_album(
-    corpus: CorpusView<'_>,
+/// FP32. Ordinals follow insertion IDs. Output stays on the supplied stream;
+/// callers can select from it directly without reading the matrix back.
+pub fn score_by_album(
+    stream: &mut hrx::Stream,
+    corpus: &Corpus,
     ordinals: &[u32],
     album_count: usize,
     queries: &[f32],
-) -> Result<Vec<Vec<f32>>> {
+) -> Result<hrx::Buffer> {
     let invalid = || Error::Message("invalid album example input".into());
     let d = corpus.dimensions();
     let padded = corpus.padded_dimensions();
@@ -44,13 +46,19 @@ pub fn best_by_album(
         query_bytes.resize(query_bytes.len() + (padded - d) * 4, 0);
     }
     let absent = vec![vec![f32::NEG_INFINITY; album_count]; count];
+    let output = stream.allocate(count * album_count * 4)?;
+    let output_bytes: Vec<_> = absent
+        .iter()
+        .flatten()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    stream.upload(output.binding(), &output_bytes)?;
     if count == 0 || corpus.is_empty() {
-        return Ok(absent);
+        return Ok(output);
     }
 
     // The stream, compiler, side arrays, query storage, and output belong to
     // the application. The corpus stays in its original allocations.
-    let mut stream = corpus.stream()?;
     let compiler = Compiler::with_options(
         None,
         CompilerOptions {
@@ -68,17 +76,10 @@ pub fn best_by_album(
         .unwrap();
     let album_buffer = stream.allocate(ordinal_capacity * 4)?;
     let query_buffer = stream.allocate(query_bytes.len())?;
-    let output = stream.allocate(count * album_count * 4)?;
     let mut album_bytes: Vec<_> = ordinals.iter().flat_map(|id| id.to_le_bytes()).collect();
     album_bytes.resize(ordinal_capacity * 4, 0xff); // Sentinel for trailing slack.
-    let mut output_bytes: Vec<_> = absent
-        .iter()
-        .flatten()
-        .flat_map(|v| v.to_le_bytes())
-        .collect();
     stream.upload(album_buffer.binding(), &album_bytes)?;
     stream.upload(query_buffer.binding(), &query_bytes)?;
-    stream.upload(output.binding(), &output_bytes)?;
 
     for shard in corpus.shards() {
         let rows = shard.row_range();
@@ -116,10 +117,23 @@ pub fn best_by_album(
             )?;
         }
     }
-    // Completes the application stream, including all corpus reads, before
-    // returning. Only the query × album result is copied back to the host.
-    stream.read_blocking(output.binding(), &mut output_bytes)?;
-    Ok(output_bytes
+    Ok(output)
+}
+
+/// Host readback adapter used by the corpus interoperability tests.
+#[cfg(test)]
+#[allow(dead_code)]
+pub fn best_by_album(
+    corpus: &Corpus,
+    ordinals: &[u32],
+    album_count: usize,
+    queries: &[f32],
+) -> Result<Vec<Vec<f32>>> {
+    let mut stream = corpus.stream()?;
+    let output = score_by_album(&mut stream, corpus, ordinals, album_count, queries)?;
+    let mut bytes = vec![0; queries.len() / corpus.dimensions() * album_count * 4];
+    stream.read_blocking(output.binding(), &mut bytes)?;
+    Ok(bytes
         .chunks_exact(album_count * 4)
         .map(|row| {
             row.as_chunks::<4>()

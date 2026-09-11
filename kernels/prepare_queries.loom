@@ -1,0 +1,144 @@
+// Scale before FP32 norm reduction to avoid overflow. Bit-based handling keeps
+// all-subnormal queries nonzero even on hardware with FP32 denormal flushing.
+amdgpu.target<gfx1151> @target {subgroup_size = 32}
+config.decl @query.dimensions : %v:index where [range(%v,1,16384)]
+config.decl @query.padded : %v:index where [range(%v,128,16384),mul(%v,128)]
+config.decl @query.width : %v:index where [range(%v,1,64)]
+template.decl @query.scale(%bits:i32,%max_exp:i32)->(f32)
+template.def<@query.scale> @query.scale_impl(%bits:i32,%max_exp:i32)->(f32) {
+ %zero=scalar.constant 0 : i32
+ %c23=scalar.constant 23 : i32
+ %c255=scalar.constant 255 : i32
+ %c129=scalar.constant 129 : i32
+ %absmask=scalar.constant 2147483647 : i32
+ %signmask=scalar.constant -2147483648 : i32
+ %abs=scalar.andi %bits,%absmask : i32
+ %sign=scalar.andi %bits,%signmask : i32
+ %exp=scalar.shrui %abs,%c23 : i32
+ %finite=scalar.cmpi ne,%exp,%c255 : i32
+ %subnormal=scalar.cmpi eq,%exp,%zero : i32
+ %f0=scalar.constant 0.0 : f32
+ %value=scf.if %finite -> (f32) {
+  %scaled=scf.if %subnormal -> (f32) {
+   %mantissa=scalar.uitofp %abs : i32 to f32
+   %all_subnormal=scalar.cmpi eq,%max_exp,%zero : i32
+   %sub=scf.if %all_subnormal -> (f32) { scf.yield %mantissa : f32 } else {
+    %power=scalar.subi %c129,%max_exp : i32
+    %representable=scalar.cmpi sgt,%power,%zero : i32
+    %positive=scf.select %representable,%power,%zero : i32
+    %shifted=scalar.shli %positive,%c23 : i32
+    %factor=scalar.bitcast %shifted : i32 to f32
+    %unit=scalar.constant 0.00000011920928955078125 : f32
+    %fraction=scalar.mulf %mantissa,%unit : f32
+    %out=scalar.mulf %fraction,%factor : f32
+    scf.yield %out : f32
+   }
+   scf.yield %sub : f32
+  } else {
+   %power=scalar.subi %c255,%max_exp : i32
+   %shifted=scalar.shli %power,%c23 : i32
+   %factor=scalar.bitcast %shifted : i32 to f32
+   %magnitude=scalar.bitcast %abs : i32 to f32
+   %out=scalar.mulf %magnitude,%factor : f32
+   scf.yield %out : f32
+  }
+  %magnitude_bits=scalar.bitcast %scaled : f32 to i32
+  %signed_bits=scalar.ori %magnitude_bits,%sign : i32
+  %signed=scalar.bitcast %signed_bits : i32 to f32
+  scf.yield %signed : f32
+ } else { scf.yield %f0 : f32 }
+ template.return %value : f32
+}
+kernel.def target(@target) export("prepare_queries") @prepare_queries(%batch_arg:i32) {
+ %one=index.constant 1 : index
+ %threads=index.constant 128 : index
+ %raw=index.cast %batch_arg : i32 to index
+ %batch=index.assume %raw [range(%raw,1,64)] : index
+ kernel.launch.config workgroups(%batch,%one,%one) workgroup_size(%threads,%one,%one) : index
+} launch(%batch_arg:i32,%stride_arg:i32,%input:buffer,%packed:buffer,%status:buffer) {
+ %zero=index.constant 0 : offset
+ %i0=index.constant 0 : index
+ %step=index.constant 128 : index
+ %d=config.get @query.dimensions : index
+ %p=config.get @query.padded : index
+ %w=config.get @query.width : index
+ %b0=index.cast %batch_arg : i32 to index
+ %b=index.assume %b0 [range(%b0,1,64),le(%b0,%w)] : index
+ %s0=index.cast %stride_arg : i32 to index
+ %s=index.assume %s0 [range(%s0,1,16384),ge(%s0,%d)] : index
+ %q0=kernel.workgroup.id<x> : index
+ %q=index.assume %q0 [range(%q0,0,63),lt(%q0,%b),lt(%q0,%w)] : index
+ %tid=kernel.workitem.id<x> : index
+ %iv=buffer.view %input[%zero] : buffer -> view<[%b]x[%s]xf32>
+ %ov=buffer.view %packed[%zero] : buffer -> view<[%p]x[%w]xf32>
+ %st=buffer.view %status[%zero] : buffer -> view<[%b]xi32>
+ %f0=scalar.constant 0.0 : f32
+ %int0=scalar.constant 0 : i32
+ %int1=scalar.constant 1 : i32
+ %c23=scalar.constant 23 : i32
+ %c255=scalar.constant 255 : i32
+ %absmask=scalar.constant 2147483647 : i32
+ %local_max,%local_bad=scf.for %base=[%i0 to %p step %step](%maximum=%int0 : i32,%errors=%int0 : i32)->(i32,i32) {
+  %col=index.add %base,%tid : index
+  %live=index.cmp ult,%col,%d : index
+  %safe0=scf.select %live,%col,%i0 : index
+  %c=index.assume %safe0 [range(%safe0,0,16383),lt(%safe0,%s)] : index
+  %v=view.load %iv[%q,%c] : view<[%b]x[%s]xf32> -> f32
+  %bits=scalar.bitcast %v : f32 to i32
+  %abs=scalar.andi %bits,%absmask : i32
+  %exp=scalar.shrui %abs,%c23 : i32
+  %invalid=scalar.cmpi eq,%exp,%c255 : i32
+  %bad=scalar.andi %live,%invalid : i1
+  %increment=scf.select %bad,%int1,%int0 : i32
+  %total=scalar.addi %errors,%increment : i32
+  %finite=scalar.cmpi ne,%exp,%c255 : i32
+  %eligible=scalar.andi %live,%finite : i1
+  %value=scf.select %eligible,%abs,%int0 : i32
+  %greater=scalar.cmpi ugt,%value,%maximum : i32
+  %next=scf.select %greater,%value,%maximum : i32
+  scf.yield %next,%total : i32,i32
+ }
+ %maxbits=kernel.workgroup.reduce<maxui> %local_max : i32
+ %errors=kernel.workgroup.reduce<addi> %local_bad : i32
+ %nonzero=scalar.cmpi ne,%maxbits,%int0 : i32
+ %finite=scalar.cmpi eq,%errors,%int0 : i32
+ %ok=scalar.andi %nonzero,%finite : i1
+ %max_exp=scalar.shrui %maxbits,%c23 : i32
+ %sum=scf.for %base=[%i0 to %p step %step](%acc=%f0 : f32)->(f32) {
+  %col=index.add %base,%tid : index
+  %live=index.cmp ult,%col,%d : index
+  %safe0=scf.select %live,%col,%i0 : index
+  %c=index.assume %safe0 [range(%safe0,0,16383),lt(%safe0,%s)] : index
+  %raw=view.load %iv[%q,%c] : view<[%b]x[%s]xf32> -> f32
+  %bits=scalar.bitcast %raw : f32 to i32
+  %scaled=template.apply<@query.scale>(%bits,%max_exp) : (i32,i32)->(f32)
+  %value=scf.select %live,%scaled,%f0 : f32
+  %square=scalar.mulf %value,%value : f32
+  %next=scalar.addf %acc,%square : f32
+  scf.yield %next : f32
+ }
+ %total=kernel.workgroup.reduce<addf> %sum : f32
+ %one=scalar.constant 1.0 : f32
+ %safe_total=scf.select %ok,%total,%one : f32
+ %length=scalar.sqrtf %safe_total : f32
+ scf.for %base=[%i0 to %p step %step] {
+  %col=index.add %base,%tid : index
+  %at=index.assume %col [range(%col,0,16383),lt(%col,%p)] : index
+  %live=index.cmp ult,%col,%d : index
+  %safe0=scf.select %live,%col,%i0 : index
+  %c=index.assume %safe0 [range(%safe0,0,16383),lt(%safe0,%s)] : index
+  %raw=view.load %iv[%q,%c] : view<[%b]x[%s]xf32> -> f32
+  %bits=scalar.bitcast %raw : f32 to i32
+  %scaled=template.apply<@query.scale>(%bits,%max_exp) : (i32,i32)->(f32)
+  %normalized=scalar.divf %scaled,%length : f32
+  %eligible=scalar.andi %live,%ok : i1
+  %value=scf.select %eligible,%normalized,%f0 : f32
+  view.store %value,%ov[%at,%q] : f32,view<[%p]x[%w]xf32>
+ }
+ %leader=index.cmp eq,%tid,%i0 : index
+ scf.if %leader {
+  %code=scf.select %ok,%int0,%int1 : i32
+  view.store %code,%st[%q] : i32,view<[%b]xi32>
+ }
+ kernel.return
+}

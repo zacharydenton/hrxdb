@@ -1,12 +1,12 @@
 //! Run explicitly with: cargo test --release --test gpu -- --ignored --test-threads=1
 use half::f16;
-use hrxdb::{FlatIndex, Neighbor, ScanConfig};
+use hrxdb::{Neighbor, ScanConfig, Searcher};
 
 #[test]
 #[ignore = "requires gfx1151"]
 fn index_moves_to_worker_after_query() -> hrxdb::Result<()> {
     let device = hrxdb::Device::open(0)?;
-    let mut db = FlatIndex::build(&device, 3, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])?;
+    let mut db = Searcher::build(&device, 3, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])?;
     assert_eq!(db.search(&[1.0, 0.0, 0.0], 1)?[0].id, 0);
     assert_eq!(
         db.search_batch(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0], 1)?[1][0].id,
@@ -32,7 +32,7 @@ fn index_moves_to_worker_after_query() -> hrxdb::Result<()> {
 fn batch_matches_individual_queries() -> hrxdb::Result<()> {
     let device = hrxdb::Device::open(0)?;
     let rows: Vec<_> = (0..2057).map(|i| row(i, 127)).collect();
-    let mut db = FlatIndex::build(&device, 127, &rows)?;
+    let mut db = Searcher::build(&device, 127, &rows)?;
     let queries: Vec<_> = (0..64).flat_map(|i| row(90_000 + i, 127)).collect();
     for count in [2, 8, 9, 16, 17, 32, 33, 60, 64, 3, 1] {
         for k in [1, 5, 32, 33, 1024] {
@@ -115,7 +115,7 @@ fn all_schedules_match_cpu() -> hrxdb::Result<()> {
     let device = hrx::Device::open(0)?;
     for dimensions in [1, 127, 384, 769] {
         let rows: Vec<_> = (0..1057).map(|i| row(i, dimensions)).collect();
-        let mut db = FlatIndex::build(&device, dimensions, &rows)?;
+        let mut db = Searcher::build(&device, dimensions, &rows)?;
         let query = row(88_888, dimensions);
         let expected = reference(&rows, &query);
         for config in ScanConfig::configurations() {
@@ -152,7 +152,7 @@ fn small_empty_invalid_and_ties() -> hrxdb::Result<()> {
     let device = hrx::Device::open(0)?;
     for n in [0, 1, 3, 31, 32, 33, 1023, 1024, 1025, 32769] {
         let rows = vec![vec![1.0, 0.0, 0.0]; n];
-        let mut db = FlatIndex::build(&device, 3, &rows)?;
+        let mut db = Searcher::build(&device, 3, &rows)?;
         assert_eq!(db.len(), n);
         for query in [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
             for k in [1, 10, 32, 33, 1000, 1024] {
@@ -171,7 +171,7 @@ fn small_empty_invalid_and_ties() -> hrxdb::Result<()> {
         assert!(db.search(&[1.0], 1).is_err());
     }
     for bad in [vec![0.0; 3], vec![f32::INFINITY; 3], vec![1.0; 2]] {
-        assert!(FlatIndex::build(&device, 3, [bad]).is_err());
+        assert!(Searcher::build(&device, 3, [bad]).is_err());
     }
     Ok(())
 }
@@ -194,7 +194,7 @@ fn fp16_ingestion_and_reusable_scores() -> hrxdb::Result<()> {
         .flatten()
         .flat_map(|&x| f16::from_f32(x).to_le_bytes())
         .collect();
-    let mut db = FlatIndex::build_fp16_with_config(
+    let mut db = Searcher::build_fp16_with_config(
         &device,
         3,
         bytes.as_chunks::<6>().0,
@@ -244,7 +244,7 @@ fn fp16_ingestion_and_reusable_scores() -> hrxdb::Result<()> {
         assert!(db.scores_into(&[1.0, 0.0, 0.0], &mut wrong).is_err());
         assert!(wrong.iter().all(|&x| x == 42.0));
     }
-    let mut empty = FlatIndex::build_fp16(&device, 3, std::iter::empty::<&[u8]>())?;
+    let mut empty = Searcher::build_fp16(&device, 3, std::iter::empty::<&[u8]>())?;
     empty.scores_into(&[1.0, 0.0, 0.0], &mut [])?;
     assert!(empty.scores(&[1.0, 0.0, 0.0])?.is_empty());
     assert!(empty.scores_into(&[0.0; 3], &mut []).is_err());
@@ -254,7 +254,7 @@ fn fp16_ingestion_and_reusable_scores() -> hrxdb::Result<()> {
         vec![0; 7],
         vec![0, 0x7c, 0, 0, 0, 0],
     ] {
-        assert!(FlatIndex::build_fp16(&device, 3, [bad]).is_err());
+        assert!(Searcher::build_fp16(&device, 3, [bad]).is_err());
     }
     Ok(())
 }
@@ -268,7 +268,7 @@ fn ten_million_rows_cross_four_gib() -> hrxdb::Result<()> {
     let crossing = (1usize << 32) / (D * 2);
     let special = [crossing - 1, crossing, crossing + 1, N - 1];
     let device = hrx::Device::open(0)?;
-    let mut db = FlatIndex::build(
+    let mut db = Searcher::build(
         &device,
         D,
         (0..N).map(|i| {
@@ -299,7 +299,7 @@ fn ten_million_rows_cross_four_gib() -> hrxdb::Result<()> {
 fn exclusions_compose_with_large_k_and_reset_between_queries() -> hrxdb::Result<()> {
     let device = hrxdb::Device::open(0)?;
     let rows: Vec<_> = (0..4099).map(|i| row(i, 3)).collect();
-    let mut db = FlatIndex::build(&device, 3, &rows)?;
+    let mut db = Searcher::build(&device, 3, &rows)?;
     let query = [1.0, -2.0, 3.0];
     let scores = db.scores(&query)?;
     let mut ranked: Vec<_> = scores
@@ -353,7 +353,7 @@ fn exclusions_compose_with_large_k_and_reset_between_queries() -> hrxdb::Result<
     assert!(db.search_excluding(&query, 0, &[]).is_err());
     assert!(db.search_excluding(&query, 1025, &[]).is_err());
     assert_eq!(db.search(&query, 32)?, ranked[..32]);
-    let mut empty = FlatIndex::build(&device, 3, std::iter::empty::<[f32; 3]>())?;
+    let mut empty = Searcher::build(&device, 3, std::iter::empty::<[f32; 3]>())?;
     assert!(empty.search_excluding(&query, 1024, &[])?.is_empty());
     assert!(empty.search_excluding(&query, 1, &[0]).is_err());
     Ok(())
@@ -367,7 +367,7 @@ fn faces_corpus_shards_past_two_to_32_elements() -> hrxdb::Result<()> {
     let boundary = (1usize << 32) / D;
     let special = [boundary - 1, boundary, boundary + 1, N - 1];
     let device = hrxdb::Device::open(0)?;
-    let mut db = FlatIndex::build_fp16(
+    let mut db = Searcher::build_fp16(
         &device,
         D,
         (0..N).map(|i| {

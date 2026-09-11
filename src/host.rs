@@ -14,8 +14,8 @@ pub(crate) struct HostBuffer {
 
 // SAFETY: this wrapper uniquely owns its allocation and driver registration.
 // Moving it transfers ownership without moving the backing pages or accessing
-// them. Buffer itself is Send. Host accesses require exclusive FlatIndex access
-// and completion of its stream; FlatIndex also synchronizes before destruction.
+// them. Buffer itself is Send. Host accesses require exclusive Searcher access
+// and completion of its stream; Searcher also synchronizes before destruction.
 // This does not implement Sync: sharing host access would need a separate proof.
 unsafe impl Send for HostBuffer where Buffer: Send {}
 
@@ -34,7 +34,7 @@ impl HostBuffer {
         let pointer = NonNull::new(unsafe { alloc_zeroed(layout) })
             .ok_or_else(|| crate::invalid("host allocation failed"))?;
         // SAFETY: page-aligned owned memory is held until the imported Buffer is
-        // destroyed. FlatIndex synchronizes before every host access and on drop.
+        // destroyed. Searcher synchronizes before every host access and on drop.
         let imported = unsafe { stream.import_host(pointer.as_ptr().cast(), size) };
         match imported {
             Ok(buffer) => Ok(Self {

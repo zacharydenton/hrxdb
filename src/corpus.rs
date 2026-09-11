@@ -1,55 +1,37 @@
-//! Borrowed access to the resident corpus for application-owned GPU kernels.
-use crate::{FlatIndex, Result};
+//! Shared ownership and borrowed bindings for immutable GPU vector storage.
+use crate::{Device, Result, ScanConfig, Searcher, Shard};
 use hrx::{Stream, View};
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
-/// A borrowed, zero-copy view of the vectors owned by a [`FlatIndex`].
+/// Cheaply cloned, immutable GPU-resident FP16 corpus. Clones share allocations.
 ///
-/// Rows retain their insertion order across contiguous, nonoverlapping shards.
-/// The stored representation is row-major little-endian FP16, with zero padding
-/// to [`padded_dimensions`](Self::padded_dimensions). Each row has an FP32
-/// inverse norm computed from its stored FP16 values. [`FlatIndex::build`]
-/// normalizes before quantization; [`FlatIndex::build_fp16`] preserves the
-/// supplied FP16 values. Neither accessor reconstructs the original FP32 input.
-/// Shard bindings include readable slack after their logical rows; see
-/// [`CorpusShardView::capacity_rows`]. Slack is not indexed corpus data.
-///
-/// # Execution and access contract
-///
-/// Corpus uploads complete before construction returns. Create a caller-owned
-/// stream on the corpus's device with [`Self::stream`] or [`FlatIndex::stream`].
-/// The original construction-time [`crate::Device`] handle need not be retained.
-/// The caller owns kernel compilation, side arrays, output buffers, and
-/// execution/completion; acquiring a view performs no allocation or GPU work.
-/// This view does not expose or synchronize the index's search workspace.
-///
-/// Treat vector and inverse-norm bindings as **read-only**. HRX's [`View`] type
-/// does not enforce this restriction: uploading, filling, or dispatching writes
-/// to them is unsupported and invalidates the index's data invariants. The
-/// ordinary safety requirements of [`hrx::Stream::dispatch`] still apply.
-///
-/// Bindings borrow the index. Rust lifetimes do not wait for asynchronous GPU
-/// work; callers must manage completion using HRX. The custom-kernel example
-/// completes its stream before returning its results.
-///
-/// A binding cannot outlive the index that owns it:
+/// A corpus is Send + Sync. Independent searchers own their own streams and
+/// workspace. Replacing a snapshot leaves old clones and in-flight users valid.
+/// Logical rows are insertion-ordered, zero-padded FP16 with FP32 inverse norms.
+/// Treat exported bindings as read-only; HRX does not enforce write protection.
+/// Callers own synchronization for their custom kernels. Construction completes
+/// uploads before returning. Borrowed bindings may not outlive the corpus.
 ///
 /// ```compile_fail
-/// fn escape(index: hrxdb::FlatIndex) -> hrx::View<'static> {
-///     index.corpus().shards().next().unwrap().vectors()
+/// # use hrxdb::Corpus;
+/// fn dangling(corpus: Corpus) -> hrx::View<'static> {
+///     corpus.shards().next().unwrap().vectors()
 /// }
 /// ```
-#[derive(Clone, Copy)]
-pub struct CorpusView<'a> {
-    index: &'a FlatIndex,
+#[derive(Clone)]
+pub struct Corpus {
+    pub(crate) inner: Arc<CorpusStorage>,
 }
-
-/// Borrowed bindings for one contiguous range of corpus insertion IDs.
-///
-/// Both bindings start at local row zero. Use [`row_range`](Self::row_range)
-/// to align application side arrays or convert local rows to global IDs.
-/// Shard boundaries are storage details and may split application groups.
-/// See [`CorpusView`] for the read-only and execution contract.
+pub(crate) struct CorpusStorage {
+    pub(crate) device: Device,
+    pub(crate) device_id: usize,
+    pub(crate) shards: Vec<Shard>,
+    pub(crate) dimensions: usize,
+    pub(crate) padded: usize,
+    pub(crate) count: usize,
+}
+/// Borrowed bindings for a contiguous range of insertion IDs. Bindings include
+/// readable slack; only rows in `row_range()` are corpus data.
 #[derive(Clone, Copy, Debug)]
 pub struct CorpusShardView<'a> {
     vectors: View<'a>,
@@ -58,176 +40,82 @@ pub struct CorpusShardView<'a> {
     count: usize,
     capacity: usize,
 }
-
-impl FlatIndex {
-    /// Create an independent HRX stream on this index's device.
-    ///
-    /// The index retains the device selection supplied at construction, so the
-    /// original [`crate::Device`] handle may already have been dropped. Use the
-    /// returned stream's [`target`](Stream::target) when configuring a compiler.
-    ///
-    /// Every call creates a new stream. Reuse it for repeated custom operations;
-    /// it owns its resources and can outlive the index. Corpus bindings still
-    /// borrow the index. This does not expose the internal search stream or
-    /// workspace, synchronize searches, or copy corpus data. The caller owns
-    /// ordering and completion of work submitted to the returned stream.
-    ///
-    /// # Errors
-    /// Returns an error if HRX cannot create a stream on the selected device.
-    ///
-    /// ```no_run
-    /// use hrxdb::{Device, FlatIndex};
-    /// # fn main() -> hrxdb::Result<()> {
-    /// let index = {
-    ///     let device = Device::open(0)?;
-    ///     FlatIndex::build(&device, 3, [[1.0, 2.0, 3.0]])?
-    /// };
-    /// let mut stream = index.stream()?;
-    /// let compiler_options = hrx::loom::CompilerOptions {
-    ///     target: stream.target().clone(),
-    ///     ..Default::default()
-    /// };
-    /// // Compile and bind a custom kernel to `index.corpus()` on this stream.
-    /// stream.synchronize()?;
-    /// # Ok(())
-    /// # }
-    /// ```
+impl Corpus {
+    /// Create an independent stream on this corpus's device.
     pub fn stream(&self) -> Result<Stream> {
-        self.device.stream()
+        self.inner.device.stream()
     }
-
-    /// Borrow the resident FP16 corpus for custom GPU computations.
-    ///
-    /// This allocates no storage and performs no copy, compilation, or GPU work.
-    /// See [`CorpusView`] for layout, normalization, and execution requirements.
-    ///
-    /// ```no_run
-    /// use hrxdb::{Device, FlatIndex};
-    /// # fn main() -> hrxdb::Result<()> {
-    /// let device = Device::open(0)?;
-    /// let index = FlatIndex::build(&device, 3, [[1.0, 2.0, 3.0]])?;
-    /// let corpus = index.corpus();
-    /// for shard in corpus.shards() {
-    ///     let rows = shard.row_range();
-    ///     assert!(shard.capacity_rows() >= rows.len());
-    ///     assert_eq!(shard.vectors().len(), shard.capacity_rows() * corpus.padded_dimensions() * 2);
-    ///     assert_eq!(shard.inverse_norms().len(), shard.capacity_rows() * 4);
-    ///     // Bind these views to a custom kernel on `corpus.stream()?`.
-    ///     // Side arrays use the global insertion IDs in `rows`.
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn corpus(&self) -> CorpusView<'_> {
-        CorpusView { index: self }
+    /// Create an independent search workspace sharing this corpus's allocations.
+    pub fn searcher(&self) -> Result<Searcher> {
+        Searcher::new(self.clone())
     }
-}
-
-impl<'a> CorpusView<'a> {
-    /// Create an independent HRX stream on the device that owns this corpus.
-    ///
-    /// Equivalent to [`FlatIndex::stream`]. The returned stream is owned, does
-    /// not borrow this view or the index, and provides the compiler target via
-    /// [`Stream::target`]. Reuse it across custom operations when possible.
-    ///
-    /// # Errors
-    /// Returns an error if HRX cannot create a stream on the selected device.
-    pub fn stream(&self) -> Result<Stream> {
-        self.index.stream()
+    /// Create a searcher with a chosen single-query scan schedule.
+    pub fn searcher_with_config(&self, config: ScanConfig) -> Result<Searcher> {
+        Searcher::with_config(self.clone(), config)
     }
-
-    /// Total number of indexed vectors across all shards.
+    /// Number of logical vectors.
     pub fn len(&self) -> usize {
-        self.index.len()
+        self.inner.count
     }
-
-    /// Whether the corpus has no rows (and no exposed shards).
+    /// Whether this corpus has no rows.
     pub fn is_empty(&self) -> bool {
-        self.index.is_empty()
+        self.len() == 0
     }
-
-    /// Logical vector length supplied at construction.
+    /// Logical vector dimension.
     pub fn dimensions(&self) -> usize {
-        self.index.dimensions()
+        self.inner.dimensions
     }
-
-    /// Stored row stride in FP16 elements, including zero padding.
-    ///
-    /// Multiply by two for the row stride in bytes. Padding rounds the logical
-    /// dimension up to a multiple of 128.
+    /// Row stride in FP16 elements, including zero padding to a multiple of 128.
     pub fn padded_dimensions(&self) -> usize {
-        self.index.padded_dimensions()
+        self.inner.padded
     }
-
-    /// Iterate over nonempty shards in increasing insertion-ID order.
-    ///
-    /// The ranges partition `0..self.len()` without gaps. An empty corpus yields
-    /// no shards. Iteration creates borrowed descriptors without allocating.
-    /// Bindings borrow the index, so they can outlive this descriptor/iterator.
-    pub fn shards(&self) -> impl ExactSizeIterator<Item = CorpusShardView<'a>> + 'a {
-        let index = self.index;
-        index.shards[..index.shard_count()]
-            .iter()
-            .map(move |shard| CorpusShardView {
-                vectors: shard.data.binding(),
-                inverse_norms: shard.norms.binding(),
-                start: shard.start,
-                count: shard.count,
-                capacity: shard.capacity,
-            })
+    /// Nonempty storage shards in insertion order, partitioning `0..len()`.
+    pub fn shards(&self) -> impl ExactSizeIterator<Item = CorpusShardView<'_>> {
+        self.inner.shards.iter().map(|s| CorpusShardView {
+            vectors: s.data.binding(),
+            inverse_norms: s.norms.binding(),
+            start: s.start,
+            count: s.count,
+            capacity: s.capacity,
+        })
     }
 }
-
+impl Searcher {
+    /// Shared immutable storage. Clone this handle to retain a snapshot or build
+    /// another searcher without copying vectors.
+    pub fn corpus(&self) -> &Corpus {
+        &self.corpus
+    }
+    /// This searcher's ordered execution stream. Use it to submit producers or
+    /// consumers around device search. Do not replace or synchronize other queues
+    /// implicitly; use HRX events for cross-stream dependencies.
+    pub fn stream(&mut self) -> &mut Stream {
+        &mut self.stream
+    }
+}
 impl<'a> CorpusShardView<'a> {
-    /// Global insertion IDs covered by this shard, with an exclusive end.
+    /// Global insertion IDs, with an exclusive end.
     pub fn row_range(&self) -> Range<usize> {
         self.start..self.start + self.count
     }
-
-    /// Number of rows that may be read from both corpus bindings.
-    ///
-    /// At least [`row_range`](Self::row_range)`().len()`, rounded up to a
-    /// multiple of 256. Vector and inverse-norm bindings include this entire
-    /// capacity, and the vector capacity still fits within 2^32 FP16 elements.
-    ///
-    /// Rows at or beyond the logical row count are **not corpus data**. Their
-    /// contents are unspecified: mask them by local row index before reduction
-    /// or selection, even if they happen to contain zeros. They have no global
-    /// insertion IDs. Caller-owned side arrays must also cover every row a
-    /// kernel reads, or guard those loads separately.
-    ///
-    /// Tiles up to 256 rows whose size divides 256 can read the rounded-up final
-    /// tile in full. For other tile sizes, check that the tile's exclusive end
-    /// is no greater than this capacity; larger tiles are not guaranteed to fit.
+    /// Readable rows in both bindings, a multiple of 256 and at least the logical
+    /// count. Extra rows have unspecified contents and must be masked before
+    /// reduction/selection. Caller side arrays must also cover their own reads.
+    /// Capacity times padded dimensions is at most 2^32 FP16 elements.
     pub fn capacity_rows(&self) -> usize {
         self.capacity
     }
-
-    /// Read-only row-major FP16 vector binding, starting at local row zero.
-    ///
-    /// Its byte length is `capacity_rows() * corpus.padded_dimensions() * 2`.
-    /// Logical rows contain little-endian IEEE binary16 with zero dimension
-    /// padding. Extra rows have unspecified contents; see [`Self::capacity_rows`].
-    /// HRX does not enforce read-only access; see [`CorpusView`]'s contract.
+    /// Read-only little-endian FP16, row-major, including readable row slack.
+    /// Logical rows have zero dimension padding. Length is capacity*stride*2 bytes.
     pub fn vectors(&self) -> View<'a> {
         self.vectors
     }
-
-    /// Read-only FP32 inverse-norm binding, starting at local row zero.
-    ///
-    /// Contains `capacity_rows()` little-endian FP32 values; only the first
-    /// `row_range().len()` describe corpus rows. Extra values are unspecified.
-    /// For logical local row `r`, multiply its FP32 dot product with a unit
-    /// query by element `r`
-    /// to obtain cosine similarity over the stored vector. For an unnormalized
-    /// query, also divide by the query's norm. Accumulation order can affect
-    /// rounding relative to built-in search; scores are not clamped.
-    /// HRX does not enforce read-only access; see [`CorpusView`]'s contract.
+    /// Read-only little-endian FP32 inverse norms, one per capacity row. Only
+    /// logical rows have defined values. Multiply a unit-query dot by this norm.
     pub fn inverse_norms(&self) -> View<'a> {
         self.inverse_norms
     }
 }
-
 #[cfg(test)]
 #[path = "../examples/support/album_scores.rs"]
 mod album_example;
@@ -255,15 +143,15 @@ mod tests {
                             .flat_map(|v| f16::from_f32(v).to_le_bytes())
                             .collect::<Vec<_>>()
                     });
-                    FlatIndex::build_fp16(&device, 3, rows)?
+                    Searcher::build_fp16(&device, 3, rows)?
                 } else {
-                    FlatIndex::build(&device, 3, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])?
+                    Searcher::build(&device, 3, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])?
                 };
                 let identity = index.stream.device_id();
                 (index, identity)
             }; // The original Device is gone before either public API is used.
             std::thread::spawn(move || -> Result<()> {
-                let mut first = index.stream()?;
+                let mut first = index.corpus().stream()?;
                 let second = index.corpus().stream()?;
                 assert_eq!(first.device_id(), expected_device);
                 assert_eq!(second.device_id(), expected_device);
@@ -278,7 +166,7 @@ mod tests {
                 assert_eq!(bytes, f16::ONE.to_le_bytes());
                 drop(second);
                 let scores =
-                    album_example::best_by_album(index.corpus(), &[0, 1], 2, &[1.0, 0.0, 0.0])?;
+                    album_example::best_by_album(&index.corpus, &[0, 1], 2, &[1.0, 0.0, 0.0])?;
                 assert_eq!(scores, [vec![1.0, 0.0]]);
                 assert_eq!(index.search(&[1.0, 0.0, 0.0], 1)?[0].id, 0);
                 drop(index);
@@ -325,7 +213,7 @@ mod tests {
                                 .collect()
                         })
                         .collect();
-                    FlatIndex::build_encoded(
+                    Searcher::build_encoded(
                         &device,
                         d,
                         &bytes,
@@ -334,7 +222,7 @@ mod tests {
                         |r, d, p, bytes| encode_fp16(r, d, p, bytes),
                     )?
                 } else {
-                    FlatIndex::build_encoded(
+                    Searcher::build_encoded(
                         &device,
                         d,
                         &rows,
@@ -425,7 +313,7 @@ mod tests {
         for n in [1, 255, 256, 257, 256 + 201, 2 * 257 + 55] {
             let mut rows = vec![[-1.0, 0.0, 0.0]; n];
             rows[n - 1] = [-0.6, -0.8, 0.0]; // Unique best, still negative.
-            let mut index = FlatIndex::build_encoded(
+            let mut index = Searcher::build_encoded(
                 &device,
                 3,
                 &rows,
@@ -437,7 +325,7 @@ mod tests {
             // Test-only writes to slack make an unmasked row beat every real
             // score. The public API promises no particular slack contents.
             let mut writer = device.stream()?;
-            for shard in &index.shards {
+            for shard in &index.corpus.inner.shards {
                 let extra = shard.capacity - shard.count;
                 if extra == 0 {
                     continue;
@@ -464,7 +352,7 @@ mod tests {
             assert_eq!(scores.len(), n);
             let expected = scores[n - 1];
             assert!(expected < 0.0);
-            let grouped = album_example::best_by_album(index.corpus(), &vec![0; n], 2, &query)?;
+            let grouped = album_example::best_by_album(&index.corpus, &vec![0; n], 2, &query)?;
             assert!(
                 (grouped[0][0] - expected).abs() < 3e-6,
                 "n={n}: {grouped:?}"
@@ -496,7 +384,7 @@ mod tests {
     #[ignore = "requires gfx1151"]
     fn empty_corpus_exposes_no_shards() -> Result<()> {
         let device = Device::open(0)?;
-        let index = FlatIndex::build(&device, 3, std::iter::empty::<[f32; 3]>())?;
+        let index = Searcher::build(&device, 3, std::iter::empty::<[f32; 3]>())?;
         let corpus = index.corpus();
         assert_eq!(corpus.len(), 0);
         assert!(corpus.is_empty());

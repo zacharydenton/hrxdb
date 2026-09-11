@@ -1,0 +1,68 @@
+// Validate resident FP16 logical rows and dimension padding, computing norms
+// without transferring vectors to the host. One status counter per import.
+amdgpu.target<gfx1151> @target {subgroup_size = 32}
+config.decl @import.rows : %v:index where [range(%v,1,1073741824)]
+config.decl @import.dimensions : %v:index where [range(%v,1,16384)]
+config.decl @import.padded : %v:index where [range(%v,128,16384),mul(%v,128)]
+kernel.def target(@target) export("import_corpus") @import_corpus() {
+ %one=index.constant 1 : index
+ %threads=index.constant 128 : index
+ %rows=config.get @import.rows : index
+ kernel.launch.config workgroups(%rows,%one,%one) workgroup_size(%threads,%one,%one) : index
+} launch(%vectors:buffer,%norms:buffer,%status:buffer) {
+ %zero=index.constant 0 : offset
+ %i0=index.constant 0 : index
+ %step=index.constant 128 : index
+ %n=config.get @import.rows : index
+ %d=config.get @import.dimensions : index
+ %p=config.get @import.padded : index
+ %r0=kernel.workgroup.id<x> : index
+ %r=index.assume %r0 [range(%r0,0,1073741823),lt(%r0,%n)] : index
+ %tid=kernel.workitem.id<x> : index
+ %vv=buffer.view %vectors[%zero] : buffer -> view<[%n]x[%p]xf16>
+ %nv=buffer.view %norms[%zero] : buffer -> view<[%n]xf32>
+ %st=buffer.view %status[%zero] : buffer -> view<1xi32>
+ %int0=scalar.constant 0 : i32
+ %int1=scalar.constant 1 : i32
+ %f0=scalar.constant 0.0 : f32
+ %f032=scalar.constant 0.0 : f32
+ %exp=scalar.constant 2139095040 : i32
+ %sum,%bad=scf.for %base=[%i0 to %p step %step](%acc=%f0 : f32,%invalid=%int0 : i32)->(f32,i32) {
+  %c0=index.add %base,%tid : index
+  %c=index.assume %c0 [range(%c0,0,16383),lt(%c0,%p)] : index
+  %h=view.load %vv[%r,%c] : view<[%n]x[%p]xf16> -> f16
+  %v=scalar.extf %h : f16 to f32
+  %bits=scalar.bitcast %v : f32 to i32
+  %e=scalar.andi %bits,%exp : i32
+  %finite=scalar.cmpi ne,%e,%exp : i32
+  %logical=index.cmp ult,%c,%d : index
+  %iszero=scalar.cmpf oeq,%v,%f032 : f32
+  %padding_ok=scalar.ori %logical,%iszero : i1
+  %ok=scalar.andi %finite,%padding_ok : i1
+  %square=scalar.mulf %v,%v : f32
+  %safe=scf.select %ok,%square,%f0 : f32
+  %error=scf.select %ok,%int0,%int1 : i32
+  %next=scalar.addf %acc,%safe : f32
+  %errs=scalar.addi %invalid,%error : i32
+  scf.yield %next,%errs : f32,i32
+ }
+ %total=kernel.workgroup.reduce<addf> %sum : f32
+ %errors=kernel.workgroup.reduce<addi> %bad : i32
+ %nonzero=scalar.cmpf ogt,%total,%f0 : f32
+ %finite=scalar.cmpi eq,%errors,%int0 : i32
+ %ok=scalar.andi %nonzero,%finite : i1
+ %leader=index.cmp eq,%tid,%i0 : index
+ scf.if %leader {
+  %one64=scalar.constant 1.0 : f32
+  %safe=scf.select %ok,%total,%one64 : f32
+  %length=scalar.sqrtf %safe : f32
+  %inverse=scalar.divf %one64,%length : f32
+  view.store %inverse,%nv[%r] : f32,view<[%n]xf32>
+  %error=scf.select %ok,%int0,%int1 : i32
+  %failed=scalar.cmpi ne,%error,%int0 : i32
+  scf.if %failed {
+   view.atomic.reduce<addi> %error,%st[%i0] {ordering = relaxed, scope = device} : i32,view<1xi32>
+  }
+ }
+ kernel.return
+}
