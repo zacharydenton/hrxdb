@@ -259,6 +259,27 @@ fn fp16_ingestion_and_reusable_scores() -> hrxdb::Result<()> {
     Ok(())
 }
 
+// Reuse the large resident corpora to check gather addressing past 4/8 GiB.
+fn check_boundary_gather(corpus: &hrxdb::Corpus, special: &[usize; 4]) -> hrxdb::Result<()> {
+    let order = [3, 1, 0, 2, 3];
+    let ids = order.map(|i| special[i] as u32);
+    let mut stream = corpus.stream()?;
+    let bytes = ids.len() * corpus.dimensions() * 4;
+    let output = stream.allocate(bytes)?;
+    let _done = corpus.gather_into(&mut stream, &ids, output.binding())?;
+    let mut actual = vec![0; bytes];
+    stream.read_blocking(output.binding(), &mut actual)?;
+    for (values, source) in actual.chunks_exact(corpus.dimensions() * 4).zip(order) {
+        for (column, value) in values.as_chunks::<4>().0.iter().enumerate() {
+            assert_eq!(
+                f32::from_le_bytes(*value),
+                if column == source + 1 { 1.0 } else { 0.0 }
+            );
+        }
+    }
+    Ok(())
+}
+
 #[test]
 #[ignore = "requires gfx1151, allocates 7.8 GB"]
 fn ten_million_rows_cross_four_gib() -> hrxdb::Result<()> {
@@ -278,6 +299,7 @@ fn ten_million_rows_cross_four_gib() -> hrxdb::Result<()> {
             v
         }),
     )?;
+    check_boundary_gather(db.corpus(), &special)?;
     for (j, &id) in special.iter().enumerate() {
         let mut query = [0.0; D];
         query[j + 1] = 1.0;
@@ -379,6 +401,7 @@ fn faces_corpus_shards_past_two_to_32_elements() -> hrxdb::Result<()> {
     )?;
     assert_eq!(db.shard_count(), 2);
     db.reserve_search(1024)?;
+    check_boundary_gather(db.corpus(), &special)?;
     for (j, &id) in special.iter().enumerate() {
         let mut query = [0.0; D];
         query[j + 1] = 1.0;

@@ -1,0 +1,51 @@
+// One workgroup copies one requested row. Host routing resolves storage shards
+// and assigns unique destinations; only named logical components are read.
+amdgpu.target<gfx1151> @target {subgroup_size = 32}
+config.decl @gather.dimensions : %v:index where [range(%v,1,16384)]
+config.decl @gather.padded : %v:index where [range(%v,128,16384),mul(%v,128)]
+config.decl @gather.input_limit : %v:index where [range(%v,1,1073741824)]
+config.decl @gather.output_limit : %v:index where [range(%v,1,1073741824)]
+kernel.def target(@target) export("gather") @gather(%count_arg:i32) {
+  %one=index.constant 1 : index
+  %threads=index.constant 128 : index
+  %raw=index.cast %count_arg : i32 to index
+  %count=index.assume %raw [range(%raw,1,1073741824)] : index
+  kernel.launch.config workgroups(%count,%one,%one) workgroup_size(%threads,%one,%one) : index
+} launch(%count_arg:i32,%rows_arg:i32,%output_arg:i32,%vectors:buffer,%norms:buffer,%routing:buffer,%output:buffer) {
+  %zero=index.constant 0 : offset
+  %i0=index.constant 0 : index
+  %i1=index.constant 1 : index
+  %step=index.constant 128 : index
+  %d=config.get @gather.dimensions : index
+  %p=config.get @gather.padded : index
+  %input_limit=config.get @gather.input_limit : index
+  %output_limit=config.get @gather.output_limit : index
+  %n0=index.cast %count_arg : i32 to index
+  %n=index.assume %n0 [range(%n0,1,1073741824)] : index
+  %rows0=index.cast %rows_arg : i32 to index
+  %rows=index.assume %rows0 [range(%rows0,1,1073741824),le(%rows0,%input_limit)] : index
+  %out0=index.cast %output_arg : i32 to index
+  %out=index.assume %out0 [range(%out0,1,1073741824),le(%out0,%output_limit)] : index
+  %group0=kernel.workgroup.id<x> : index
+  %group=index.assume %group0 [range(%group0,0,1073741823),lt(%group0,%n)] : index
+  %tid=kernel.workitem.id<x> : index
+  %rv=buffer.view %routing[%zero] : buffer -> view<[%n]x2xi32>
+  %vv=buffer.view %vectors[%zero] : buffer -> view<[%rows]x[%p]xf16>
+  %nv=buffer.view %norms[%zero] : buffer -> view<[%rows]xf32>
+  %ov=buffer.view %output[%zero] : buffer -> view<[%out]x[%d]xf32>
+  %id=view.load %rv[%group,%i0] : view<[%n]x2xi32> -> i32
+  %dest=view.load %rv[%group,%i1] : view<[%n]x2xi32> -> i32
+  %r0=index.cast %id : i32 to index
+  %r=index.assume %r0 [range(%r0,0,1073741823),lt(%r0,%rows)] : index
+  %dest0=index.cast %dest : i32 to index
+  %at=index.assume %dest0 [range(%dest0,0,1073741823),lt(%dest0,%out)] : index
+  %inverse=view.load %nv[%r] : view<[%rows]xf32> -> f32
+  scf.for %col=[%tid to %d step %step] {
+    %c=index.assume %col [range(%col,0,16383),lt(%col,%d),lt(%col,%p)] : index
+    %h=view.load %vv[%r,%c] : view<[%rows]x[%p]xf16> -> f16
+    %v=scalar.extf %h : f16 to f32
+    %normalized=scalar.mulf %v,%inverse : f32
+    view.store %normalized,%ov[%at,%c] : f32,view<[%out]x[%d]xf32>
+  }
+  kernel.return
+}

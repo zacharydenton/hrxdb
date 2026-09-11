@@ -160,3 +160,67 @@ fn compare_batch_scan() -> Result<()> {
     }
     Ok(())
 }
+
+/// Compare production tile sizes on one shared corpus and workspace.
+#[test]
+#[ignore = "requires gfx1151; run alone to measure performance"]
+fn compare_batch_tiles() -> Result<()> {
+    let rows = var("ROWS", 6_909_092);
+    let dim = var("DIM", 384);
+    let batch = var("BATCH", 60);
+    let k = var("K", 5);
+    let samples = var("SAMPLES", 15);
+    assert!(rows > 0 && samples > 0 && (2..=64).contains(&batch));
+    let device = Device::open(0)?;
+    let mut db = Searcher::build(&device, dim, (0..rows).map(|i| row(i as u32, dim)))?;
+    db.reserve_batch(batch, k)?;
+    let tiles = [16_384, 32_768, 65_536, 131_072, 262_144];
+    let mut times = vec![Vec::new(); tiles.len()];
+    for iteration in 0..samples + 3 {
+        let queries: Vec<_> = (0..batch)
+            .flat_map(|q| row((rows + 888 + iteration * batch + q) as u32, dim))
+            .collect();
+        let mut reference: Option<Vec<Vec<Neighbor>>> = None;
+        // Rotate first/last positions so drift is shared by every variant.
+        for position in 0..tiles.len() {
+            let index = (position + iteration) % tiles.len();
+            db.batch.as_mut().unwrap().tile_rows = rows.min(tiles[index]);
+            let clock = Instant::now();
+            let got = db.search_batch(&queries, k)?;
+            if iteration >= 3 {
+                times[index].push(clock.elapsed().as_secs_f64() * 1000.0);
+            }
+            if let Some(expected) = &reference {
+                assert_eq!(got.len(), expected.len());
+                for (a, b) in got.iter().zip(expected) {
+                    assert_eq!(a.len(), b.len());
+                }
+                for (a, b) in got.iter().flatten().zip(expected.iter().flatten()) {
+                    assert_eq!(a.id, b.id, "tile size changed ranking");
+                    assert_eq!(
+                        a.similarity.to_bits(),
+                        b.similarity.to_bits(),
+                        "tile size changed score"
+                    );
+                }
+            } else {
+                reference = Some(got);
+            }
+        }
+    }
+    let variants: Vec<_> = tiles.iter().zip(&times).map(|(&tile_rows, samples_ms)| {
+        let median_ms = median(samples_ms);
+        println!("tile rows {tile_rows}: {median_ms:.3} ms");
+        serde_json::json!({"tile_rows": tile_rows, "median_ms": median_ms, "samples_ms": samples_ms})
+    }).collect();
+    let report = serde_json::json!({
+        "rows": rows, "dimensions": dim, "batch": batch, "k": k,
+        "warmups": 3, "samples": samples, "variants": variants,
+        "scores_bitwise_equal": true, "ids_equal": true,
+        "timing": "Host completion; changing queries and rotating variant order on one corpus. Compilation and ingestion excluded. Same workspace capacity for every tile size. GPU clocks and other system activity were not controlled.",
+    });
+    if let Ok(path) = std::env::var("OUTPUT") {
+        std::fs::write(path, serde_json::to_string_pretty(&report)?)?;
+    }
+    Ok(())
+}

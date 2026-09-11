@@ -17,7 +17,7 @@ impl<'a> DeviceQueries<'a> {
     /// Validate a 0..=64 query batch, dimensions 1..=16384, and row stride between
     /// dimensions and 16384. The binding must cover batch*stride FP32 elements.
     pub fn new(values: View<'a>, batch: usize, dimensions: usize, stride: usize) -> Result<Self> {
-        if batch > 64
+        if batch > MAX_BATCH
             || !(1..=MAX_DIMENSIONS).contains(&dimensions)
             || stride < dimensions
             || stride > MAX_DIMENSIONS
@@ -43,7 +43,7 @@ impl Searcher {
     /// First use can allocate/compile and wait while replacing host-imported
     /// batch workspace. Fully reserved device submissions perform no host wait.
     pub fn reserve_device(&mut self, batch: usize, k: usize) -> Result<()> {
-        if batch > 64 || !(1..=MAX_K).contains(&k) {
+        if batch > MAX_BATCH || !(1..=MAX_K).contains(&k) {
             return Err(invalid("invalid device search shape"));
         }
         if batch == 0 {

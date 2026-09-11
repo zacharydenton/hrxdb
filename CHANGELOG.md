@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add asynchronous `Corpus::gather_into` for ordered, duplicate-preserving
+  gathers of named rows into compact normalized FP32 device matrices. Resolve
+  shards internally, cache kernels across clones, and reuse stream-owned ID
+  scratch without vector readback. Include a custom subset-comparison example.
+- Expose `MAX_K`, `MAX_BATCH`, and corpus/shard `capacity_range()` accessors for
+  consistent application limits and side-array extents, including interior slack.
+
 - Reduce batch-scan register and shared-memory use with FP16 corpus staging
   and per-column scheduling fences. Preserve FP32 queries, accumulation order,
   and scores; add an interleaved predecessor comparison and narrow-tail checks.

@@ -1,7 +1,6 @@
 //! Tiled batch queries with bounded device score storage and running top-k.
 use super::*;
 
-const MAX_BATCH: usize = 64;
 const TILE_ROWS: usize = 262_144;
 
 pub(crate) struct BatchScratch {

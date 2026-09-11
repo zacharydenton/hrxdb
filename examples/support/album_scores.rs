@@ -69,11 +69,7 @@ pub fn score_by_album(
     // The global side array must also cover the last tile of every binding.
     // Interior slack may overlap later logical rows; the kernel masks by its
     // shard-local row count, independently of the ordinal's value.
-    let ordinal_capacity = corpus
-        .shards()
-        .map(|shard| shard.row_range().start + shard.capacity_rows())
-        .max()
-        .unwrap();
+    let ordinal_capacity = corpus.capacity_range().end;
     let album_buffer = stream.allocate(ordinal_capacity * 4)?;
     let query_buffer = stream.allocate(query_bytes.len())?;
     let mut album_bytes: Vec<_> = ordinals.iter().flat_map(|id| id.to_le_bytes()).collect();

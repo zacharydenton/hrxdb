@@ -14,7 +14,7 @@ impl<'a> ScoreBatch<'a> {
     /// Validate shape and binding extent without reading GPU data. At most 64
     /// rows and 2^30 columns are supported, including empty matrices.
     pub fn new(values: View<'a>, batch: usize, columns: usize) -> Result<Self> {
-        if batch > 64 || columns > MAX_ROWS {
+        if batch > MAX_BATCH || columns > MAX_ROWS {
             return Err(invalid("score matrix exceeds supported shape"));
         }
         Ok(Self {
@@ -44,7 +44,7 @@ pub struct DeviceNeighbors {
 impl DeviceNeighbors {
     /// Allocate reusable output for 0..=64 queries and k=1..=1024 on this device.
     pub fn new(stream: &Stream, batch: usize, k: usize) -> Result<Self> {
-        if batch > 64 || !(1..=MAX_K).contains(&k) {
+        if batch > MAX_BATCH || !(1..=MAX_K).contains(&k) {
             return Err(invalid("invalid device result shape"));
         }
         let out = Self {
@@ -242,7 +242,7 @@ impl TopK {
         if stream.device_id() != self.device {
             return Err(invalid("top-k belongs to another device"));
         }
-        if batch > 64 || columns > MAX_ROWS || !(1..=MAX_K).contains(&k) {
+        if batch > MAX_BATCH || columns > MAX_ROWS || !(1..=MAX_K).contains(&k) {
             return Err(invalid("invalid top-k shape"));
         }
         if batch == 0 || columns == 0 {

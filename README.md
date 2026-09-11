@@ -246,8 +246,8 @@ for shard in corpus.shards() {
 ```
 
 `Corpus` exposes `stream`, `len`, `is_empty`, `dimensions`, `padded_dimensions`,
-and `shards`. `CorpusShardView` exposes `row_range`, `capacity_rows`, `vectors`, and
-`inverse_norms`.
+`capacity_range`, and `shards`. `CorpusShardView` exposes `row_range`,
+`capacity_range`, `capacity_rows`, `vectors`, and `inverse_norms`.
 Shard ranges cover all insertion IDs in order without gaps; an empty corpus
 has no shards. Both bindings cover `capacity_rows()`, the logical shard length
 rounded up to a multiple of 256. Each logical vector row contains little-endian
@@ -266,6 +266,13 @@ be in bounds; padding the ordinal array with a sentinel is one option. For other
 tile sizes, check `rows.len().div_ceil(tile_rows) * tile_rows <= capacity_rows()`.
 Each shard adds at most 255 rows of vector and norm storage; that capacity still
 respects the 2^32-element limit. Built-in searches process only logical rows.
+
+`shard.capacity_range()` gives the global row-coordinate range covered by its
+readable bindings, including slack. `corpus.capacity_range()` gives `0..end`,
+where `end` is the largest shard capacity end (zero for an empty corpus). Use
+this extent to allocate global side arrays that cover full-tile loads. Interior
+slack may overlap later shards' logical rows; summing capacities is not the
+same calculation. Imported shards can reserve more slack than host ingestion.
 
 `corpus.stream()` creates an independent, owned stream on the original device,
 including after the original `Device` is dropped or a corpus clone moves to
@@ -297,6 +304,54 @@ and drops the original device before calling the operation.
 
 ```sh
 HRX_OFFLINE=1 cargo run --locked --release --example album_scores
+```
+
+## Gathering named rows on the device
+
+Use `Corpus::gather_into` when a custom kernel needs two subsets of the stored
+vectors, rather than a query against the whole corpus:
+
+```rust
+let left_ids = [7, 2, 7]; // Order and duplicates are preserved.
+let right_ids = [9, 3];
+let mut stream = corpus.stream()?;
+let left = stream.allocate(left_ids.len() * corpus.dimensions() * 4)?;
+let right = stream.allocate(right_ids.len() * corpus.dimensions() * 4)?;
+let left_done = corpus.gather_into(&mut stream, &left_ids, left.binding())?;
+let right_done = corpus.gather_into(&mut stream, &right_ids, right.binding())?;
+// Bind left and right to an application GEMM on this stream.
+// On another stream, wait for right_done, which also follows the first gather.
+```
+
+The output is a compact row-major FP32 matrix with exactly `dimensions()`
+components per row. Each stored FP16 component is expanded and multiplied by
+its stored inverse norm, so a downstream dot product computes cosine similarity
+subject to FP32 rounding. There is no dimension or row padding. Pairwise dots
+can round differently from built-in search. The destination must be four-byte
+aligned and have enough bytes; an oversized binding's suffix is left untouched.
+
+hrxdb resolves shards internally and reads only the selected rows. IDs and
+output extents are checked before submission; invalid arguments do not modify
+the output. Empty requests record an event without writing. Inputs are insertion
+IDs, and the output must not alias corpus storage. First use compiles a kernel
+shared by corpus clones. Later calls can reuse routing scratch through the
+caller's stream pool. The operation uploads ID routing data, performs no vector
+readback or host completion wait, and returns an HRX event. Order previous output
+uses on the same stream, or establish event dependencies before overwriting it.
+
+Gather is independent of search limits: it supports up to 2^30 requested rows
+and 2^32 output components, subject to available memory. Public `MAX_BATCH`
+(64 queries) and `MAX_K` (1,024 results) describe search and standalone `TopK`.
+Applications can use these constants without duplicating the supported limits.
+
+The runnable [subset comparison example](examples/subset_scores.rs) gathers two
+blocks, computes their dense score matrix with an application-owned kernel,
+and selects winners with `TopK`. Only final matches reach the host. The example
+kernel illustrates composition; it is not a tuned GEMM. Its selection IDs are
+columns in the right-hand subset and must be mapped through `right_ids`.
+
+```sh
+HRX_OFFLINE=1 cargo run --locked --release --example subset_scores
 ```
 
 ## Device inputs, outputs, and iterative retrieval

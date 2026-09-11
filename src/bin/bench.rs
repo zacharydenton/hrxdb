@@ -63,10 +63,14 @@ fn options() -> Result<Options, String> {
             _ => return Err(format!("unknown option {key}")),
         }
     }
-    if o.rows == 0 || o.samples == 0 || !(1..=1024).contains(&o.k) || o.exclude_first >= o.rows {
+    if o.rows == 0
+        || o.samples == 0
+        || !(1..=hrxdb::MAX_K).contains(&o.k)
+        || o.exclude_first >= o.rows
+    {
         return Err("rows and samples must be positive; k must be in 1..=1024; exclude-first must be less than rows".into());
     }
-    if !(1..=64).contains(&o.batch) || (o.batch > 1 && o.sweep) {
+    if !(1..=hrxdb::MAX_BATCH).contains(&o.batch) || (o.batch > 1 && o.sweep) {
         return Err("batch must be in 1..=64; batched GEMM does not use --sweep".into());
     }
     Ok(o)

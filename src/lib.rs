@@ -39,6 +39,7 @@ mod storage;
 pub use storage::ResidentShard;
 mod device;
 mod exclusions;
+mod gather;
 mod memory;
 mod queries;
 mod selection;
@@ -64,7 +65,11 @@ pub use hrx::{Device, Error, Result};
 const MAX_ROWS: usize = 1 << 30;
 const MAX_ELEMENTS: usize = 1 << 32;
 const SHARD_ROW_ALIGNMENT: usize = 256;
-const MAX_K: usize = 1024;
+/// Largest supported top-k result count for search and standalone selection.
+pub const MAX_K: usize = 1024;
+/// Largest supported query count for batched search and standalone selection.
+/// This does not limit the number of rows requested by [`Corpus::gather_into`].
+pub const MAX_BATCH: usize = 64;
 const MAX_DIMENSIONS: usize = 16_384;
 const CHUNK_BYTES: usize = 4 * 1024 * 1024;
 

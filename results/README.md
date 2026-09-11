@@ -165,6 +165,34 @@ outside timing. With at most 262,144 rows, that comparison covers the complete
 score matrix. The record retains timing samples and both compiler reports,
 with artifact paths normalized to cache-relative identifiers for sharing.
 
+## Batch score tile sizes
+
+The [production tile sweep](6.9m-384-batch-tile-sweep.json) measures the current
+scan and selection pipeline on 6,909,092 × 384 rows, batch 60 (compiled width
+64), k=5. Five tile sizes share one corpus and the same workspace allocation.
+Each iteration changes queries and rotates variant order; three warmups precede
+15 measured iterations. Timing includes host preparation, dispatches, selection,
+running merges, and readback. Clocks and other system activity were not controlled.
+
+| Tile rows | Score tile at width 64 | Median batch latency |
+|---|---:|---:|
+| 16,384 | 4 MiB | 108.358 ms |
+| 32,768 | 8 MiB | 94.491 ms |
+| 65,536 | 16 MiB | 88.046 ms |
+| 131,072 | 32 MiB | 82.419 ms |
+| 262,144 (production) | 64 MiB | **79.427 ms** |
+
+All returned IDs and score bits agreed across variants. Smaller tiles did not
+improve this workload, so the production tile size remains unchanged. Unlike
+Sinkhorn's repeatedly reused Gibbs matrices, search consumes each score tile
+once through selection; reducing tile size also increases dispatch and running
+merge counts. This sweep measures the combined tradeoff, not isolated GPU stages.
+
+```sh
+ROWS=6909092 BATCH=60 SAMPLES=15 OUTPUT=tile-sweep.json \
+  cargo test --release --lib compare_batch_tiles -- --ignored --nocapture
+```
+
 ## Generated code
 
 The [resource inventory](codegen.json) records all sweep variants. The default

@@ -103,6 +103,7 @@ impl Corpus {
                 dimensions,
                 padded,
                 count,
+                gather: Default::default(),
             }),
         })
     }
@@ -230,6 +231,7 @@ impl Corpus {
                 dimensions,
                 padded,
                 count,
+                gather: Default::default(),
             }),
         })
     }

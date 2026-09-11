@@ -29,6 +29,7 @@ pub(crate) struct CorpusStorage {
     pub(crate) dimensions: usize,
     pub(crate) padded: usize,
     pub(crate) count: usize,
+    pub(crate) gather: std::sync::Mutex<Option<hrx::Kernel>>,
 }
 /// Borrowed bindings for a contiguous range of insertion IDs. Bindings include
 /// readable slack; only rows in `row_range()` are corpus data.
@@ -69,6 +70,19 @@ impl Corpus {
     pub fn padded_dimensions(&self) -> usize {
         self.inner.padded
     }
+    /// Global row-coordinate extent needed by side arrays covering every shard's
+    /// readable capacity. Includes slack, which has no insertion IDs. Empty
+    /// corpora return `0..0`. This is the maximum shard end, not the sum of their
+    /// capacities: interior slack can overlap later shards' logical rows.
+    pub fn capacity_range(&self) -> Range<usize> {
+        0..self
+            .inner
+            .shards
+            .iter()
+            .map(|s| s.start + s.capacity)
+            .max()
+            .unwrap_or(0)
+    }
     /// Nonempty storage shards in insertion order, partitioning `0..len()`.
     pub fn shards(&self) -> impl ExactSizeIterator<Item = CorpusShardView<'_>> {
         self.inner.shards.iter().map(|s| CorpusShardView {
@@ -104,6 +118,12 @@ impl<'a> CorpusShardView<'a> {
     /// Capacity times padded dimensions is at most 2^32 FP16 elements.
     pub fn capacity_rows(&self) -> usize {
         self.capacity
+    }
+    /// Global row coordinates covered by this shard's readable bindings.
+    /// Extends [`Self::row_range`] by tail slack and may overlap later shards.
+    /// Only `row_range()` describes insertion IDs; mask other rows in kernels.
+    pub fn capacity_range(&self) -> Range<usize> {
+        self.start..self.start + self.capacity
     }
     /// Read-only little-endian FP16, row-major, including readable row slack.
     /// Logical rows have zero dimension padding. Length is capacity*stride*2 bytes.

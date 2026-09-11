@@ -1,0 +1,42 @@
+// Application-owned dense cosine block over two gathered FP32 subsets.
+// Each workgroup computes one dot; this is an interoperability example, not
+// a tuned GEMM. The kernel has no knowledge of corpus shards or insertion IDs.
+amdgpu.target<gfx1151> @target {subgroup_size = 32}
+config.decl @subset.dimensions : %v:index where [range(%v,1,16384)]
+config.decl @subset.left : %v:index where [range(%v,1,64)]
+config.decl @subset.right : %v:index where [range(%v,1,1024)]
+kernel.def target(@target) export("subset_scores") @subset_scores() {
+  %one=index.constant 1 : index
+  %threads=index.constant 128 : index
+  %left=config.get @subset.left : index
+  %right=config.get @subset.right : index
+  kernel.launch.config workgroups(%right,%left,%one) workgroup_size(%threads,%one,%one) : index
+} launch(%left:buffer,%right:buffer,%output:buffer) {
+  %zero=index.constant 0 : offset
+  %i0=index.constant 0 : index
+  %step=index.constant 128 : index
+  %d=config.get @subset.dimensions : index
+  %m=config.get @subset.left : index
+  %n=config.get @subset.right : index
+  %l0=kernel.workgroup.id<y> : index
+  %l=index.assume %l0 [range(%l0,0,63),lt(%l0,%m)] : index
+  %r0=kernel.workgroup.id<x> : index
+  %r=index.assume %r0 [range(%r0,0,1023),lt(%r0,%n)] : index
+  %tid=kernel.workitem.id<x> : index
+  %lv=buffer.view %left[%zero] : buffer -> view<[%m]x[%d]xf32>
+  %rv=buffer.view %right[%zero] : buffer -> view<[%n]x[%d]xf32>
+  %ov=buffer.view %output[%zero] : buffer -> view<[%m]x[%n]xf32>
+  %f0=scalar.constant 0.0 : f32
+  %dot=scf.for %column=[%tid to %d step %step](%acc=%f0 : f32)->(f32) {
+    %c=index.assume %column [range(%column,0,16383),lt(%column,%d)] : index
+    %a=view.load %lv[%l,%c] : view<[%m]x[%d]xf32> -> f32
+    %b=view.load %rv[%r,%c] : view<[%n]x[%d]xf32> -> f32
+    %product=scalar.mulf %a,%b : f32
+    %sum=scalar.addf %acc,%product : f32
+    scf.yield %sum : f32
+  }
+  %sum=kernel.workgroup.reduce<addf> %dot : f32
+  %leader=index.cmp eq,%tid,%i0 : index
+  scf.if %leader { view.store %sum,%ov[%l,%r] : f32,view<[%m]x[%n]xf32> }
+  kernel.return
+}
