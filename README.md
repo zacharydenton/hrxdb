@@ -172,9 +172,11 @@ valid query. A one-query batch uses the single-query scan.
 `Vec<Vec<Neighbor>>`, retaining capacities of rows that survive a batch resize.
 
 The [matrix kernel](kernels/batch_scan.loom) loads a tile of 64 corpus rows into workgroup memory and
-reuses it across the queries. Corpus values expand from FP16 to FP32 in that
-tile; normalized queries stay FP32, and accumulation is FP32. Its accumulation
-order differs from the single-query scan, so very close scores can change rank.
+reuses it across the queries. Corpus values stay FP16 in workgroup memory and
+expand to FP32 in registers; normalized queries and accumulation stay FP32. A
+compiler scheduling fence bounds operand lifetimes to one column at a time.
+The increasing-component accumulation order differs from the single-query scan,
+so very close scores can change rank.
 Equal computed scores still prefer the lower insertion ID.
 
 Scores are materialized for at most 262,144 corpus rows at a time. GPU selection
@@ -192,9 +194,11 @@ can allocate and compile, so use `reserve_batch(query_count, k)` during setup
 when first-request latency matters. `ScanConfig` tunes the single-query scan;
 the matrix kernel has its own schedule.
 
-On 6.9M × 384 generated rows, sixty top-5 queries took **165.9 ms batched**
-versus **1,863 ms individually** (11.2×), with 66.11 MiB of workspace.
-See the [measurement conditions and samples](results/README.md#sixty-query-batches).
+On 6,909,092 × 384 generated rows, sixty top-5 queries took **80.7 ms** with
+the optimized batch scan versus **114.7 ms** with its predecessor (1.42×),
+with identical returned IDs and scores. Workspace remains 66.11 MiB. See the
+[interleaved comparison and samples](results/README.md#batch-scan-optimization);
+the earlier batch-versus-individual measurement is retained separately.
 
 ## Full-score queries
 

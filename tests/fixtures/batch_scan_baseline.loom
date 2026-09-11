@@ -1,6 +1,5 @@
 // SIMT GEMM: a workgroup scores 64 corpus rows against 8–64 queries. Corpus
-// components enter LDS once in FP16 and expand to FP32 in registers. Queries
-// and accumulation remain FP32; components accumulate in increasing order.
+// components enter LDS once and are reused by every query. Queries remain FP32.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
 config.decl @db.batch : %value: index where [range(%value, 8, 64), mul(%value, 8)]
 config.decl @db.scan.dimensions : %value: index where [range(%value, 128, 16384), mul(%value, 128)]
@@ -45,14 +44,14 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
   %qv = buffer.view %queries[%zero] : buffer -> view<[%d]x[%batch]xf32>
   %nv = buffer.view %norms[%zero] : buffer -> view<[%count]xf32>
   %sv = buffer.view %scores[%zero] : buffer -> view<[%batch]x[%count]xf32>
-  %xbytes = index.constant 4352 : offset
+  %xbytes = index.constant 8704 : offset
   %query_words = index.mul %c32, %batch : index
   %four_offset = index.constant 4 : offset
   %qbytes = index.scale %query_words, %four_offset : index, offset -> offset
   %xscratch = buffer.alloca<workgroup> align(16) %xbytes : buffer
   %qscratch = buffer.alloca<workgroup> align(16) %qbytes : buffer
   // Padding breaks bank conflicts when transposing corpus components into LDS.
-  %xs = buffer.view %xscratch[%zero] : buffer -> view<32x68xf16>
+  %xs = buffer.view %xscratch[%zero] : buffer -> view<32x68xf32>
   %qs = buffer.view %qscratch[%zero] : buffer -> view<32x[%batch]xf32>
   %f0 = scalar.constant 0.0 : f32
   %initial = vector.splat %f0 : vector<16xf32>
@@ -68,10 +67,11 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
       %at = index.assume %safe [range(%safe, 0, 262143), lt(%safe, %count)] : index
       %dim = index.add %base, %column : index
       %values = vector.load %dv[%at, %dim] : view<[%count]x[%d]xf16> -> vector<4xf16>
+      %expanded = vector.extf %values : vector<4xf16> to vector<4xf32>
       scf.for %j = [%i0 to %i4 step %i1] unroll {
         %col = index.add %column, %j : index
-        %value = vector.extract %values[%j] : vector<4xf16> -> f16
-        view.store %value, %xs[%col, %r] : f16, view<32x68xf16>
+        %value = vector.extract %expanded[%j] : vector<4xf32> -> f32
+        view.store %value, %xs[%col, %r] : f32, view<32x68xf32>
       }
     }
     scf.for %v = [%tid to %query_vectors step %threads] {
@@ -84,8 +84,7 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
     }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
     %next = scf.for %col = [%i0 to %c32 step %i1](%values = %acc : vector<16xf32>) -> (vector<16xf32>) unroll {
-      %xh = vector.load %xs[%col, %local_row_base] : view<32x68xf16> -> vector<4xf16>
-      %xvalues = vector.extf %xh : vector<4xf16> to vector<4xf32>
+      %xvalues = vector.load %xs[%col, %local_row_base] : view<32x68xf32> -> vector<4xf32>
       %qvalues = vector.load %qs[%col, %local_query_base] : view<32x[%batch]xf32> -> vector<4xf32>
       %updated = scf.for %r = [%i0 to %i4 step %i1](%rs = %values : vector<16xf32>) -> (vector<16xf32>) unroll {
         %row = index.add %local_row_base, %r : index
@@ -103,9 +102,6 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
         }
         scf.yield %new_row : vector<16xf32>
       }
-      // Bound operand lifetimes to one column instead of hoisting loads from
-      // all 32 unrolled columns. This is a compiler hint, not a GPU barrier.
-      scf.schedule.fence
       scf.yield %updated : vector<16xf32>
     }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)

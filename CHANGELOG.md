@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reduce batch-scan register and shared-memory use with FP16 corpus staging
+  and per-column scheduling fences. Preserve FP32 queries, accumulation order,
+  and scores; add an interleaved predecessor comparison and narrow-tail checks.
+
 - Replace `FlatIndex` and `CorpusView` with a cheaply cloned `Corpus` and
   independent `Searcher` workers. Corpus handles are `Send + Sync` and retain
   snapshots without copying vectors; each worker owns its stream and scratch.

@@ -466,6 +466,85 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires gfx1151"]
+    fn shorter_final_dispatch_has_correct_scores_and_ids() -> Result<()> {
+        let device = Device::open(0)?;
+        for tail in [1usize, 31, 65] {
+            let count = TILE_ROWS + tail;
+            let row = |r: usize| -> [f32; 3] {
+                if r < TILE_ROWS {
+                    [1.0, 0.0, 0.0]
+                } else {
+                    [0.0, 1.0, ((r - TILE_ROWS) % 7) as f32 / 8.0]
+                }
+            };
+            let encoded = (0..count).map(|r| {
+                row(r)
+                    .into_iter()
+                    .flat_map(|x| f16::from_f32(x).to_le_bytes())
+                    .collect::<Vec<_>>()
+            });
+            let mut db = Searcher::build_fp16(&device, 3, encoded)?;
+            // Exercise cached wide -> narrow -> wide query plans as well as
+            // a final corpus tile smaller than all preceding dispatches.
+            for batch in [60usize, 2, 17, 33, 9] {
+                let queries: Vec<f32> = (0..batch)
+                    .flat_map(|q| {
+                        [
+                            0.0,
+                            if q % 2 == 0 { 1.0 } else { -1.0 },
+                            (q % 5) as f32 / 8.0,
+                        ]
+                    })
+                    .collect();
+                let results = db.search_batch(&queries, 5)?;
+                let mut bytes = vec![0u8; batch * tail * 4];
+                db.stream.read_blocking(
+                    db.batch
+                        .as_ref()
+                        .unwrap()
+                        .scores
+                        .try_slice(0, bytes.len())?,
+                    &mut bytes,
+                )?;
+                for (q, query) in queries.as_chunks::<3>().0.iter().enumerate() {
+                    let qnorm = norm(query, 3)?;
+                    for r in 0..tail {
+                        let x = row(TILE_ROWS + r);
+                        let inv = (1.0 / norm(&x, 3)?) as f32;
+                        let expected = x
+                            .iter()
+                            .zip(query)
+                            .map(|(&x, &y)| x as f64 * ((y as f64 / qnorm) as f32) as f64)
+                            .sum::<f64>()
+                            * inv as f64;
+                        let at = (q * tail + r) * 4;
+                        let actual = f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+                        assert!(
+                            actual.is_finite() && (actual as f64 - expected).abs() < 3e-6,
+                            "tail={tail}, batch={batch}, query={q}, row={r}: {actual} vs {expected}"
+                        );
+                    }
+                    if q % 2 == 0 {
+                        assert!(
+                            results[q]
+                                .iter()
+                                .take(tail.min(5))
+                                .all(|n| n.id as usize >= TILE_ROWS)
+                        );
+                    } else {
+                        assert_eq!(
+                            results[q].iter().map(|n| n.id).collect::<Vec<_>>(),
+                            vec![0, 1, 2, 3, 4]
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn validates_batch_shape_without_gpu() {
         assert_eq!(batch_size(3, 0, 5).unwrap(), 0);
         assert_eq!(batch_size(3, 180, 5).unwrap(), 60);
@@ -587,33 +666,39 @@ mod tests {
                 })
                 .collect();
             let mut db = Searcher::build_fp16(&device, d, &raw)?;
-            let queries: Vec<_> = (0..9)
-                .flat_map(|q| (0..d).map(move |j| ((q * 43 + j * 11) % 97) as f32 - 47.25))
-                .collect();
-            db.search_batch(&queries, 5)?;
-            let scratch = db.batch.as_ref().unwrap();
-            let mut bytes = vec![0; 9 * rows.len() * 4];
-            db.stream
-                .read_blocking(scratch.scores.try_slice(0, bytes.len())?, &mut bytes)?;
-            for (q, query) in queries.chunks_exact(d).enumerate() {
-                let length = norm(query, d)?;
-                for (r, row) in rows.iter().enumerate() {
-                    let inverse = (1.0 / norm(row, d)?) as f32;
-                    let expected: f64 = row
-                        .iter()
-                        .zip(query)
-                        .map(|(&x, &y)| x as f64 * ((y as f64 / length) as f32) as f64)
-                        .sum::<f64>()
-                        * inverse as f64;
-                    let at = (q * rows.len() + r) * 4;
-                    let actual = f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
-                    assert!(
-                        (actual as f64 - expected).abs() < 3e-6,
-                        "d={d} q={q} r={r}: {actual} vs {expected}"
-                    );
+            for batch in [2usize, 9, 17, 33, 64] {
+                let queries: Vec<_> = (0..batch)
+                    .flat_map(|q| (0..d).map(move |j| ((q * 43 + j * 11) % 97) as f32 - 47.25))
+                    .collect();
+                db.search_batch(&queries, 5)?;
+                let scratch = db.batch.as_ref().unwrap();
+                let mut bytes = vec![0; batch * rows.len() * 4];
+                db.stream
+                    .read_blocking(scratch.scores.try_slice(0, bytes.len())?, &mut bytes)?;
+                for (q, query) in queries.chunks_exact(d).enumerate() {
+                    let length = norm(query, d)?;
+                    for (r, row) in rows.iter().enumerate() {
+                        let inverse = (1.0 / norm(row, d)?) as f32;
+                        let expected: f64 = row
+                            .iter()
+                            .zip(query)
+                            .map(|(&x, &y)| x as f64 * ((y as f64 / length) as f32) as f64)
+                            .sum::<f64>()
+                            * inverse as f64;
+                        let at = (q * rows.len() + r) * 4;
+                        let actual = f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+                        assert!(
+                            (actual as f64 - expected).abs() < 3e-6,
+                            "d={d} batch={batch} q={q} r={r}: {actual} vs {expected}"
+                        );
+                    }
                 }
             }
         }
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "batch_bench.rs"]
+mod bench;
