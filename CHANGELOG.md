@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add `search_batch` and `search_batch_excluding` for up to 64 row-major queries
+  with a shared exclusion set. A tiled FP16 × FP32 matrix kernel shares corpus
+  reads across queries, with bounded score tiles and running device top-k.
+- Add `reserve_batch`, `batch_workspace_bytes`, and a `--batch` benchmark that
+  compares batched and sequential queries, including numerical validation.
+
 - Automatically shard corpora into allocations of at most 2^32 FP16 elements,
   preserving global insertion IDs and device selection across the full index.
 - Add `build_fp16` and `build_fp16_with_config` for little-endian FP16 byte rows,

@@ -8,8 +8,16 @@ fn index_moves_to_worker_after_query() -> hrxdb::Result<()> {
     let device = hrxdb::Device::open(0)?;
     let mut db = FlatIndex::build(&device, 3, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])?;
     assert_eq!(db.search(&[1.0, 0.0, 0.0], 1)?[0].id, 0);
+    assert_eq!(
+        db.search_batch(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0], 1)?[1][0].id,
+        1
+    );
     std::thread::spawn(move || -> hrxdb::Result<()> {
         assert_eq!(db.search(&[0.0, 1.0, 0.0], 1)?[0].id, 1);
+        assert_eq!(
+            db.search_batch(&[0.0, 1.0, 0.0, 1.0, 0.0, 0.0], 1)?[1][0].id,
+            0
+        );
         // Exercise synchronization, deregistration, and host deallocation on
         // a different thread from the one that created the index.
         drop(db);
@@ -17,6 +25,38 @@ fn index_moves_to_worker_after_query() -> hrxdb::Result<()> {
     })
     .join()
     .expect("query worker panicked")
+}
+
+#[test]
+#[ignore = "requires gfx1151"]
+fn batch_matches_individual_queries() -> hrxdb::Result<()> {
+    let device = hrxdb::Device::open(0)?;
+    let rows: Vec<_> = (0..2057).map(|i| row(i, 127)).collect();
+    let mut db = FlatIndex::build(&device, 127, &rows)?;
+    let queries: Vec<_> = (0..64).flat_map(|i| row(90_000 + i, 127)).collect();
+    for count in [2, 8, 9, 16, 17, 32, 33, 60, 64, 3, 1] {
+        for k in [1, 5, 32, 33, 1024] {
+            let actual = db.search_batch(&queries[..count * 127], k)?;
+            assert_eq!(actual.len(), count);
+            for (matches, query) in actual.iter().zip(queries.as_chunks::<127>().0) {
+                let expected = db.search(query, k)?;
+                let scores = db.scores(query)?;
+                let mut ids = std::collections::HashSet::new();
+                for (got, want) in matches.iter().zip(&expected) {
+                    assert!(
+                        (got.similarity - want.similarity).abs() < 3e-6,
+                        "batch={count} k={k} got={got:?} want={want:?}"
+                    );
+                    assert!((got.similarity - scores[got.id as usize]).abs() < 3e-6);
+                    assert!(ids.insert(got.id));
+                }
+                assert!(matches.windows(2).all(|w| w[0].similarity > w[1].similarity
+                    || (w[0].similarity == w[1].similarity && w[0].id < w[1].id)));
+                assert_eq!(matches.len(), expected.len());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn row(i: usize, d: usize) -> Vec<f32> {
@@ -374,5 +414,29 @@ fn faces_corpus_shards_past_two_to_32_elements() -> hrxdb::Result<()> {
     assert_eq!(scores[boundary], 1.0);
     assert_eq!(scores[boundary - 1], 0.0);
     assert_eq!(scores[N - 1], 0.0);
+    let queries: Vec<_> = (0..60)
+        .flat_map(|q| {
+            let mut row = [0.0; D];
+            row[q % 4 + 1] = 1.0;
+            row
+        })
+        .collect();
+    let batch = db.search_batch_excluding(&queries, 5, &[boundary as u32, 0])?;
+    assert!(db.batch_workspace_bytes() < 70 * 1024 * 1024);
+    for (q, neighbors) in batch.iter().enumerate() {
+        assert_eq!(neighbors.len(), 5);
+        let expected = if q % 4 == 1 {
+            Neighbor {
+                id: 1,
+                similarity: 0.0,
+            }
+        } else {
+            Neighbor {
+                id: special[q % 4] as u32,
+                similarity: 1.0,
+            }
+        };
+        assert_eq!(neighbors[0], expected);
+    }
     Ok(())
 }

@@ -1,0 +1,649 @@
+//! Tiled batch queries with bounded device score storage and running top-k.
+use super::*;
+
+const MAX_BATCH: usize = 64;
+const TILE_ROWS: usize = 262_144;
+
+pub(crate) struct BatchScratch {
+    width: usize,
+    k: usize,
+    tile_rows: usize,
+    query: HostBuffer,
+    readback: HostBuffer,
+    scores: Buffer,
+    candidates: [(Buffer, Buffer); 2],
+    running: (Buffer, Buffer),
+    joined: (Buffer, Buffer),
+    plans: Vec<BatchPlan>,
+}
+
+struct BatchPlan {
+    width: usize,
+    scan: Kernel,
+    first: Kernel,
+    merge: Kernel,
+    sort: Kernel,
+    sorted_merge: Kernel,
+    running_merge: Kernel,
+}
+
+impl BatchScratch {
+    fn new(
+        stream: &Stream,
+        width: usize,
+        k: usize,
+        tile_rows: usize,
+        padded: usize,
+    ) -> Result<Self> {
+        let pair = |bytes| -> Result<_> { Ok((stream.allocate(bytes)?, stream.allocate(bytes)?)) };
+        let scratch = width * tile_rows.div_ceil(1024) * k * 4;
+        Ok(Self {
+            width,
+            k,
+            tile_rows,
+            query: HostBuffer::new(stream, width * padded * 4)?,
+            readback: HostBuffer::new(stream, width * k * 8)?,
+            scores: stream.allocate(width * tile_rows * 4)?,
+            candidates: [pair(scratch)?, pair(scratch)?],
+            running: pair(width * k * 4)?,
+            joined: pair(width * k * 8)?,
+            plans: Vec::new(),
+        })
+    }
+
+    pub(crate) fn abandon(&mut self) {
+        self.query.abandon();
+        self.readback.abandon();
+    }
+}
+
+fn batch_size(dimensions: usize, values: usize, k: usize) -> Result<usize> {
+    if !(1..=MAX_K).contains(&k) {
+        return Err(invalid("k must be in 1..=1024"));
+    }
+    if !values.is_multiple_of(dimensions) {
+        return Err(invalid(
+            "batch queries must contain complete dimension-sized rows",
+        ));
+    }
+    let count = values / dimensions;
+    if count > MAX_BATCH {
+        return Err(invalid(
+            "a query batch supports at most 64 rows; split larger batches",
+        ));
+    }
+    Ok(count)
+}
+
+impl FlatIndex {
+    /// Bytes reserved in batch query, score, selection, and readback buffers.
+    ///
+    /// This is additional to the corpus and single-query workspace. Returns
+    /// zero before batch workspace is reserved; excludes compiler/runtime
+    /// bookkeeping and returned host neighbor vectors.
+    pub fn batch_workspace_bytes(&self) -> usize {
+        self.batch.as_ref().map_or(0, |s| {
+            s.query.buffer().binding().len()
+                + s.readback.buffer().binding().len()
+                + s.scores.binding().len()
+                + [&s.candidates[0], &s.candidates[1], &s.running, &s.joined]
+                    .iter()
+                    .map(|(a, b)| a.binding().len() + b.binding().len())
+                    .sum::<usize>()
+        })
+    }
+
+    /// Reserve and compile workspace for a batch of `query_count` queries.
+    ///
+    /// `search_batch` calls this automatically. Call it during setup to exclude
+    /// allocation and compilation from the first batch. Query widths are rounded
+    /// to 8, 16, 32, or 64; compiled widths are cached and workspace is retained.
+    /// Score storage covers at most 262,144 corpus rows, independent of index size.
+    /// At width 64 this uses about 66 MiB for k=5 or 322 MiB for k=1,024, plus
+    /// query storage (96 KiB at 384 dimensions). A one-query batch uses `search`.
+    ///
+    /// # Errors
+    /// `query_count` must be 1–64 and `k` must be 1–1,024. Allocation,
+    /// synchronization, and compiler failures propagate as errors.
+    pub fn reserve_batch(&mut self, query_count: usize, k: usize) -> Result<()> {
+        if !(1..=MAX_BATCH).contains(&query_count) {
+            return Err(invalid("query_count must be in 1..=64"));
+        }
+        if !(1..=MAX_K).contains(&k) {
+            return Err(invalid("k must be in 1..=1024"));
+        }
+        if query_count == 1 || self.is_empty() {
+            return self.reserve_search(k);
+        }
+        let width = query_count.next_power_of_two().max(8);
+        let capacity = k.min(self.count).next_power_of_two();
+        let tile_rows = self.count.min(TILE_ROWS);
+        self.stream.synchronize()?;
+        if self
+            .batch
+            .as_ref()
+            .is_none_or(|s| s.width < width || s.k < capacity)
+        {
+            let old_width = self.batch.as_ref().map_or(0, |s| s.width);
+            let old_k = self.batch.as_ref().map_or(0, |s| s.k);
+            let mut scratch = BatchScratch::new(
+                &self.stream,
+                width.max(old_width),
+                capacity.max(old_k),
+                tile_rows,
+                self.padded,
+            )?;
+            if let Some(old) = self.batch.take() {
+                scratch.plans = old.plans;
+            }
+            self.batch = Some(scratch);
+        }
+        if self
+            .batch
+            .as_ref()
+            .unwrap()
+            .plans
+            .iter()
+            .any(|p| p.width == width)
+        {
+            return Ok(());
+        }
+        let mut reports = Vec::new();
+        let mut build = |source, mut spec: hrx::loom::Specialization, queries: usize| {
+            spec.config.insert("db.batch".into(), queries.to_string());
+            if spec.symbol != "batch_scan" {
+                spec.config
+                    .insert("db.select.limit".into(), TILE_ROWS.to_string());
+            }
+            let (kernel, report) = compile(&self.compiler, &self.stream, source, spec)?;
+            reports.push(report);
+            Ok::<_, Error>(kernel)
+        };
+        let mut scan_spec = kernels::named_spec("batch_scan");
+        scan_spec
+            .config
+            .insert("db.scan.dimensions".into(), self.padded.to_string());
+        let scan = build(kernels::BATCH_SCAN, scan_spec, width)?;
+        let first = build(kernels::SELECT, kernels::select_spec(true), width)?;
+        let merge = build(kernels::SELECT, kernels::select_spec(false), width)?;
+        let sort = build(kernels::SORT, kernels::named_spec("sort_select"), width)?;
+        let sorted_merge = build(kernels::SORT, kernels::named_spec("sorted_merge"), width)?;
+        let mut running_spec = kernels::named_spec("sorted_merge");
+        running_spec
+            .config
+            .insert("db.merge.planar".into(), "1".into());
+        let running_merge = build(kernels::SORT, running_spec, 1)?;
+        self.batch.as_mut().unwrap().plans.push(BatchPlan {
+            width,
+            scan,
+            first,
+            merge,
+            sort,
+            sorted_merge,
+            running_merge,
+        });
+        self.reports.extend(reports);
+        Ok(())
+    }
+
+    /// Search up to 64 row-major FP32 queries, sharing corpus reads across them.
+    ///
+    /// `queries` contains `batch_size * self.dimensions()` components. Results
+    /// retain query order and use the same score/ID ordering as [`Self::search`].
+    /// A tiled FP16 × FP32 matrix kernel reuses each corpus tile across the batch;
+    /// device selection maintains one running top-k per query. No full corpus ×
+    /// batch score matrix or host-side selection is used. Queries are normalized
+    /// to FP32 without additional quantization. Accumulation order differs from
+    /// `search`, so rounding can change rankings of near-ties.
+    ///
+    /// An empty batch returns an empty vector. First use of a query width may
+    /// allocate and compile; [`Self::reserve_batch`] can prepare it in advance.
+    ///
+    /// ```no_run
+    /// # use hrxdb::{Device, FlatIndex};
+    /// # fn main() -> hrxdb::Result<()> {
+    /// let device = Device::open(0)?;
+    /// let mut db = FlatIndex::build(&device, 3, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])?;
+    /// db.reserve_batch(2, 5)?;
+    /// let queries = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    /// let results = db.search_batch(&queries, 5)?;
+    /// assert_eq!(results[0][0].id, 0);
+    /// assert_eq!(results[1][0].id, 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    /// Rejects incomplete rows, more than 64 queries, k outside 1–1,024, and
+    /// nonfinite or zero-norm queries. All queries are validated before execution.
+    /// Runtime and compilation failures propagate as errors.
+    pub fn search_batch(&mut self, queries: &[f32], k: usize) -> Result<Vec<Vec<Neighbor>>> {
+        self.search_batch_excluding(queries, k, &[])
+    }
+
+    /// Search a batch with one shared set of excluded insertion IDs.
+    ///
+    /// Exclusions may be unsorted and repeated, apply only to this call, and
+    /// compose with sharding and all supported k values. Each query returns
+    /// `min(k, remaining_rows)` matches. Only final neighbors are read back.
+    /// Input requirements and errors match [`Self::search_batch`]; out-of-range
+    /// excluded IDs are also rejected.
+    pub fn search_batch_excluding(
+        &mut self,
+        queries: &[f32],
+        k: usize,
+        excluded: &[u32],
+    ) -> Result<Vec<Vec<Neighbor>>> {
+        let count = batch_size(self.dimensions, queries.len(), k)?;
+        if excluded.iter().any(|&id| id as usize >= self.count) {
+            return Err(invalid("excluded ID is outside the index"));
+        }
+        let mut lengths = [0.0; MAX_BATCH];
+        for (i, row) in queries.chunks_exact(self.dimensions).enumerate() {
+            lengths[i] = norm(row, self.dimensions)?;
+        }
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        if self.is_empty() {
+            return Ok(vec![Vec::new(); count]);
+        }
+        if count == 1 {
+            return Ok(vec![self.search_excluding(queries, k, excluded)?]);
+        }
+        self.stream.synchronize()?;
+        let mut remaining = self.count;
+        if !excluded.is_empty() {
+            // SAFETY: the stream is complete and the bitmap is exclusively owned.
+            let bitmap = unsafe { self.exclusions.bytes_mut() };
+            bitmap.fill(0);
+            for &id in excluded {
+                let byte = &mut bitmap[id as usize / 8];
+                let bit = 1 << (id % 8);
+                if *byte & bit == 0 {
+                    *byte |= bit;
+                    remaining -= 1;
+                }
+            }
+        }
+        let k = k.min(remaining);
+        if k == 0 {
+            return Ok(vec![Vec::new(); count]);
+        }
+        self.reserve_batch(count, k)?;
+        let width = count.next_power_of_two().max(8);
+        let scratch = self.batch.as_mut().unwrap();
+        // SAFETY: reserve_batch synchronizes the stream before host publication.
+        let bytes = unsafe { scratch.query.bytes_mut() };
+        bytes.fill(0);
+        for (q, row) in queries.chunks_exact(self.dimensions).enumerate() {
+            for (dim, &value) in row.iter().enumerate() {
+                let at = (dim * width + q) * 4;
+                bytes[at..at + 4]
+                    .copy_from_slice(&((value as f64 / lengths[q]) as f32).to_le_bytes());
+            }
+        }
+        let plan = scratch.plans.iter().find(|p| p.width == width).unwrap();
+        let mut started = false;
+        for shard in &self.shards {
+            for local in (0..shard.count).step_by(scratch.tile_rows) {
+                let rows = (shard.count - local).min(scratch.tile_rows);
+                let start = shard.start + local;
+                let mut constants = Constants::new();
+                constants.push(rows as u32)?;
+                constants.push(u32::from(!excluded.is_empty()))?;
+                constants.push(start as u32)?;
+                constants.push(self.count as u32)?;
+                // SAFETY: the tile belongs to this shard, has at most TILE_ROWS
+                // rows, and its dimensions match the compiled kernel. The query
+                // and score buffers reserve width rows. Norms and the global
+                // bitmap use validated insertion positions, including shard tails.
+                unsafe {
+                    self.stream.dispatch(
+                        &plan.scan,
+                        [rows.div_ceil(64) as u32, 1, 1],
+                        [(width * 4) as u32, 1, 1],
+                        &constants,
+                        &[
+                            shard
+                                .data
+                                .try_slice(local * self.padded * 2, rows * self.padded * 2)?,
+                            scratch.query.buffer().binding(),
+                            self.norms.try_slice(start * 4, rows * 4)?,
+                            self.exclusions.buffer().binding(),
+                            scratch.scores.binding(),
+                        ],
+                    )?;
+                }
+                let output = select_tile(&self.stream, scratch, plan, rows, start, k)?;
+                let bytes = width * k * 4;
+                if !started {
+                    self.stream.copy(
+                        scratch.running.0.try_slice(0, bytes)?,
+                        scratch.candidates[output].0.try_slice(0, bytes)?,
+                    )?;
+                    self.stream.copy(
+                        scratch.running.1.try_slice(0, bytes)?,
+                        scratch.candidates[output].1.try_slice(0, bytes)?,
+                    )?;
+                    started = true;
+                } else {
+                    for (joined, running, tile) in [
+                        (
+                            &scratch.joined.0,
+                            &scratch.running.0,
+                            &scratch.candidates[output].0,
+                        ),
+                        (
+                            &scratch.joined.1,
+                            &scratch.running.1,
+                            &scratch.candidates[output].1,
+                        ),
+                    ] {
+                        self.stream
+                            .copy(joined.try_slice(0, bytes)?, running.try_slice(0, bytes)?)?;
+                        self.stream
+                            .copy(joined.try_slice(bytes, bytes)?, tile.try_slice(0, bytes)?)?;
+                    }
+                    let mut constants = Constants::new();
+                    constants.push((width * 2) as u32)?;
+                    constants.push(k as u32)?;
+                    // SAFETY: planar merge pairs each query's running list with
+                    // that query's tile list; output is a separate width*k pair.
+                    unsafe {
+                        self.stream.dispatch(
+                            &plan.running_merge,
+                            [width as u32, 1, 1],
+                            [256, 1, 1],
+                            &constants,
+                            &[
+                                scratch.joined.0.binding(),
+                                scratch.joined.1.binding(),
+                                scratch.running.0.binding(),
+                                scratch.running.1.binding(),
+                            ],
+                        )?;
+                    }
+                }
+            }
+        }
+        let bytes = count * k * 4;
+        self.stream.copy(
+            scratch.readback.buffer().try_slice(0, bytes)?,
+            scratch.running.0.try_slice(0, bytes)?,
+        )?;
+        self.stream.copy(
+            scratch.readback.buffer().try_slice(bytes, bytes)?,
+            scratch.running.1.try_slice(0, bytes)?,
+        )?;
+        self.stream.synchronize()?;
+        // SAFETY: the stream completed both copies to this owned readback buffer.
+        let readback = unsafe { scratch.readback.bytes() };
+        let mut result = Vec::with_capacity(count);
+        for q in 0..count {
+            let mut neighbors = Vec::with_capacity(k);
+            for rank in 0..k {
+                let at = (q * k + rank) * 4;
+                let similarity = f32::from_le_bytes(readback[at..at + 4].try_into().unwrap());
+                let id =
+                    u32::from_le_bytes(readback[bytes + at..bytes + at + 4].try_into().unwrap());
+                if similarity != f32::NEG_INFINITY {
+                    neighbors.push(Neighbor { id, similarity });
+                }
+            }
+            result.push(neighbors);
+        }
+        Ok(result)
+    }
+}
+
+fn select_tile(
+    stream: &Stream,
+    scratch: &BatchScratch,
+    plan: &BatchPlan,
+    rows: usize,
+    start: usize,
+    k: usize,
+) -> Result<usize> {
+    let mut count = rows;
+    let mut output = 0;
+    let mut first = true;
+    loop {
+        let groups = count.div_ceil(1024);
+        let mut constants = Constants::new();
+        constants.push(count as u32)?;
+        constants.push(k as u32)?;
+        constants.push(if first { start as u32 } else { 0 })?;
+        let (input_scores, input_ids) = if first {
+            (&scratch.scores, &scratch.scores)
+        } else {
+            (
+                &scratch.candidates[1 - output].0,
+                &scratch.candidates[1 - output].1,
+            )
+        };
+        let (out_scores, out_ids) = &scratch.candidates[output];
+        // SAFETY: per-query selection uses packed count/ceil(count/1024)*k
+        // strides, all within the reserved width * tile capacity. Input and
+        // output never alias. Only the first pass assigns global insertion IDs.
+        unsafe {
+            if k > 32 {
+                stream.dispatch(
+                    &plan.sort,
+                    [groups as u32, plan.width as u32, 1],
+                    [256, 1, 1],
+                    &constants,
+                    &[
+                        input_scores.binding(),
+                        out_scores.binding(),
+                        out_ids.binding(),
+                    ],
+                )?;
+            } else {
+                stream.dispatch(
+                    if first { &plan.first } else { &plan.merge },
+                    [groups as u32, plan.width as u32, 1],
+                    [256, 1, 1],
+                    &constants,
+                    &[
+                        input_scores.binding(),
+                        input_ids.binding(),
+                        out_scores.binding(),
+                        out_ids.binding(),
+                    ],
+                )?;
+            }
+        }
+        if k > 32 {
+            let mut lists = groups;
+            while lists > 1 {
+                let next = 1 - output;
+                let mut constants = Constants::new();
+                constants.push(lists as u32)?;
+                constants.push(k as u32)?;
+                // SAFETY: each query merges its own adjacent sorted k-lists;
+                // the number of lists halves, and outputs use the other pair.
+                unsafe {
+                    stream.dispatch(
+                        &plan.sorted_merge,
+                        [lists.div_ceil(2) as u32, plan.width as u32, 1],
+                        [256, 1, 1],
+                        &constants,
+                        &[
+                            scratch.candidates[output].0.binding(),
+                            scratch.candidates[output].1.binding(),
+                            scratch.candidates[next].0.binding(),
+                            scratch.candidates[next].1.binding(),
+                        ],
+                    )?;
+                }
+                lists = lists.div_ceil(2);
+                output = next;
+            }
+            return Ok(output);
+        }
+        if groups == 1 {
+            return Ok(output);
+        }
+        count = groups * k;
+        output = 1 - output;
+        first = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_batch_shape_without_gpu() {
+        assert_eq!(batch_size(3, 0, 5).unwrap(), 0);
+        assert_eq!(batch_size(3, 180, 5).unwrap(), 60);
+        assert_eq!(batch_size(3, 192, 1024).unwrap(), 64);
+        for (values, k) in [(1, 5), (181, 5), (195, 5), (0, 0), (3, 1025)] {
+            assert!(batch_size(3, values, k).is_err());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151"]
+    fn tiled_batches_merge_global_ids_and_shared_exclusions() -> Result<()> {
+        let device = Device::open(0)?;
+        let rows: Vec<_> = (0..2065)
+            .map(|i| {
+                let mut row = [0.0; 3];
+                row[i % 3] = if i % 7 == 0 { -1.0 } else { 1.0 };
+                row
+            })
+            .collect();
+        let mut db = FlatIndex::build_encoded(
+            &device,
+            3,
+            &rows,
+            ScanConfig::default(),
+            1031 * 128,
+            |row, d, p, bytes| encode(*row, d, p, bytes),
+        )?;
+        assert_eq!(db.shard_count(), 3);
+        let queries: Vec<_> = (0..60).flat_map(|i| rows[i]).collect();
+        db.reserve_batch(60, 1024)?;
+        // Force several short, unaligned tiles in each unaligned shard. This
+        // exercises masks crossing word boundaries and k larger than a tile.
+        db.batch.as_mut().unwrap().tile_rows = 257;
+        let all: Vec<_> = (0..db.len() as u32).collect();
+        let some = [0, 7, 8, 31, 32, 33, 256, 257, 1030, 1031, 1032, 2064, 1031];
+        for excluded in [&[][..], &some, &all[2..], &all] {
+            for k in [1, 5, 32, 33, 1024] {
+                let batch = db.search_batch_excluding(&queries, k, excluded)?;
+                for (actual, query) in batch.iter().zip(queries.as_chunks::<3>().0) {
+                    assert_eq!(*actual, db.search_excluding(query, k, excluded)?);
+                }
+            }
+        }
+        assert_eq!(
+            db.search_batch(&queries, 5)?[0],
+            db.search(&queries[..3], 5)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151"]
+    fn batch_validates_all_queries_and_reuses_workspace() -> Result<()> {
+        let device = Device::open(0)?;
+        let mut db = FlatIndex::build(&device, 3, [[1.0, 0.0, 0.0]; 67])?;
+        assert_eq!(db.batch_workspace_bytes(), 0);
+        let valid = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        for bad in [
+            vec![1.0],
+            vec![1.0; 65 * 3],
+            vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            vec![1.0, 0.0, 0.0, f32::NAN, 0.0, 0.0],
+            vec![f32::INFINITY; 6],
+        ] {
+            assert!(db.search_batch(&bad, 5).is_err());
+        }
+        assert_eq!(db.batch_workspace_bytes(), 0);
+        assert!(db.search_batch(&[], 0).is_err());
+        assert!(db.search_batch(&valid, 1025).is_err());
+        assert!(db.search_batch_excluding(&valid, 5, &[67]).is_err());
+        assert!(db.search_batch(&[], 5)?.is_empty());
+        for size in [0, 65] {
+            assert!(db.reserve_batch(size, 5).is_err());
+        }
+        assert!(db.reserve_batch(2, 0).is_err());
+        db.reserve_batch(60, 1024)?;
+        let bytes = db.batch_workspace_bytes();
+        let first = db.search_batch(&valid, 5)?;
+        let reports = db.compilation_reports().len();
+        assert_eq!(db.search_batch(&valid, 5)?, first);
+        assert_eq!(db.compilation_reports().len(), reports);
+        assert_eq!(db.batch_workspace_bytes(), bytes);
+        assert!(first[0].iter().all(|n| n.similarity == 1.0));
+        assert!(first[1].iter().all(|n| n.similarity == 0.0));
+        let mut empty = FlatIndex::build(&device, 3, std::iter::empty::<[f32; 3]>())?;
+        assert_eq!(empty.search_batch(&valid, 1024)?, vec![vec![], vec![]]);
+        assert!(empty.search_batch(&[0.0; 6], 5).is_err());
+        assert!(empty.search_batch_excluding(&valid, 5, &[0]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151"]
+    fn batch_scores_match_fp16_cpu_reference() -> Result<()> {
+        let device = Device::open(0)?;
+        for d in [1usize, 3, 127, 769] {
+            let rows: Vec<Vec<f32>> = (0..67)
+                .map(|i| {
+                    (0..d)
+                        .map(|j| {
+                            if i == 0 {
+                                f16::from_bits(1).to_f32()
+                            } else if i == 1 {
+                                65504.0
+                            } else {
+                                f16::from_f32(((i * 37 + j * 17) % 101) as f32 - 49.25).to_f32()
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            let raw: Vec<Vec<u8>> = rows
+                .iter()
+                .map(|r| {
+                    r.iter()
+                        .flat_map(|&v| f16::from_f32(v).to_le_bytes())
+                        .collect()
+                })
+                .collect();
+            let mut db = FlatIndex::build_fp16(&device, d, &raw)?;
+            let queries: Vec<_> = (0..9)
+                .flat_map(|q| (0..d).map(move |j| ((q * 43 + j * 11) % 97) as f32 - 47.25))
+                .collect();
+            db.search_batch(&queries, 5)?;
+            let scratch = db.batch.as_ref().unwrap();
+            let mut bytes = vec![0; 9 * rows.len() * 4];
+            db.stream
+                .read_blocking(scratch.scores.try_slice(0, bytes.len())?, &mut bytes)?;
+            for (q, query) in queries.chunks_exact(d).enumerate() {
+                let length = norm(query, d)?;
+                for (r, row) in rows.iter().enumerate() {
+                    let inverse = (1.0 / norm(row, d)?) as f32;
+                    let expected: f64 = row
+                        .iter()
+                        .zip(query)
+                        .map(|(&x, &y)| x as f64 * ((y as f64 / length) as f32) as f64)
+                        .sum::<f64>()
+                        * inverse as f64;
+                    let at = (q * rows.len() + r) * 4;
+                    let actual = f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+                    assert!(
+                        (actual as f64 - expected).abs() < 3e-6,
+                        "d={d} q={q} r={r}: {actual} vs {expected}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}

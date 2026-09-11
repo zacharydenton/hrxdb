@@ -121,9 +121,54 @@ empty vector when every row is excluded. Exclusions apply to one query and
 compose with the full k range and internal sharding. Both search methods run
 selection on the GPU and read back at most k score/ID pairs.
 
-Construction reserves selection scratch for k=32. The first larger query grows
+Construction reserves single-query selection scratch for k=32. The first larger query grows
 it to the next power of two, then reuses that capacity. `reserve_search(k)` lets
-applications make that allocation during setup. Queries compile no kernels.
+applications make that allocation during setup. Single-query searches compile no kernels.
+
+## Batched queries
+
+Use `search_batch` for up to **64 queries over the same corpus**, such as sixty
+sampled album photos each requesting five neighbors:
+
+```rust
+db.reserve_batch(60, 5)?; // Optional: allocate and compile before serving requests.
+let matches = db.search_batch(&queries, 5)?;
+// queries is 60 * db.dimensions() FP32 components in row-major order.
+// matches[i] contains the neighbors for query i.
+```
+
+`search_batch_excluding(&queries, k, &excluded_ids)` applies one shared exclusion
+set to the batch. Both methods support k=1–1,024 and internal corpus sharding.
+Exclusions may be unsorted and repeated, and affect only that call. Every query
+is validated before GPU execution; incomplete rows, nonfinite or zero-norm
+queries, more than 64 queries, and out-of-range excluded IDs are errors. Empty
+batches return an empty vector; an empty index returns one empty result per
+valid query. A one-query batch uses the single-query scan.
+
+The [matrix kernel](kernels/batch_scan.loom) loads a tile of 64 corpus rows into workgroup memory and
+reuses it across the queries. Corpus values expand from FP16 to FP32 in that
+tile; normalized queries stay FP32, and accumulation is FP32. Its accumulation
+order differs from the single-query scan, so very close scores can change rank.
+Equal computed scores still prefer the lower insertion ID.
+
+Scores are materialized for at most 262,144 corpus rows at a time. GPU selection
+keeps each query's tile top-k, then merges it with that query's running top-k.
+The full corpus × batch score matrix is never allocated, and only final results
+are read back (2,400 bytes for sixty top-5 queries).
+
+Batch workspace grows to accommodate the largest reserved query width and k,
+and is reused. Widths round up to 8, 16, 32, or 64, with compiled kernels cached
+per width. At width 64 the workspace uses approximately **66 MiB for k=5** or
+**322 MiB for k=1,024**, plus query storage (96 KiB at dimension 384). Smaller
+corpora need less. This storage is additional to the index and single-query
+scratch; `batch_workspace_bytes()` reports the reserved buffer bytes. First use
+can allocate and compile, so use `reserve_batch(query_count, k)` during setup
+when first-request latency matters. `ScanConfig` tunes the single-query scan;
+the matrix kernel has its own schedule.
+
+On 6.9M × 384 generated rows, sixty top-5 queries took **165.9 ms batched**
+versus **1,863 ms individually** (11.2×), with 66.11 MiB of workspace.
+See the [measurement conditions and samples](results/README.md#sixty-query-batches).
 
 ## Full-score queries
 
@@ -205,12 +250,18 @@ cargo run --release --bin hrxdb-bench -- --sweep --output sweep.json
 cargo run --release --bin hrxdb-bench -- --rows 100000 --samples 10
 # Larger result sets, with the first 100,000 IDs excluded:
 cargo run --release --bin hrxdb-bench -- --k 1024 --exclude-first 100000 --output large-k.json
+# Compare sixty top-5 queries with one shared-read batch:
+cargo run --release --bin hrxdb-bench -- --rows 6900000 --batch 60 --k 5 --samples 10 --output batch.json
 ```
 
 Defaults: 10M rows, 384 dimensions, k=10, three warmups and 30 measured queries.
 `--k` accepts 1–1,024. `--exclude-first N` excludes IDs 0 through N−1 and must
 leave at least one row. Full-search timings include bitmap preparation and
 device masking. Scratch reservation happens before validation and timing.
+`--batch B` compares individual queries with a tiled batch, alternating timing
+order and checking results against individual GPU queries and CPU scores.
+It records workspace bytes and counts rank differences within numerical
+tolerance. The batch benchmark supports exclusions but cannot use `--sweep`.
 `--sweep` compares all 16 combinations of 128/256 threads, 1/2/4/8 rows per wave,
 and 2/4 components per load on the same corpus. It selects the minimum median
 full-search latency, preferring fewer VGPRs for results within 1%. Optional
@@ -259,6 +310,11 @@ queries, large k, and odd merge tails. The 10M-row test allocates approximately
 tail. The faces-shape test allocates about 9.4 GB and crosses the compiler's
 2^32-element boundary. Run hardware tests
 separately from performance measurements to avoid GPU contention.
+
+Batch tests cover query widths, row-major input validation, shared exclusions,
+FP16 extremes and padded dimensions, exact ties, running selection across tiles
+and shards, workspace reuse, and ownership across threads. The faces-shape test
+also runs sixty queries across the 8 GiB shard boundary with bounded workspace.
 
 
 The repository's [release guide](RELEASE.md) covers packaging and publication.

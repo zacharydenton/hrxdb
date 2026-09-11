@@ -1,9 +1,13 @@
 // Large-k selection: bitonic-sort 1024-row tiles in LDS, then repeatedly merge
 // pairs of sorted k-lists. Each merge halves the number of lists, even at k=1024.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
+config.decl @db.select.limit : %value: index where [range(%value, 1, 1073741824)]
+config.decl @db.batch : %value: index where [range(%value, 1, 64)]
+config.decl @db.merge.planar : %value: index where [range(%value, 0, 1)]
 
 kernel.def target(@target) export("sort_select") @sort_select(%count_arg: i32) {
   %one = index.constant 1 : index
+  %batch = config.get @db.batch : index
   %threads = index.constant 256 : index
   %tile = index.constant 1024 : index
   %extra = index.constant 1023 : index
@@ -11,8 +15,8 @@ kernel.def target(@target) export("sort_select") @sort_select(%count_arg: i32) {
   %count = index.assume %raw [range(%raw, 1, 1073741824)] : index
   %rounded = index.add %count, %extra : index
   %groups = index.div %rounded, %tile : index
-  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
-} launch(%count_arg: i32, %k_arg: i32, %scores: buffer, %out_scores: buffer, %out_ids: buffer) {
+  kernel.launch.config workgroups(%groups, %batch, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%count_arg: i32, %k_arg: i32, %row_base_arg: i32, %scores: buffer, %out_scores: buffer, %out_ids: buffer) {
   %zero = index.constant 0 : offset
   %i0 = index.constant 0 : index
   %i1 = index.constant 1 : index
@@ -35,9 +39,22 @@ kernel.def target(@target) export("sort_select") @sort_select(%count_arg: i32) {
   %groups = index.div %rounded, %c1024 : index
   %out_count = index.mul %groups, %k : index
   %outbase = index.mul %group, %k : index
-  %sv = buffer.view %scores[%zero] : buffer -> view<[%count]xf32>
-  %os = buffer.view %out_scores[%zero] : buffer -> view<[%out_count]xf32>
-  %oi = buffer.view %out_ids[%zero] : buffer -> view<[%out_count]xi32>
+  %query0 = kernel.workgroup.id<y> : index
+  %batch_count = config.get @db.batch : index
+  %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %batch_count)] : index
+  %limit = config.get @db.select.limit : index
+  %input_span = index.assume %count [range(%count, 1, 1073741824), le(%count, %limit)] : index
+  %output_span = index.assume %out_count [range(%out_count, 1, 1073741824), le(%out_count, %limit)] : index
+  %c4offset = index.constant 4 : offset
+  %input_bytes = index.scale %input_span, %c4offset : index, offset -> offset
+  %input_offset = index.scale %query, %input_bytes : index, offset -> offset
+  %output_bytes = index.scale %output_span, %c4offset : index, offset -> offset
+  %output_offset = index.scale %query, %output_bytes : index, offset -> offset
+  %sv = buffer.view %scores[%input_offset] : buffer -> view<[%count]xf32>
+  %os = buffer.view %out_scores[%output_offset] : buffer -> view<[%out_count]xf32>
+  %oi = buffer.view %out_ids[%output_offset] : buffer -> view<[%out_count]xi32>
+  %row_base_raw = index.cast %row_base_arg : i32 to index
+  %row_base = index.assume %row_base_raw [range(%row_base_raw, 0, 1073741823)] : index
   %scratch_bytes = index.constant 4096 : offset
   %scratch_s = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
   %scratch_i = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
@@ -54,7 +71,8 @@ kernel.def target(@target) export("sort_select") @sort_select(%count_arg: i32) {
     %safe = scf.select %valid, %row, %i0 : index
     %at = index.assume %safe [range(%safe, 0, 1073741823), lt(%safe, %count)] : index
     %value = view.load %sv[%at] : view<[%count]xf32> -> f32
-    %id0 = index.cast %row : index to i32
+    %global = index.add %row, %row_base : index
+    %id0 = index.cast %global : index to i32
     %score = scf.select %valid, %value, %neg : f32
     %id = scf.select %valid, %id0, %sentinel : i32
     view.store %score, %ss[%local] : f32, view<1024xf32>
@@ -126,13 +144,14 @@ kernel.def target(@target) export("sort_select") @sort_select(%count_arg: i32) {
 
 kernel.def target(@target) export("sorted_merge") @sorted_merge(%groups_arg: i32) {
   %one = index.constant 1 : index
+  %batch = config.get @db.batch : index
   %two = index.constant 2 : index
   %threads = index.constant 256 : index
   %raw = index.cast %groups_arg : i32 to index
   %groups = index.assume %raw [range(%raw, 2, 1048576)] : index
   %rounded = index.add %groups, %one : index
   %outputs = index.div %rounded, %two : index
-  kernel.launch.config workgroups(%outputs, %one, %one) workgroup_size(%threads, %one, %one) : index
+  kernel.launch.config workgroups(%outputs, %batch, %one) workgroup_size(%threads, %one, %one) : index
 } launch(%groups_arg: i32, %k_arg: i32, %scores: buffer, %ids: buffer, %out_scores: buffer, %out_ids: buffer) {
   %zero = index.constant 0 : offset
   %i0 = index.constant 0 : index
@@ -152,20 +171,37 @@ kernel.def target(@target) export("sorted_merge") @sorted_merge(%groups_arg: i32
   %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
   %group0 = kernel.workgroup.id<x> : index
   %group = index.assume %group0 [range(%group0, 0, 524287)] : index
-  %left = index.mul %group, %i2 : index
-  %right = index.add %left, %i1 : index
+  %planar = config.get @db.merge.planar : index
+  %is_planar = index.cmp eq, %planar, %i1 : index
+  %paired_left = index.mul %group, %i2 : index
+  %paired_right = index.add %paired_left, %i1 : index
+  %planar_right = index.add %group, %outputs : index
+  %left = scf.select %is_planar, %group, %paired_left : index
+  %right = scf.select %is_planar, %planar_right, %paired_right : index
   %outbase = index.mul %group, %k : index
-  %sv = buffer.view %scores[%zero] : buffer -> view<[%count]xf32>
-  %iv = buffer.view %ids[%zero] : buffer -> view<[%count]xi32>
-  %os = buffer.view %out_scores[%zero] : buffer -> view<[%out_count]xf32>
-  %oi = buffer.view %out_ids[%zero] : buffer -> view<[%out_count]xi32>
+  %query0 = kernel.workgroup.id<y> : index
+  %batch_count = config.get @db.batch : index
+  %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %batch_count)] : index
+  %limit = config.get @db.select.limit : index
+  %input_span = index.assume %count [range(%count, 1, 1073741824), le(%count, %limit)] : index
+  %output_span = index.assume %out_count [range(%out_count, 1, 1073741824), le(%out_count, %limit)] : index
+  %c4offset = index.constant 4 : offset
+  %input_bytes = index.scale %input_span, %c4offset : index, offset -> offset
+  %input_offset = index.scale %query, %input_bytes : index, offset -> offset
+  %output_bytes = index.scale %output_span, %c4offset : index, offset -> offset
+  %output_offset = index.scale %query, %output_bytes : index, offset -> offset
+  %sv = buffer.view %scores[%input_offset] : buffer -> view<[%count]xf32>
+  %iv = buffer.view %ids[%input_offset] : buffer -> view<[%count]xi32>
+  %os = buffer.view %out_scores[%output_offset] : buffer -> view<[%out_count]xf32>
+  %oi = buffer.view %out_ids[%output_offset] : buffer -> view<[%out_count]xi32>
   %twok = index.mul %k, %i2 : index
   scf.for %candidate = [%tid to %twok step %c256] {
     %from_right = index.cmp uge, %candidate, %k : index
     %side = scf.select %from_right, %i1, %i0 : index
     %relative = index.sub %candidate, %k : index
-    %position = scf.select %from_right, %relative, %candidate : index
-    %list = index.add %left, %side : index
+    %position0 = scf.select %from_right, %relative, %candidate : index
+    %position = index.assume %position0 [range(%position0, 0, 1023), lt(%position0, %k)] : index
+    %list = scf.select %from_right, %right, %left : index
     %valid = index.cmp ult, %list, %groups : index
     scf.if %valid {
       %other = scf.select %from_right, %left, %right : index

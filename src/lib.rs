@@ -27,6 +27,7 @@
 //! IDs are insertion positions, not application IDs. The index does not persist
 //! vectors, map external IDs, or support updates, metadata filters, or approximate
 //! search. Query-time exclusions use insertion IDs.
+mod batch;
 mod host;
 mod kernels;
 use host::HostBuffer;
@@ -151,6 +152,7 @@ pub struct FlatIndex {
     count: usize,
     config: ScanConfig,
     reports: Vec<Compilation>,
+    batch: Option<batch::BatchScratch>,
 }
 
 struct Shard {
@@ -513,6 +515,7 @@ impl FlatIndex {
             count,
             config,
             reports,
+            batch: None,
         })
     }
 
@@ -546,6 +549,7 @@ impl FlatIndex {
     }
     /// Scoring/read-control report pairs in shard order, followed by small-k
     /// selection/merge, large-k sorting/merge, and exclusion masking reports.
+    /// Batch kernel reports are appended as query widths are prepared.
     /// Artifact paths refer to the local HRX cache.
     pub fn compilation_reports(&self) -> &[Compilation] {
         &self.reports
@@ -554,6 +558,8 @@ impl FlatIndex {
     /// Compile a new scan configuration outside query timing; retains the corpus.
     /// Returns an error for an invalid schedule or synchronization/compilation
     /// failure. The previous schedule is retained if compilation fails.
+    /// This configures single-query scans; the batch matrix kernel uses its own
+    /// schedule, independent of [`ScanConfig`].
     pub fn configure(&mut self, config: ScanConfig) -> Result<()> {
         config.validate()?;
         self.stream.synchronize()?;
@@ -640,6 +646,7 @@ impl FlatIndex {
             let mut constants = Constants::new();
             constants.push(count as u32)?;
             constants.push(k as u32)?;
+            constants.push(0u32)?;
             let (input_scores, input_ids) = if first {
                 (&self.scores, &self.scores)
             } else {
@@ -706,6 +713,7 @@ impl FlatIndex {
         let mut constants = Constants::new();
         constants.push(self.count as u32)?;
         constants.push(k as u32)?;
+        constants.push(0u32)?;
         // SAFETY: each group sorts 1024 guarded scores in workgroup memory and
         // writes k candidates; reserve_search sizes both pairs for this level.
         unsafe {
@@ -978,6 +986,9 @@ impl Drop for FlatIndex {
             self.query.abandon();
             self.readback.abandon();
             self.exclusions.abandon();
+            if let Some(batch) = &mut self.batch {
+                batch.abandon();
+            }
         }
     }
 }

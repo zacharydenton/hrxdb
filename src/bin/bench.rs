@@ -10,6 +10,7 @@ struct Options {
     samples: usize,
     k: usize,
     exclude_first: usize,
+    batch: usize,
     sweep: bool,
     output: Option<PathBuf>,
     config: ScanConfig,
@@ -22,6 +23,7 @@ fn options() -> Result<Options, String> {
         samples: 30,
         k: 10,
         exclude_first: 0,
+        batch: 1,
         sweep: false,
         output: None,
         config: ScanConfig::default(),
@@ -30,7 +32,7 @@ fn options() -> Result<Options, String> {
     while let Some(key) = args.next() {
         if key == "--help" {
             println!(
-                "hrxdb-bench [--rows 10000000] [--dimensions 384] [--samples 30] [--k 10] [--exclude-first 0]\n             [--sweep] [--threads 128] [--rows-per-wave 2] [--load-width 4] [--output results.json]\n             Builds once, checks sample scores, then measures completed single-query work.\n             --sweep tests all 16 schedules on the same corpus."
+                "hrxdb-bench [--rows 10000000] [--dimensions 384] [--samples 30] [--k 10] [--exclude-first 0] [--batch 1]\n             [--sweep] [--threads 128] [--rows-per-wave 2] [--load-width 4] [--output results.json]\n             Builds once, checks sample scores, then measures completed single-query work.\n             --sweep tests all 16 schedules on the same corpus."
             );
             std::process::exit(0);
         }
@@ -54,6 +56,7 @@ fn options() -> Result<Options, String> {
             "--samples" => o.samples = value,
             "--k" => o.k = value,
             "--exclude-first" => o.exclude_first = value,
+            "--batch" => o.batch = value,
             "--threads" => o.config.threads = value,
             "--rows-per-wave" => o.config.rows_per_wave = value,
             "--load-width" => o.config.load_width = value,
@@ -62,6 +65,9 @@ fn options() -> Result<Options, String> {
     }
     if o.rows == 0 || o.samples == 0 || !(1..=1024).contains(&o.k) || o.exclude_first >= o.rows {
         return Err("rows and samples must be positive; k must be in 1..=1024; exclude-first must be less than rows".into());
+    }
+    if !(1..=64).contains(&o.batch) || (o.batch > 1 && o.sweep) {
+        return Err("batch must be in 1..=64; batched GEMM does not use --sweep".into());
     }
     Ok(o)
 }
@@ -194,6 +200,9 @@ struct Report {
 }
 
 fn run(o: Options) -> hrxdb::Result<()> {
+    if o.batch > 1 {
+        return run_batch(o);
+    }
     let device = hrx::Device::open(0)?;
     eprintln!(
         "Building {} x {} on {}",
@@ -412,6 +421,147 @@ fn run(o: Options) -> hrxdb::Result<()> {
     let json = serde_json::to_string_pretty(&report)?;
     if let Some(path) = o.output {
         std::fs::write(path, &json).map_err(|e| hrxdb::Error::Message(e.to_string()))?;
+    } else {
+        println!("{json}");
+    }
+    Ok(())
+}
+
+fn run_batch(o: Options) -> hrxdb::Result<()> {
+    let device = hrx::Device::open(0)?;
+    eprintln!(
+        "Building {} x {} for {}-query batches",
+        o.rows, o.dimensions, o.batch
+    );
+    let start = Instant::now();
+    let mut db = FlatIndex::build_with_config(
+        &device,
+        o.dimensions,
+        (0..o.rows).map(|i| row(i, o.dimensions)),
+        o.config,
+    )?;
+    let build_seconds = start.elapsed().as_secs_f64();
+    db.reserve_search(o.k)?;
+    let start = Instant::now();
+    db.reserve_batch(o.batch, o.k)?;
+    let reserve_seconds = start.elapsed().as_secs_f64();
+    let excluded: Vec<u32> = (0..o.exclude_first as u32).collect();
+    let mut samples = Vec::new();
+    let mut near_tie_rank_differences = 0;
+    let mut max_score_error = 0.0f64;
+    for sample in 0..o.samples + 3 {
+        let queries: Vec<_> = (0..o.batch)
+            .flat_map(|q| row(o.rows + 888 + sample * o.batch + q, o.dimensions))
+            .collect();
+        let mut run = |batched| -> hrxdb::Result<_> {
+            let start = Instant::now();
+            let neighbors = if batched {
+                db.search_batch_excluding(&queries, o.k, &excluded)?
+            } else {
+                queries
+                    .chunks_exact(o.dimensions)
+                    .map(|q| db.search_excluding(q, o.k, &excluded))
+                    .collect::<hrxdb::Result<Vec<_>>>()?
+            };
+            Ok((start.elapsed().as_secs_f64() * 1000.0, neighbors))
+        };
+        let (sequential, batched) = if sample % 2 == 0 {
+            (run(false)?, run(true)?)
+        } else {
+            let b = run(true)?;
+            (run(false)?, b)
+        };
+        if batched.1.len() != o.batch {
+            return Err(hrxdb::Error::Message("batch query count mismatch".into()));
+        }
+        for ((actual, expected), query) in batched
+            .1
+            .iter()
+            .zip(&sequential.1)
+            .zip(queries.chunks_exact(o.dimensions))
+        {
+            if actual.len() != expected.len() {
+                return Err(hrxdb::Error::Message("batch result count mismatch".into()));
+            }
+            if actual.windows(2).any(|w| {
+                w[0].similarity < w[1].similarity
+                    || (w[0].similarity == w[1].similarity && w[0].id >= w[1].id)
+            }) {
+                return Err(hrxdb::Error::Message(
+                    "unsorted or duplicate batch neighbors".into(),
+                ));
+            }
+            for (got, want) in actual.iter().zip(expected) {
+                if got.id != want.id {
+                    near_tie_rank_differences += 1;
+                    if (got.similarity - want.similarity).abs() > 3e-6 {
+                        return Err(hrxdb::Error::Message(
+                            "batch ranking differs beyond rounding tolerance".into(),
+                        ));
+                    }
+                }
+                if (got.id as usize) < o.exclude_first
+                    || got.id as usize >= o.rows
+                    || !got.similarity.is_finite()
+                {
+                    return Err(hrxdb::Error::Message(
+                        "batch returned invalid or excluded ID".into(),
+                    ));
+                }
+                let error = (got.similarity as f64
+                    - score(got.id as usize, o.dimensions, query, true))
+                .abs();
+                max_score_error = max_score_error.max(error);
+                if error > 3e-6 {
+                    return Err(hrxdb::Error::Message(
+                        "batch score differs from CPU reference".into(),
+                    ));
+                }
+            }
+        }
+        eprintln!(
+            "batch {sample}: sequential {:.2} ms, batched {:.2} ms",
+            sequential.0, batched.0
+        );
+        if sample >= 3 {
+            samples.push(serde_json::json!({"sequential_ms": sequential.0, "batch_ms": batched.0}));
+        }
+    }
+    let median = |key: &str| percentile(samples.iter().map(|s| s[key].as_f64().unwrap()), 0.5);
+    let sequential = median("sequential_ms");
+    let batched = median("batch_ms");
+    let mut reports = db.compilation_reports().to_vec();
+    for report in &mut reports {
+        let path = std::path::Path::new(&report.artifact);
+        if let (Some(key), Some(file)) =
+            (path.parent().and_then(|p| p.file_name()), path.file_name())
+        {
+            report.artifact = format!(
+                "hrx-cache/kernels/{}/{}",
+                key.to_string_lossy(),
+                file.to_string_lossy()
+            );
+        }
+    }
+    let report = serde_json::json!({
+        "target": device.target().as_str(), "rows": o.rows, "dimensions": o.dimensions,
+        "batch": o.batch, "k": o.k, "excluded_rows": o.exclude_first, "shards": db.shard_count(),
+        "ingestion_and_compile_seconds": build_seconds, "batch_reserve_seconds": reserve_seconds,
+        "batch_workspace_bytes": db.batch_workspace_bytes(), "sequential_median_ms": sequential,
+        "batch_median_ms": batched, "speedup": sequential / batched,
+        "batch_p95_ms": percentile(samples.iter().map(|s| s["batch_ms"].as_f64().unwrap()), 0.95),
+        "max_returned_score_error": max_score_error, "near_tie_rank_differences": near_tie_rank_differences,
+        "timing": "Host completion. Three warmups, changing queries, alternating sequential/batch timing order. Compilation and workspace reservation excluded; query preparation, selection, masking and readback included. No concurrent hrxdb benchmark or GPU tests.",
+        "validation": "Each batch compared with individual GPU searches. ID differences accepted only within 3e-6 score tolerance and counted. All returned scores checked against quantized CPU reference.",
+        "compiler": reports, "samples": samples,
+    });
+    eprintln!(
+        "Batch median {batched:.2} ms vs {sequential:.2} ms sequential: {:.2}x",
+        sequential / batched
+    );
+    let json = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = o.output {
+        std::fs::write(path, json)?;
     } else {
         println!("{json}");
     }

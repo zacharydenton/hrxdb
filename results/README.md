@@ -71,6 +71,39 @@ The hardware suite also passes the reported 8,942,135 × 512 faces shape with
 two internal corpus allocations. It tests unique matches before, on, and after
 the 8 GiB boundary and at the final row, including k=1,024 and excluded IDs.
 
+## Sixty-query batches
+
+The [60-query benchmark](6.9m-384-batch-60.json) uses 6.9M × 384 generated rows
+(5.2992 GB of FP16 values), k=5, no exclusions, three warmups, and ten measured
+batches on local gfx1151, 2026-09-11. Timing order alternates between sixty
+individual searches and one batch. Compilation and workspace reservation are
+excluded; query preparation, GPU selection, and final readback are included.
+No other hrxdb GPU tests or benchmarks ran concurrently. System activity and
+GPU clocks were not controlled.
+
+| Measurement | Result |
+|---|---:|
+| Sixty individual searches, median | 1,863.143 ms |
+| One sixty-query batch, median | **165.876 ms** |
+| Batch p95 | 176.612 ms |
+| Speedup over individual searches | **11.23×** |
+| Additional batch workspace | **66.11 MiB** |
+| Final score/ID readback | 2,400 bytes |
+| Rank differences across 780 query comparisons, including warmups | 0 |
+| Maximum returned-score error against CPU reference | 3.18 × 10⁻⁷ |
+
+This is above the motivating estimate of roughly 60 ms. It is a measured
+improvement from reusing corpus data across queries while preserving FP32
+queries and accumulation. The SIMT matrix kernel expands each corpus tile
+to FP32 in workgroup memory; it does not round queries to FP16. Different
+accumulation order can reorder near-ties, even though this run matched every
+individual-query result ID.
+
+Only a 262,144-row score tile is materialized, followed by a running top-k
+merge on the GPU. Workspace stays bounded as the corpus grows and is reported
+by `batch_workspace_bytes()`. The record retains every timing sample and
+compiler report, along with the reproduction command.
+
 ## Generated code
 
 The [resource inventory](codegen.json) records all sweep variants. The default
@@ -98,10 +131,13 @@ checked-in Loom sources and specialization values reproduce the kernels.
 
 `cargo test --release`, `cargo test --release -- --ignored --test-threads=1`,
 `cargo fmt --all -- --check`, and `cargo clippy --all-targets -- -D warnings`.
-The current suite has ten opt-in GPU tests. Coverage includes all scan
+The current suite has fourteen opt-in GPU tests. Coverage includes all scan
 configurations, padded dimensions, empty/small indexes, ties, negative scores,
 every k=1–1,024 on exact synthetic scores, odd merge tails, exclusions and
 growing walks, FP16 ingestion, cross-thread ownership, sharded/single-index
 equivalence, the 7.68 GB allocation test, and the 8,942,135 × 512 faces shape.
-Five CPU tests, Rust 1.88 compatibility, three doctests, warning-free Clippy
+Batch coverage includes widths through 64, FP16 extremes and padding, shared
+exclusions, unaligned tiles and shards, running top-k, workspace reuse, and
+sixty queries across the faces corpus's 8 GiB boundary.
+Six CPU tests, Rust 1.88 compatibility, four doctests, warning-free Clippy
 and rustdoc, and formatting checks passed as well.
