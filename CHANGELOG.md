@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 — Release candidate
+## 0.1.0 — 2026-09-13
 
 First release of hrxdb: an embedded GPU-powered vector database for
 unified-memory systems, built on HRX and Loom and targeting AMD Strix Halo

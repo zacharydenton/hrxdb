@@ -15,9 +15,6 @@ The library exposes a Rust API through
 **AMD Strix Halo (`gfx1151`) on Linux x86_64**. Rust 1.88+ is required; other GPUs
 and operating systems are not supported for execution in this release.
 
-The first **0.1.0 release is being prepared**. Crates.io publication is pending;
-the examples can be run from a checkout now.
-
 Unified memory makes large resident collections possible without a separate
 discrete GPU memory pool. hrxdb builds around that model: ingest once, reuse
 the corpus across searches and custom scoring, and read back only what the
@@ -43,7 +40,7 @@ rankings relative to the original vectors.
 
 ## Quick start
 
-After the crates.io release, add:
+Add the dependency:
 
 ```toml
 [dependencies]
@@ -116,7 +113,8 @@ search; custom kernels must mask slack.
 
 See the [API and execution guide](docs/guide.md) for buffer layouts,
 normalization, exclusions, memory limits, and synchronization contracts.
-Generate the full API reference locally with `cargo doc --locked --no-deps --open`.
+See the [API reference](https://docs.rs/hrxdb/0.1.0/hrxdb/), or generate it locally
+with `cargo doc --locked --no-deps --open`.
 
 ## Build your own scoring pipeline
 

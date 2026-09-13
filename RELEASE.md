@@ -1,10 +1,13 @@
 # Releasing hrxdb
 
-The first release candidate is `0.1.0`, using the published `hrx-rs =0.4.0`
-dependency. The repository is currently private and hrxdb has not been published
-to crates.io. No tag or GitHub release has been created, and no workflow
-publishes automatically. Public visibility, package publication, and release
-creation remain separate actions.
+hrxdb `0.1.0` uses the published `hrx-rs =0.4.0` dependency. Release artifacts:
+
+- [Source and release notes](https://github.com/zacharydenton/hrxdb/releases/tag/v0.1.0)
+- [crates.io package](https://crates.io/crates/hrxdb/0.1.0)
+- [API reference](https://docs.rs/hrxdb/0.1.0/hrxdb/)
+
+There is no automatic publishing workflow. Repository visibility, package
+publication, and release creation are managed explicitly.
 
 ## Candidate qualification — 2026-09-13
 
@@ -17,12 +20,13 @@ Local checks passed with the registry dependency `hrx-rs 0.4.0`:
 - All four examples and single-query/batch benchmark CLI smoke runs.
 - Publication dry run, including compilation of the unpacked crate.
 - Local documentation links and versioned dependency setup/license links.
-- Gitleaks 8.30.1 found no leaks across all 10 existing commits. Cargo-audit
+- Gitleaks 8.30.1 found no leaks across all 11 pre-release commits. Cargo-audit
   0.22.2 reported no known vulnerabilities or warnings with RustSec database
   commit `b50980aad8b8f14f77e25a97b32dd94bf008b0af` (updated September 9).
 
-These checks qualify the candidate locally. CI must also pass on the final
-release commit; publication and public repository access remain pending.
+The final release commit must also pass CI. Qualification includes a clean-tree
+publication dry run and running the README quick start against the unpacked
+crate. Verify public endpoints after publishing.
 
 ## Validate the release candidate
 
@@ -71,16 +75,15 @@ secret or unknown vulnerability is absent. The MIT license covers this crate;
 the separately distributed runtime/compiler carries its own
 [third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.4.0/THIRD-PARTY.md).
 
-## Publish the first release
+## Publication procedure
 
 Once public distribution is approved:
 
 1. Confirm the `hrxdb` crates.io name is still available and the publishing
    account has access. Verify the repository license, description, topics,
    and dependency source links.
-2. Replace the pending-publication notices in the README and API guide with
-   installation instructions, date the `0.1.0` changelog entry, and update this
-   file to reflect publication. Commit and push the final release contents.
+2. Update installation instructions, versioned links, and the dated changelog
+   entry. Commit and push the final release contents.
 3. Confirm CI passes for that exact commit. Repeat packaging and the publication
    dry run from the clean tree; retain the hardware qualification results.
 4. Make `zacharydenton/hrxdb` public and verify anonymous access to the README,

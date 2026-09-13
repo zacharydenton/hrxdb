@@ -14,8 +14,7 @@ the current scope.
 
 ## Quick start
 
-After the first crates.io release, add the dependency to your application
-(publication is currently pending):
+Add the dependency to your application:
 
 ```toml
 [dependencies]
