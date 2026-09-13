@@ -1,76 +1,96 @@
 # Releasing hrxdb
 
-The first release is `0.1.0`, with the published `hrx-rs =0.4.0` dependency.
-The repository is `https://github.com/zacharydenton/hrxdb`, currently private.
-Making it public, tagging, and crates.io publication are separate release actions.
-There is no workflow that automatically publishes packages.
+The first release candidate is `0.1.0`, using the published `hrx-rs =0.4.0`
+dependency. The repository is currently private and hrxdb has not been published
+to crates.io. No tag or GitHub release has been created, and no workflow
+publishes automatically. Public visibility, package publication, and release
+creation remain separate actions.
 
-## 0.1.0 qualification — 2026-09-11
+## Candidate qualification — 2026-09-13
 
-Local release checks passed against the registry version of `hrx-rs 0.4.0`:
+Local checks passed with the registry dependency `hrx-rs 0.4.0`:
 
-- Rust 1.88 and stable: all-target CPU tests, doctests, and warning-free Clippy.
-- Rustdoc with warnings denied, formatting, and archive contents inspection.
-- Five opt-in GPU tests, including cross-thread query/drop, all 16 scan
-  schedules, exact selection, and the 7.68 GB allocation boundary test.
-- The threaded external-ID example and benchmark CLI smoke test, including
-  cache-relative artifact identifiers in its saved JSON.
-- `cargo publish --dry-run --allow-dirty --locked`, including a successful build
-  of the unpacked release archive using registry dependencies.
+- Rust 1.88 and stable: all-target CPU tests (8 tests) and warning-free Clippy.
+- Formatting, 6 doctests, and Rustdoc with warnings denied.
+- All 33 hardware correctness tests on gfx1151, including the large allocation
+  and shard-boundary cases; opt-in performance comparisons excluded.
+- All four examples and single-query/batch benchmark CLI smoke runs.
+- Publication dry run, including compilation of the unpacked crate.
+- Local documentation links and versioned dependency setup/license links.
+- Gitleaks 8.30.1 found no leaks across all 10 existing commits. Cargo-audit
+  0.22.2 reported no known vulnerabilities or warnings with RustSec database
+  commit `b50980aad8b8f14f77e25a97b32dd94bf008b0af` (updated September 9).
 
-These are local qualification results; GitHub-hosted CI reports its status on
-each pushed commit. No release tag or crates.io publication has been created.
-Generate `target/package/hrxdb-0.1.0.crate` using the clean-commit commands below
-for the eventual publication.
+These checks qualify the candidate locally. CI must also pass on the final
+release commit; publication and public repository access remain pending.
 
 ## Validate the release candidate
 
-From the repository root:
+Use Rust 1.88 and stable. From the repository root:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo +1.88.0 test --locked --all-targets
-cargo test --locked --doc
-RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
+HRX_OFFLINE=1 cargo clippy --locked --all-targets -- -D warnings
+HRX_OFFLINE=1 cargo test --locked --all-targets
+HRX_OFFLINE=1 cargo test --locked --doc
+HRX_OFFLINE=1 RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
 cargo package --locked
 cargo publish --dry-run --locked
 ```
 
-CPU tests and docs work without a GPU and require no native runtime download.
-On a prepared gfx1151 machine, also run these separately from benchmarks:
+Builds and documentation require no GPU or native runtime download. Packaging
+builds the unpacked archive using registry dependencies. During preparation,
+`--allow-dirty` permits checking uncommitted edits; repeat on the clean release
+commit before publishing.
+
+Inspect `cargo package --list`: source, Loom kernels, examples, tests, the API
+guide, contributor guide, release notes, and MIT license belong in the crate.
+CI configuration and bulky benchmark artifacts stay in the repository. Confirm
+README and guide links work in their rendered destinations.
+
+On a prepared gfx1151 host, run the hardware checks and all four examples from
+[CONTRIBUTING.md](CONTRIBUTING.md). The hardware correctness command deliberately
+excludes opt-in benchmark comparisons:
 
 ```sh
-HRX_OFFLINE=1 cargo test --locked --release -- --ignored --test-threads=1
-HRX_OFFLINE=1 cargo run --locked --release --example search
-HRX_OFFLINE=1 cargo run --locked --release --bin hrxdb-bench -- --output default.json
+HRX_OFFLINE=1 cargo test --locked --release -- --ignored --test-threads=1 --skip batch::bench
+HRX_OFFLINE=1 cargo run --locked --release --bin hrxdb-bench -- --rows 100000 --samples 3
+HRX_OFFLINE=1 cargo run --locked --release --bin hrxdb-bench -- --rows 100000 --batch 9 --k 33 --samples 3
 ```
 
-The full hardware suite includes a faces-shape case allocating about 9.4 GB. Preserve the JSON from any new
-performance qualification, including percentiles, schedule, and compiler
-metadata. Runtime/compiler changes require hardware qualification; the initial
-dependency is pinned because the kernels were qualified against that bundle.
+The largest correctness test allocates about 9.4 GB. Run hardware work
+sequentially and keep benchmarks separate from tests and other GPU activity.
+Runtime/compiler changes require hardware qualification. Preserve raw JSON and
+methodology for any new public performance claim; a small smoke run does not
+replace large-corpus performance qualification.
 
-`cargo package` builds the unpacked archive, exercising registry dependencies
-instead of local path overrides. Check `cargo package --list` before publishing:
-source, Loom kernels, examples, tests, README, changelog, and license belong in
-the crate. Repository CI files and bulky benchmark artifacts do not. The
-benchmark reports and disassembly remain available in the Git repository.
+Before exposing history, scan all commits for credentials and review tracked
+artifacts for private data. Audit the lockfile against current RustSec advisories.
+Record tool versions and findings; automated scans cannot establish that every
+secret or unknown vulnerability is absent. The MIT license covers this crate;
+the separately distributed runtime/compiler carries its own
+[third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.4.0/THIRD-PARTY.md).
 
-## Publish an approved release
+## Publish the first release
 
-After the repository and package are ready for public distribution:
+Once public distribution is approved:
 
-1. Commit the reviewed release contents and push the repository to the intended
-   public remote. Confirm CI passes for the same commit.
-2. Confirm the `hrxdb` crates.io name is still available and authenticate the
-   publishing account with Cargo.
-3. Run `cargo publish --locked` from that clean commit.
-4. Create and push the `v0.1.0` tag on that commit, then create a GitHub release
-   using the `0.1.0` changelog entry.
-5. Verify installation with `cargo install hrxdb --version 0.1.0 --locked`, the
-   docs.rs build, and the package README links. The executable is `hrxdb-bench`.
+1. Confirm the `hrxdb` crates.io name is still available and the publishing
+   account has access. Verify the repository license, description, topics,
+   and dependency source links.
+2. Replace the pending-publication notices in the README and API guide with
+   installation instructions, date the `0.1.0` changelog entry, and update this
+   file to reflect publication. Commit and push the final release contents.
+3. Confirm CI passes for that exact commit. Repeat packaging and the publication
+   dry run from the clean tree; retain the hardware qualification results.
+4. Make `zacharydenton/hrxdb` public and verify anonymous access to the README,
+   examples, API guide, and benchmark evidence before publishing the crate.
+5. Run `cargo publish --locked`. Create and push `v0.1.0` on the qualified commit,
+   then create a GitHub release using the `0.1.0` changelog entry.
+6. Verify the crates.io README, docs.rs build, and a fresh consuming project.
+   Check `cargo install hrxdb --version 0.1.0 --locked`; the executable is
+   `hrxdb-bench`. Check execution separately on supported hardware.
 
-For later releases, update the manifest, lockfile, changelog, and these versioned
-commands together. Changes to `Send`, ID semantics, ranking order, precision,
-or supported platforms are part of the public API contract.
+For subsequent releases, update the manifest, lockfile, changelog, and versioned
+commands together. Treat ownership, ID semantics, ordering, precision, and
+supported platforms as public API contracts.

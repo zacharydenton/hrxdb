@@ -3,14 +3,14 @@ name = "hrxdb"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "GPU-resident exact FP16 cosine search on hrx-rs"
+description = "A GPU-powered vector database for unified-memory systems, built on HRX and Loom"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/zacharydenton/hrxdb"
 documentation = "https://docs.rs/hrxdb"
-keywords = ["vector-database", "nearest-neighbor", "gpu", "amdgpu", "loom"]
+keywords = ["vector-database", "unified-memory", "gpu", "hrx", "loom-kernels"]
 categories = ["database", "science", "algorithms"]
-include = ["/src/**", "/kernels/**", "/examples/**", "/tests/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/CHANGELOG.md", "/RELEASE.md", "/LICENSE"]
+include = ["/src/**", "/kernels/**", "/examples/**", "/tests/**", "/docs/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/CHANGELOG.md", "/CONTRIBUTING.md", "/RELEASE.md", "/LICENSE"]
 
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]

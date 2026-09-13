@@ -1,4 +1,8 @@
-//! Exhaustive GPU cosine search with FP16 storage and FP32 accumulation.
+//! A GPU-powered vector database for unified-memory systems, built on HRX and Loom.
+//!
+//! HRX manages GPU buffers, streams, and execution; Loom kernels provide
+//! exhaustive cosine search and composable GPU scoring on AMD Strix Halo.
+//! The Rust API exposes FP16 corpus storage and FP32 scores.
 //!
 //! A shared [`Corpus`] owns immutable storage. Each [`Searcher`] owns its stream
 //! and reusable workspace. [`TopK`] selects from application-defined GPU scores.
