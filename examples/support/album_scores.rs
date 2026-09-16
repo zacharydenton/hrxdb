@@ -1,5 +1,5 @@
 //! Example application code, deliberately separate from hrxdb's search API.
-use hrx::loom::{Compiler, CompilerOptions, Specialization};
+use hrx::loom::{Compiler, Specialization};
 use hrxdb::{Corpus, Error, Result};
 
 /// Best cosine per (query row, album), with negative infinity for absent albums.
@@ -59,13 +59,7 @@ pub fn score_by_album(
 
     // The stream, compiler, side arrays, query storage, and output belong to
     // the application. The corpus stays in its original allocations.
-    let compiler = Compiler::with_options(
-        None,
-        CompilerOptions {
-            target: stream.target().clone(),
-            ..Default::default()
-        },
-    )?;
+    let compiler = Compiler::for_stream(None, stream)?;
     // The global side array must also cover the last tile of every binding.
     // Interior slack may overlap later logical rows; the kernel masks by its
     // shard-local row count, independently of the ordinal's value.
@@ -87,7 +81,7 @@ pub fn score_by_album(
             ("album.queries", count),
             ("album.count", album_count),
         ] {
-            spec.config.insert(key.into(), value.to_string());
+            spec.set_config(key, value.to_string());
         }
         let artifact = compiler
             .module(include_str!("../album_scores.loom"))

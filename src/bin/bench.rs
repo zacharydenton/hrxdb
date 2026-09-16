@@ -1,4 +1,5 @@
 //! Reproducible host-completion benchmark. No compilation or ingestion is timed.
+use hrx::benchmark::Distribution;
 use hrxdb::{Measurement, ScanConfig, Searcher};
 use serde::Serialize;
 use std::{path::PathBuf, time::Instant};
@@ -122,10 +123,8 @@ fn score(id: usize, d: usize, query: &[f32], quantize: bool) -> f64 {
         * inverse as f64
 }
 
-fn percentile(v: impl Iterator<Item = f64>, p: f64) -> f64 {
-    let mut values: Vec<_> = v.collect();
-    values.sort_by(f64::total_cmp);
-    values[((values.len() as f64 * p).ceil() as usize).saturating_sub(1)]
+fn distribution(values: impl Iterator<Item = f64>) -> hrxdb::Result<Distribution> {
+    Distribution::from_samples(values.collect())
 }
 
 #[derive(Serialize)]
@@ -318,9 +317,12 @@ fn run(o: Options) -> hrxdb::Result<()> {
                 samples.push(sample);
             }
         }
-        let scan = percentile(samples.iter().map(|s| s.scan_ms), 0.5);
-        let search = percentile(samples.iter().map(|s| s.search_ms), 0.5);
-        let read = percentile(samples.iter().map(|s| s.read_control_ms), 0.5);
+        let scan_distribution = distribution(samples.iter().map(|s| s.scan_ms))?;
+        let search_distribution = distribution(samples.iter().map(|s| s.search_ms))?;
+        let read_distribution = distribution(samples.iter().map(|s| s.read_control_ms))?;
+        let scan = scan_distribution.median_ms;
+        let search = search_distribution.median_ms;
+        let read = read_distribution.median_ms;
         let rate = |ms| vector_bytes as f64 / (ms * 1e6);
         eprintln!(
             "{config:?}: scan {:.2} GB/s, search {:.2} ms, {:.1}% of read control",
@@ -332,8 +334,8 @@ fn run(o: Options) -> hrxdb::Result<()> {
             config,
             scan_median_ms: scan,
             search_median_ms: search,
-            scan_p95_ms: percentile(samples.iter().map(|s| s.scan_ms), 0.95),
-            search_p95_ms: percentile(samples.iter().map(|s| s.search_ms), 0.95),
+            scan_p95_ms: scan_distribution.p95_ms,
+            search_p95_ms: search_distribution.p95_ms,
             read_control_median_ms: read,
             scan_gb_s: rate(scan),
             search_gb_s: rate(search),
@@ -531,9 +533,18 @@ fn run_batch(o: Options) -> hrxdb::Result<()> {
             samples.push(serde_json::json!({"sequential_ms": sequential.0, "batch_ms": batched.0}));
         }
     }
-    let median = |key: &str| percentile(samples.iter().map(|s| s[key].as_f64().unwrap()), 0.5);
-    let sequential = median("sequential_ms");
-    let batched = median("batch_ms");
+    let sequential_distribution = distribution(
+        samples
+            .iter()
+            .map(|sample| sample["sequential_ms"].as_f64().unwrap()),
+    )?;
+    let batch_distribution = distribution(
+        samples
+            .iter()
+            .map(|sample| sample["batch_ms"].as_f64().unwrap()),
+    )?;
+    let sequential = sequential_distribution.median_ms;
+    let batched = batch_distribution.median_ms;
     let mut reports = db.compilation_reports().to_vec();
     for report in &mut reports {
         let path = std::path::Path::new(&report.artifact);
@@ -553,7 +564,7 @@ fn run_batch(o: Options) -> hrxdb::Result<()> {
         "ingestion_and_compile_seconds": build_seconds, "batch_reserve_seconds": reserve_seconds,
         "batch_workspace_bytes": db.batch_workspace_bytes(), "sequential_median_ms": sequential,
         "batch_median_ms": batched, "speedup": sequential / batched,
-        "batch_p95_ms": percentile(samples.iter().map(|s| s["batch_ms"].as_f64().unwrap()), 0.95),
+        "batch_p95_ms": batch_distribution.p95_ms,
         "max_returned_score_error": max_score_error, "near_tie_rank_differences": near_tie_rank_differences,
         "timing": "Host completion. Three warmups, changing queries, alternating sequential/batch timing order. Compilation and workspace reservation excluded; query preparation, selection, masking and readback included. No concurrent hrxdb benchmark or GPU tests.",
         "validation": "Each batch compared with individual GPU searches. ID differences accepted only within 3e-6 score tolerance and counted. All returned scores checked against quantized CPU reference.",

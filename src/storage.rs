@@ -166,28 +166,20 @@ impl Corpus {
                 .filter(|n| *n <= MAX_ROWS)
                 .ok_or_else(|| invalid("resident corpus exceeds 2^30 rows"))?;
         }
-        let compiler = hrx::loom::Compiler::with_options(
-            None,
-            hrx::loom::CompilerOptions {
-                target: stream.target().clone(),
-                ..Default::default()
-            },
-        )?;
-        let status = stream.allocate(4)?;
-        stream.fill(status.binding(), 0)?;
+        let compiler = hrx::loom::Compiler::for_stream(None, stream)?;
+        let status = stream.allocate_zeroed(4)?;
         let mut shards = Vec::with_capacity(resident.len());
         let mut start = 0;
         for shard in resident {
             let capacity = shard.vectors.bytes() / (padded * 2);
-            let norms = stream.allocate(capacity * 4)?;
-            stream.fill(norms.binding(), 0)?;
+            let norms = stream.allocate_zeroed(capacity * 4)?;
             let mut spec = kernels::named_spec("import_corpus");
             for (key, value) in [
                 ("import.rows", shard.rows),
                 ("import.dimensions", dimensions),
                 ("import.padded", padded),
             ] {
-                spec.config.insert(key.into(), value.to_string());
+                spec.set_config(key, value.to_string());
             }
             let (kernel, _) = compile(
                 &compiler,

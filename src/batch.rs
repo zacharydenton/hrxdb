@@ -151,24 +151,19 @@ impl Searcher {
         }
         let mut reports = Vec::new();
         let mut build = |source, mut spec: hrx::loom::Specialization, queries: usize| {
-            spec.config.insert("db.batch".into(), queries.to_string());
-            if spec.symbol != "batch_scan" {
-                spec.config
-                    .insert("db.select.limit".into(), TILE_ROWS.to_string());
+            spec.set_config("db.batch", queries.to_string());
+            if spec.symbol() != "batch_scan" {
+                spec.set_config("db.select.limit", TILE_ROWS.to_string());
             }
             let (kernel, report) = compile(&self.compiler, &self.stream, source, spec)?;
             reports.push(report);
             Ok::<_, Error>(kernel)
         };
         let mut scan_spec = kernels::named_spec("batch_scan");
-        scan_spec
-            .config
-            .insert("db.scan.dimensions".into(), self.padded.to_string());
+        scan_spec.set_config("db.scan.dimensions", self.padded.to_string());
         let scan = build(kernels::BATCH_SCAN, scan_spec, width)?;
         let mut running_spec = kernels::named_spec("sorted_merge");
-        running_spec
-            .config
-            .insert("db.merge.planar".into(), "1".into());
+        running_spec.set_config("db.merge.planar", "1");
         let running_merge = build(kernels::SORT, running_spec, 1)?;
         let (selection, selection_reports) =
             crate::selection::SelectionPlan::new(&self.compiler, &self.stream, width, TILE_ROWS)?;

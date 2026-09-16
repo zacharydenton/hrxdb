@@ -1,6 +1,6 @@
 # Releasing hrxdb
 
-hrxdb `0.1.0` uses the published `hrx-rs =0.4.0` dependency. Release artifacts:
+hrxdb `0.1.0` uses the published `hrx-rs =0.5.0` dependency. Release artifacts:
 
 - [Source and release notes](https://github.com/zacharydenton/hrxdb/releases/tag/v0.1.0)
 - [crates.io package](https://crates.io/crates/hrxdb/0.1.0)
@@ -11,7 +11,7 @@ publication, and release creation are managed explicitly.
 
 ## Candidate qualification — 2026-09-13
 
-Local checks passed with the registry dependency `hrx-rs 0.4.0`:
+Local checks passed with the registry dependency `hrx-rs 0.5.0`:
 
 - Rust 1.88 and stable: all-target CPU tests (8 tests) and warning-free Clippy.
 - Formatting, 6 doctests, and Rustdoc with warnings denied.
@@ -73,7 +73,7 @@ artifacts for private data. Audit the lockfile against current RustSec advisorie
 Record tool versions and findings; automated scans cannot establish that every
 secret or unknown vulnerability is absent. The MIT license covers this crate;
 the separately distributed runtime/compiler carries its own
-[third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.4.0/THIRD-PARTY.md).
+[third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.5.0/THIRD-PARTY.md).
 
 ## Publication procedure
 

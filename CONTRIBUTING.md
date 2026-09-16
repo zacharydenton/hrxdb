@@ -26,7 +26,7 @@ iterating. The runtime/compiler dependency is pinned to the qualified bundle.
 
 ## Hardware validation
 
-Follow the [runtime setup](https://github.com/zacharydenton/hrx-rs/blob/v0.4.0/docs/GPU-NPU.md#native-setup)
+Follow the [runtime setup](https://github.com/zacharydenton/hrx-rs/blob/v0.5.0/docs/GPU-NPU.md#native-setup)
 on a supported host. First use provisions the pinned native bundle; after
 provisioning, run with `HRX_OFFLINE=1` to prevent downloads:
 

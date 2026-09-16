@@ -202,13 +202,7 @@ pub struct TopK {
 impl TopK {
     /// Prepare selection for this device. No corpus is allocated or required.
     pub fn new(stream: &Stream) -> Result<Self> {
-        let compiler = hrx::loom::Compiler::with_options(
-            None,
-            hrx::loom::CompilerOptions {
-                target: stream.target().clone(),
-                ..Default::default()
-            },
-        )?;
+        let compiler = hrx::loom::Compiler::for_stream(None, stream)?;
         let (finish, _) = compile(
             &compiler,
             stream,
@@ -216,7 +210,7 @@ impl TopK {
             kernels::named_spec("finish"),
         )?;
         let mut spec = kernels::named_spec("sorted_merge");
-        spec.config.insert("db.merge.planar".into(), "1".into());
+        spec.set_config("db.merge.planar", "1");
         let (merge, _) = compile(&compiler, stream, kernels::SORT, spec)?;
         Ok(Self {
             device: stream.device_id(),

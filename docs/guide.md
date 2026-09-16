@@ -228,7 +228,7 @@ returns all rows, regardless of exclusions supplied to previous searches.
 `db.corpus()` returns `&Corpus` over the existing GPU allocations.
 It performs no copy, allocation, compilation, or GPU work. Applications can bind
 their own Loom kernels to these vectors, together with their own side arrays
-and output buffers. Add `hrx = { package = "hrx-rs", version = "=0.4.0" }` to
+and output buffers. Add `hrx = { package = "hrx-rs", version = "=0.5.0" }` to
 the application's dependencies to use the matching runtime and compiler API.
 
 ```rust
@@ -528,9 +528,9 @@ reuse caller-owned capacity.
 Rust 1.88+, Linux x86_64, an AMD kernel driver, KFD/render permissions, and
 a gfx1151 GPU are required for execution. The pinned native HRX bundle needs
 glibc 2.43 or newer (Ubuntu 26.04 is its distribution baseline); see the
-[HRX installation guide](https://github.com/zacharydenton/hrx-rs/blob/v0.4.0/docs/GPU-NPU.md#native-setup).
+[HRX installation guide](https://github.com/zacharydenton/hrx-rs/blob/v0.5.0/docs/GPU-NPU.md#native-setup).
 Building and generating documentation do not initialize the GPU. The crate
-uses the published `hrx-rs 0.4.0` dependency and needs no sibling checkout. HRX provisions its pinned runtime automatically; use
+uses the published `hrx-rs 0.5.0` dependency and needs no sibling checkout. HRX provisions its pinned runtime automatically; use
 `HRX_OFFLINE=1` after provisioning to prohibit downloads.
 
 ```sh

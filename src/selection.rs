@@ -16,9 +16,8 @@ impl SelectionPlan {
     ) -> Result<(Self, Vec<Compilation>)> {
         let mut reports = Vec::new();
         let mut build = |source, mut spec: hrx::loom::Specialization| {
-            spec.config.insert("db.batch".into(), batch.to_string());
-            spec.config
-                .insert("db.select.limit".into(), limit.to_string());
+            spec.set_config("db.batch", batch.to_string());
+            spec.set_config("db.select.limit", limit.to_string());
             let (kernel, report) = compile(compiler, stream, source, spec)?;
             reports.push(report);
             Ok::<_, Error>(kernel)

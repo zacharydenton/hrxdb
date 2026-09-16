@@ -126,13 +126,7 @@ impl Corpus {
         if let Some(kernel) = &*cached {
             return Ok(kernel.clone());
         }
-        let compiler = hrx::loom::Compiler::with_options(
-            None,
-            hrx::loom::CompilerOptions {
-                target: stream.target().clone(),
-                ..Default::default()
-            },
-        )?;
+        let compiler = hrx::loom::Compiler::for_stream(None, stream)?;
         let mut spec = kernels::named_spec("gather");
         for (key, value) in [
             ("gather.dimensions", self.dimensions()),
@@ -146,7 +140,7 @@ impl Corpus {
                 (MAX_ELEMENTS / self.dimensions()).min(MAX_ROWS),
             ),
         ] {
-            spec.config.insert(key.into(), value.to_string());
+            spec.set_config(key, value.to_string());
         }
         let (kernel, _) = compile(
             &compiler,

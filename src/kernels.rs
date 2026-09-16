@@ -9,12 +9,11 @@ pub const BATCH_SCAN: &str = include_str!("../kernels/batch_scan.loom");
 pub fn named_spec(symbol: &str) -> Specialization {
     let mut spec = Specialization::new(symbol);
     if ["sort_select", "sorted_merge"].contains(&symbol) {
-        spec.config.insert("db.batch".into(), "1".into());
-        spec.config
-            .insert("db.select.limit".into(), (1usize << 30).to_string());
-        spec.config.insert("db.merge.planar".into(), "0".into());
+        spec.set_config("db.batch", "1");
+        spec.set_config("db.select.limit", (1usize << 30).to_string());
+        spec.set_config("db.merge.planar", "0");
     }
-    spec.report = true;
+    spec.set_report(true);
     spec
 }
 pub fn scan_spec(n: usize, d: usize, c: ScanConfig, control: bool) -> Specialization {
@@ -27,18 +26,16 @@ pub fn scan_spec(n: usize, d: usize, c: ScanConfig, control: bool) -> Specializa
         ("db.scan.width", c.load_width),
         ("db.scan.mode", usize::from(control)),
     ] {
-        spec.config.insert(key.into(), value.to_string());
+        spec.set_config(key, value.to_string());
     }
-    spec.report = true;
+    spec.set_report(true);
     spec
 }
 pub fn select_spec(first: bool) -> Specialization {
     let mut spec = Specialization::new("select");
-    spec.config
-        .insert("db.select.first".into(), usize::from(first).to_string());
-    spec.config.insert("db.batch".into(), "1".into());
-    spec.config
-        .insert("db.select.limit".into(), (1usize << 30).to_string());
-    spec.report = true;
+    spec.set_config("db.select.first", usize::from(first).to_string());
+    spec.set_config("db.batch", "1");
+    spec.set_config("db.select.limit", (1usize << 30).to_string());
+    spec.set_report(true);
     spec
 }

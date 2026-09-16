@@ -1,5 +1,5 @@
 //! Gather two named subsets, compare on the GPU, and read only the winners.
-use hrx::loom::{Compiler, CompilerOptions, Specialization};
+use hrx::loom::{Compiler, Specialization};
 use hrxdb::{Corpus, Device, DeviceNeighbors, ScoreBatch, TopK};
 
 fn main() -> hrxdb::Result<()> {
@@ -15,20 +15,14 @@ fn main() -> hrxdb::Result<()> {
     let left = stream.allocate(left_ids.len() * corpus.dimensions() * 4)?;
     let right = stream.allocate(right_ids.len() * corpus.dimensions() * 4)?;
     let scores = stream.allocate(left_ids.len() * right_ids.len() * 4)?;
-    let compiler = Compiler::with_options(
-        None,
-        CompilerOptions {
-            target: stream.target().clone(),
-            ..Default::default()
-        },
-    )?;
+    let compiler = Compiler::for_stream(None, &stream)?;
     let mut spec = Specialization::new("subset_scores");
     for (key, value) in [
         ("subset.dimensions", corpus.dimensions()),
         ("subset.left", left_ids.len()),
         ("subset.right", right_ids.len()),
     ] {
-        spec.config.insert(key.into(), value.to_string());
+        spec.set_config(key, value.to_string());
     }
     let artifact = compiler
         .module(include_str!("subset_scores.loom"))

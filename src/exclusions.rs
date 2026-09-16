@@ -16,21 +16,14 @@ impl DeviceExclusions {
         if rows > MAX_ROWS {
             return Err(invalid("exclusion set exceeds 2^30 rows"));
         }
-        let compiler = hrx::loom::Compiler::with_options(
-            None,
-            hrx::loom::CompilerOptions {
-                target: stream.target().clone(),
-                ..Default::default()
-            },
-        )?;
+        let compiler = hrx::loom::Compiler::for_stream(None, stream)?;
         let (update, _) = compile(
             &compiler,
             stream,
             include_str!("../kernels/exclusions.loom"),
             kernels::named_spec("update_exclusions"),
         )?;
-        let bitmap = stream.allocate(rows.div_ceil(32) * 4)?;
-        stream.fill(bitmap.binding(), 0)?;
+        let bitmap = stream.allocate_zeroed(rows.div_ceil(32) * 4)?;
         Ok(Self {
             bitmap,
             rows,

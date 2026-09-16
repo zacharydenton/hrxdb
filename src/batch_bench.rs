@@ -48,9 +48,8 @@ fn compare_batch_scan() -> Result<()> {
         .unwrap()
         .clone();
     let mut spec = kernels::named_spec("batch_scan");
-    spec.config.insert("db.batch".into(), width.to_string());
-    spec.config
-        .insert("db.scan.dimensions".into(), candidate.padded.to_string());
+    spec.set_config("db.batch", width.to_string());
+    spec.set_config("db.scan.dimensions", candidate.padded.to_string());
     let (original, mut baseline_report) = compile(
         &baseline.compiler,
         &baseline.stream,

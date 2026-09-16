@@ -9,7 +9,7 @@
 //! Scores describe the quantized corpus, not the original FP32 rows.
 //!
 //! Execution requires Linux x86_64, a gfx1151 AMD GPU, and the native runtime
-//! prerequisites in the [hrx-rs documentation](https://docs.rs/hrx-rs/0.4.0/hrx/).
+//! prerequisites in the [hrx-rs documentation](https://docs.rs/hrx-rs/0.5.0/hrx/).
 //! Building and generating documentation do not initialize GPU hardware.
 //!
 //! ```no_run
@@ -285,7 +285,7 @@ fn compile(
 ) -> Result<(Kernel, Compilation)> {
     let artifact = compiler.module(source).compile(&spec)?;
     let report = Compilation {
-        symbol: spec.symbol.clone(),
+        symbol: spec.symbol().to_owned(),
         artifact: artifact.path().display().to_string(),
         report: artifact.report().cloned(),
         diagnostics: artifact
@@ -461,13 +461,7 @@ impl Searcher {
         let count = corpus.len();
         let dimensions = corpus.dimensions();
         let padded = corpus.padded_dimensions();
-        let compiler = hrx::loom::Compiler::with_options(
-            None,
-            hrx::loom::CompilerOptions {
-                target: stream.target().clone(),
-                ..Default::default()
-            },
-        )?;
+        let compiler = hrx::loom::Compiler::for_stream(None, &stream)?;
         let mut scans = Vec::new();
         let mut reports = Vec::new();
         for shard in &corpus.inner.shards {

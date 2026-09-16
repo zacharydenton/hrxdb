@@ -85,7 +85,7 @@ impl Searcher {
                 ("query.padded", self.padded),
                 ("query.width", width),
             ] {
-                spec.config.insert(key.into(), value.to_string());
+                spec.set_config(key, value.to_string());
             }
             let (plan, report) = compile(
                 &self.compiler,

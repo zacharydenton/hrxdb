@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 — 2026-09-16
+
+- Require HRX 0.5 and use its shared compiler-target selection,
+  specialization builders, and benchmark distributions.
+
 ## 0.1.0 — 2026-09-13
 
 First release of hrxdb: an embedded GPU-powered vector database for
