@@ -44,7 +44,7 @@ Add the dependency:
 
 ```toml
 [dependencies]
-hrxdb = "0.2"
+hrxdb = "0.3"
 ```
 
 ```rust
@@ -81,7 +81,7 @@ or compiler use provisions the native bundle pinned by the resolved HRX release.
 Execution needs the AMD kernel driver, `/dev/kfd` and render-device permissions,
 compatible C/C++ runtime libraries and `libatomic`, and **glibc 2.43+**
 (the bundle's baseline is Ubuntu 26.04). See the
-[HRX setup guide](https://github.com/zacharydenton/hrx-rs/blob/v0.6.0/docs/GPU-NPU.md#native-setup).
+[HRX setup guide](https://github.com/zacharydenton/hrx-rs/blob/v0.7.0/docs/GPU-NPU.md#native-setup).
 After provisioning, `HRX_OFFLINE=1` prevents runtime downloads.
 
 ## Choose your operation
@@ -124,7 +124,7 @@ search; custom kernels must mask slack.
 
 See the [API and execution guide](docs/guide.md) for buffer layouts,
 normalization, exclusions, memory limits, and synchronization contracts.
-See the [API reference](https://docs.rs/hrxdb/0.2.0/hrxdb/), or generate it locally
+See the [API reference](https://docs.rs/hrxdb/0.3.0/hrxdb/), or generate it locally
 with `cargo doc --locked --no-deps --open`.
 
 ## Build your own scoring pipeline
@@ -151,7 +151,7 @@ Runnable examples:
 
 The custom scoring kernels illustrate interoperability; they are not tuned GEMMs.
 Applications using HRX types directly should also depend on
-`hrx = { package = "hrx-rs", version = "0.6.0" }`.
+`hrx = { package = "hrx-rs", version = "0.7.0" }`.
 
 ## Measured performance
 
@@ -199,4 +199,4 @@ for setup, validation, and reporting issues; [CHANGELOG.md](CHANGELOG.md) for
 the release contents; and [RELEASE.md](RELEASE.md) for publication steps.
 
 MIT licensed. The separately distributed HRX runtime and compiler have their
-own [third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.6.0/THIRD-PARTY.md).
+own [third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.7.0/THIRD-PARTY.md).

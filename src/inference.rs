@@ -3,7 +3,7 @@ use crate::{Corpus, DeviceNeighbors, DeviceQueries, Neighbor, Result, invalid};
 use hrx::{
     Access,
     execution::GpuAccess,
-    inference::{Inference, ModelContext, PreparedModel},
+    inference::{Inference, InferenceGraph, ModelContext, PreparedModel},
     tensor::{DType, DeviceTensor, Layout, TensorDesc},
 };
 
@@ -41,51 +41,55 @@ impl Corpus {
             TensorDesc::new(DType::F32, vec![batch, k])?.with_layout(Layout::Rows)?,
             TensorDesc::new(DType::U32, vec![batch, k])?.with_layout(Layout::Rows)?,
         ];
-        let plan = PreparedModel::prepare(
-            context,
-            &[input],
-            &output,
-            workers,
-            |context, inputs, outputs| {
-                let mut corpus = self.clone();
-                if let Some(budget) = context.runtime().memory_budget() {
-                    corpus = corpus.with_workspace_budget(budget.clone());
-                }
-                let mut searcher = corpus.searcher()?;
-                searcher.reserve_device(batch, k)?;
-                let mut results = DeviceNeighbors::new(&searcher.stream, batch, k)?;
-                searcher.stream.synchronize()?;
-                let bindings = std::iter::once(GpuAccess {
-                    view: inputs[0].binding().unwrap(),
-                    access: Access::Read,
-                })
-                .chain(outputs.iter().map(|tensor| GpuAccess {
-                    view: tensor.binding().unwrap(),
-                    access: Access::Write,
-                }))
-                .collect::<Vec<_>>();
-                let mut graph = context.runtime().graph();
-                // SAFETY: The closure owns its private searcher, result allocation
-                // and corpus clone. Only input is read; all four declared outputs
-                // are fully copied. Every stream operation completes before return.
-                unsafe {
-                    graph.gpu_scoped(&bindings, move |views| {
-                        let queries = DeviceQueries::new(views[0], batch, dimensions, dimensions)?;
-                        searcher.search_device(queries, None, &mut results)?;
-                        for (destination, source) in views[1..].iter().zip([
-                            results.status(),
-                            results.counts(),
-                            results.scores(),
-                            results.ids(),
-                        ]) {
-                            searcher.stream.copy(*destination, source)?;
-                        }
-                        searcher.stream.synchronize()
-                    })?;
-                }
-                graph.prepare()
-            },
-        )?;
+        let plan = PreparedModel::prepare(context, workers, |context| {
+            let inputs = vec![context.allocate(input.clone())?];
+            let outputs = output
+                .iter()
+                .cloned()
+                .map(|desc| context.allocate(desc))
+                .collect::<hrx::Result<Vec<_>>>()?;
+            let mut corpus = self.clone();
+            if let Some(budget) = context.runtime().memory_budget() {
+                corpus = corpus.with_workspace_budget(budget.clone());
+            }
+            let mut searcher = corpus.searcher()?;
+            searcher.reserve_device(batch, k)?;
+            let mut results = DeviceNeighbors::new(&searcher.stream, batch, k)?;
+            searcher.stream.synchronize()?;
+            let bindings = std::iter::once(GpuAccess {
+                view: inputs[0].binding().unwrap(),
+                access: Access::Read,
+            })
+            .chain(outputs.iter().map(|tensor| GpuAccess {
+                view: tensor.binding().unwrap(),
+                access: Access::Write,
+            }))
+            .collect::<Vec<_>>();
+            let mut graph = context.runtime().graph();
+            // SAFETY: The closure owns its private searcher, result allocation
+            // and corpus clone. Only input is read; all four declared outputs
+            // are fully copied. Every stream operation completes before return.
+            unsafe {
+                graph.gpu_scoped(&bindings, move |views| {
+                    let queries = DeviceQueries::new(views[0], batch, dimensions, dimensions)?;
+                    searcher.search_device(queries, None, &mut results)?;
+                    for (destination, source) in views[1..].iter().zip([
+                        results.status(),
+                        results.counts(),
+                        results.scores(),
+                        results.ids(),
+                    ]) {
+                        searcher.stream.copy(*destination, source)?;
+                    }
+                    searcher.stream.synchronize()
+                })?;
+            }
+            Ok(InferenceGraph {
+                inputs,
+                outputs,
+                graph: graph.prepare()?,
+            })
+        })?;
         Ok(PreparedSearch { plan })
     }
 }

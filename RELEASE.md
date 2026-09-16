@@ -1,7 +1,7 @@
 # Releasing hrxdb
 
-hrxdb `0.2.0` accepts compatible `hrx-rs 0.6` releases; its lockfile qualifies
-`0.6.0`. Earlier `0.1.0` release artifacts:
+hrxdb `0.3.0` accepts compatible `hrx-rs 0.7` releases; its lockfile qualifies
+`0.7.0`. Earlier `0.1.0` release artifacts:
 
 - [Source and release notes](https://github.com/zacharydenton/hrxdb/releases/tag/v0.1.0)
 - [crates.io package](https://crates.io/crates/hrxdb/0.1.0)
@@ -9,6 +9,13 @@ hrxdb `0.2.0` accepts compatible `hrx-rs 0.6` releases; its lockfile qualifies
 
 There is no automatic publishing workflow. Repository visibility, package
 publication, and release creation are managed explicitly.
+
+## 0.3 qualification — 2026-09-17
+
+All 36 hardware correctness tests pass against published HRX 0.7.0, including
+prepared inference, retained output leases and the large shard-boundary cases.
+CPU tests, doctests, all-target Clippy and unpacked-crate compilation also pass.
+This release migrates the graph API; it does not claim improved search speed.
 
 ## 0.2 candidate qualification — 2026-09-16
 
@@ -84,7 +91,7 @@ artifacts for private data. Audit the lockfile against current RustSec advisorie
 Record tool versions and findings; automated scans cannot establish that every
 secret or unknown vulnerability is absent. The MIT license covers this crate;
 the separately distributed runtime/compiler carries its own
-[third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.6.0/THIRD-PARTY.md).
+[third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.7.0/THIRD-PARTY.md).
 
 ## Publication procedure
 
@@ -99,10 +106,10 @@ For the already public repository and package:
    dry run from the clean tree; retain the hardware qualification results.
 4. Verify anonymous access to the README, examples, API guide, and benchmark
    evidence before publishing the crate. Do not change repository visibility.
-5. Run `cargo publish --locked`. Create and push `v0.2.0` on the qualified commit,
-   then create a GitHub release using the `0.2.0` changelog entry.
+5. Run `cargo publish --locked`. Create and push `v0.3.0` on the qualified commit,
+   then create a GitHub release using the `0.3.0` changelog entry.
 6. Verify the crates.io README, docs.rs build, and a fresh consuming project.
-   Check `cargo install hrxdb --version 0.2.0 --locked`; the executable is
+   Check `cargo install hrxdb --version 0.3.0 --locked`; the executable is
    `hrxdb-bench`. Check execution separately on supported hardware.
 
 For subsequent releases, update the manifest, lockfile, changelog, and versioned

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 — 2026-09-17
+
+- Move to HRX 0.7 and its explicit inference-slot factory API. Search plans own
+  their input/output tensors and return their executable graph together.
+- Retain shared-context native search semantics, bounded slots and output
+  leases. This is an API migration, not a new search-performance claim.
+
 ## 0.2.0 — 2026-09-16
 
 - Move to HRX 0.6 and Rust 1.91. Accept compatible HRX patches while the lockfile
