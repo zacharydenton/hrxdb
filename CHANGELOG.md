@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0 — 2026-09-16
+
+- Move to HRX 0.6 and Rust 1.91. Accept compatible HRX patches while the lockfile
+  records the qualified release; no local patches or compatibility aliases.
+- Add context-bound prepared searches over owned device tensors, bounded private
+  inference slots, producer dependencies and retained device results.
+- Share corpus build reservations, persistent residency pins and per-worker
+  workspace allocations with the application's HRX memory budget. Reject
+  insufficient budgets before allocating, and retain charges with native owners.
+
 ## 0.1.2 — 2026-09-16
 
 - Accept compatible HRX 0.5 releases instead of requiring an exact patch

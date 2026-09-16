@@ -12,7 +12,7 @@ without copying intermediate vectors or score matrices back to the CPU.
 
 The library exposes a Rust API through
 [`hrx-rs`](https://github.com/zacharydenton/hrx-rs). Execution currently targets
-**AMD Strix Halo (`gfx1151`) on Linux x86_64**. Rust 1.88+ is required; other GPUs
+**AMD Strix Halo (`gfx1151`) on Linux x86_64**. Rust 1.91+ is required; other GPUs
 and operating systems are not supported for execution in this release.
 
 Unified memory makes large resident collections possible without a separate
@@ -44,7 +44,7 @@ Add the dependency:
 
 ```toml
 [dependencies]
-hrxdb = "0.1"
+hrxdb = "0.2"
 ```
 
 ```rust
@@ -81,7 +81,7 @@ or compiler use provisions the native bundle pinned by the resolved HRX release.
 Execution needs the AMD kernel driver, `/dev/kfd` and render-device permissions,
 compatible C/C++ runtime libraries and `libatomic`, and **glibc 2.43+**
 (the bundle's baseline is Ubuntu 26.04). See the
-[HRX setup guide](https://github.com/zacharydenton/hrx-rs/blob/v0.5.0/docs/GPU-NPU.md#native-setup).
+[HRX setup guide](https://github.com/zacharydenton/hrx-rs/blob/v0.6.0/docs/GPU-NPU.md#native-setup).
 After provisioning, `HRX_OFFLINE=1` prevents runtime downloads.
 
 ## Choose your operation
@@ -98,6 +98,17 @@ After provisioning, `HRX_OFFLINE=1` prevents runtime downloads.
 | Rank application-defined GPU scores | `TopK`, `ScoreBatch` |
 | Keep results and exclusions on the GPU | `DeviceNeighbors`, `DeviceExclusions` |
 | Account for shared storage and workspace | `Corpus::memory_usage`, `Searcher::memory_usage` |
+| Reserve loader peaks and pin a shared corpus | `Corpus::build_memory`, `Corpus::load_resident_fp16` |
+
+The optional residency API uses an explicit HRX `ResidencyManager`. It reserves
+corpus storage and bounded conversion/upload staging before allocating, rolls
+back failed loads, and shares storage for the same immutable artifact/device/
+shape key. A lease, `lease.pin()`, exported corpus clone or live searcher prevents
+eviction. Attach `manager.budget()` with `Corpus::with_workspace_budget` to charge
+subsequent searcher, batch and custom scoring allocations on corpus streams to
+the same ceiling. Coordinated `prepare_search` uses its context's budget for
+private workers. Caller mappings and compiler/driver memory remain separate;
+this is not a process-wide memory ceiling.
 
 `Corpus` is `Clone + Send + Sync`; clones share immutable allocations. Each
 `Searcher` owns its stream and workspace. Independent workers allow independent
@@ -113,7 +124,7 @@ search; custom kernels must mask slack.
 
 See the [API and execution guide](docs/guide.md) for buffer layouts,
 normalization, exclusions, memory limits, and synchronization contracts.
-See the [API reference](https://docs.rs/hrxdb/0.1.0/hrxdb/), or generate it locally
+See the [API reference](https://docs.rs/hrxdb/0.2.0/hrxdb/), or generate it locally
 with `cargo doc --locked --no-deps --open`.
 
 ## Build your own scoring pipeline
@@ -140,7 +151,7 @@ Runnable examples:
 
 The custom scoring kernels illustrate interoperability; they are not tuned GEMMs.
 Applications using HRX types directly should also depend on
-`hrx = { package = "hrx-rs", version = "0.5" }`.
+`hrx = { package = "hrx-rs", version = "0.6.0" }`.
 
 ## Measured performance
 
@@ -188,4 +199,4 @@ for setup, validation, and reporting issues; [CHANGELOG.md](CHANGELOG.md) for
 the release contents; and [RELEASE.md](RELEASE.md) for publication steps.
 
 MIT licensed. The separately distributed HRX runtime and compiler have their
-own [third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.5.0/THIRD-PARTY.md).
+own [third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.6.0/THIRD-PARTY.md).

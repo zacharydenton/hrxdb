@@ -7,7 +7,7 @@ Start with the [README](README.md) and [API and execution guide](docs/guide.md).
 
 ## Build and check
 
-Use Rust 1.88 or newer. Compilation, CPU tests, and documentation do not require
+Use Rust 1.91 or newer. Compilation, CPU tests, and documentation do not require
 GPU hardware or download a native runtime. CI checks the minimum supported Rust
 version and stable:
 
@@ -20,14 +20,14 @@ HRX_OFFLINE=1 RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
 cargo package --locked
 ```
 
-Use `cargo +1.88.0` to check the minimum supported version explicitly. Cargo
+Use `cargo +1.91.0` to check the minimum supported version explicitly. Cargo
 packaging requires a clean working tree unless you add `--allow-dirty` while
 iterating. The lockfile records the qualified runtime/compiler release;
-the manifest accepts compatible HRX 0.5 updates.
+the manifest accepts compatible HRX 0.6 updates.
 
 ## Hardware validation
 
-Follow the [runtime setup](https://github.com/zacharydenton/hrx-rs/blob/v0.5.0/docs/GPU-NPU.md#native-setup)
+Follow the [runtime setup](https://github.com/zacharydenton/hrx-rs/blob/v0.6.0/docs/GPU-NPU.md#native-setup)
 on a supported host. First use provisions the pinned native bundle; after
 provisioning, run with `HRX_OFFLINE=1` to prevent downloads:
 

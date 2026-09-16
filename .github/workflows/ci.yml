@@ -8,7 +8,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       matrix:
-        rust: [stable, '1.88.0']
+        rust: [stable, '1.91.0']
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
       HRX_OFFLINE: '1'

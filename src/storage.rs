@@ -43,7 +43,7 @@ impl Corpus {
         let count = rows.len();
         let (padded, _) = layout(dimensions, count)?;
         let mut stream = device.stream()?;
-        let chunk_rows = (CHUNK_BYTES / (padded * 2)).max(1);
+        let chunk_rows = (CHUNK_BYTES / (padded * 2)).max(1).min(count.max(1));
         let mut chunk = Vec::with_capacity(chunk_rows * padded * 2);
         let mut norm_chunk = Vec::with_capacity(chunk_rows * 4);
         let mut shards = Vec::new();
@@ -96,6 +96,7 @@ impl Corpus {
             return Err(invalid("row iterator returned more rows than declared"));
         }
         Ok(Self {
+            workspace_budget: None,
             inner: std::sync::Arc::new(CorpusStorage {
                 device: device.clone(),
                 device_id: stream.device_id(),
@@ -216,6 +217,7 @@ impl Corpus {
             ));
         }
         Ok(Self {
+            workspace_budget: None,
             inner: std::sync::Arc::new(CorpusStorage {
                 device: device.clone(),
                 device_id: stream.device_id(),

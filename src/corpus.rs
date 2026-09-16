@@ -21,6 +21,7 @@ use std::{ops::Range, sync::Arc};
 #[derive(Clone)]
 pub struct Corpus {
     pub(crate) inner: Arc<CorpusStorage>,
+    pub(crate) workspace_budget: Option<hrx::residency::MemoryBudget>,
 }
 pub(crate) struct CorpusStorage {
     pub(crate) device: Device,
@@ -44,7 +45,18 @@ pub struct CorpusShardView<'a> {
 impl Corpus {
     /// Create an independent stream on this corpus's device.
     pub fn stream(&self) -> Result<Stream> {
-        self.inner.device.stream()
+        let stream = self.inner.device.stream()?;
+        Ok(match &self.workspace_budget {
+            Some(budget) => stream.with_memory_budget(budget.clone()),
+            None => stream,
+        })
+    }
+    /// Charge allocations on subsequent corpus streams, searchers and custom
+    /// scoring workspaces to this ceiling. Existing shared corpus storage and
+    /// already-created workers are unchanged. Clones retain the budget policy.
+    pub fn with_workspace_budget(mut self, budget: hrx::residency::MemoryBudget) -> Self {
+        self.workspace_budget = Some(budget);
+        self
     }
     /// Create an independent search workspace sharing this corpus's allocations.
     pub fn searcher(&self) -> Result<Searcher> {

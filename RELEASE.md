@@ -1,7 +1,7 @@
 # Releasing hrxdb
 
-hrxdb `0.1.2` accepts published `hrx-rs 0.5` releases; its lockfile qualifies
-`0.5.1`. Earlier `0.1.0` release artifacts:
+hrxdb `0.2.0` accepts compatible `hrx-rs 0.6` releases; its lockfile qualifies
+`0.6.0`. Earlier `0.1.0` release artifacts:
 
 - [Source and release notes](https://github.com/zacharydenton/hrxdb/releases/tag/v0.1.0)
 - [crates.io package](https://crates.io/crates/hrxdb/0.1.0)
@@ -10,7 +10,17 @@ hrxdb `0.1.2` accepts published `hrx-rs 0.5` releases; its lockfile qualifies
 There is no automatic publishing workflow. Repository visibility, package
 publication, and release creation are managed explicitly.
 
-## Candidate qualification — 2026-09-13
+## 0.2 candidate qualification — 2026-09-16
+
+All 36 hardware correctness tests pass on gfx1151 with the HRX 0.6 candidate,
+including shared-context resident queries, retained-output backpressure,
+budgeted workspace growth/refusal, corpus pins, and the 9.4 GB shard-boundary
+case. Performance comparisons are excluded from that correctness command.
+CPU tests, Clippy and the registry-dependency package are checked separately
+before publication. RSS, corpus bytes and workspace bytes are different scopes;
+these checks do not establish a throughput or whole-process memory improvement.
+
+## Earlier candidate qualification — 2026-09-13
 
 Local checks passed with the registry dependency `hrx-rs 0.5.0`:
 
@@ -31,7 +41,7 @@ crate. Verify public endpoints after publishing.
 
 ## Validate the release candidate
 
-Use Rust 1.88 and stable. From the repository root:
+Use Rust 1.91 and stable. From the repository root:
 
 ```sh
 cargo fmt --all -- --check
@@ -74,25 +84,25 @@ artifacts for private data. Audit the lockfile against current RustSec advisorie
 Record tool versions and findings; automated scans cannot establish that every
 secret or unknown vulnerability is absent. The MIT license covers this crate;
 the separately distributed runtime/compiler carries its own
-[third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.5.0/THIRD-PARTY.md).
+[third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.6.0/THIRD-PARTY.md).
 
 ## Publication procedure
 
-Once public distribution is approved:
+For the already public repository and package:
 
-1. Confirm the `hrxdb` crates.io name is still available and the publishing
-   account has access. Verify the repository license, description, topics,
+1. Confirm the candidate version is not published and the publishing account
+   has access. Verify the repository license, description, topics,
    and dependency source links.
 2. Update installation instructions, versioned links, and the dated changelog
    entry. Commit and push the final release contents.
 3. Confirm CI passes for that exact commit. Repeat packaging and the publication
    dry run from the clean tree; retain the hardware qualification results.
-4. Make `zacharydenton/hrxdb` public and verify anonymous access to the README,
-   examples, API guide, and benchmark evidence before publishing the crate.
-5. Run `cargo publish --locked`. Create and push `v0.1.0` on the qualified commit,
-   then create a GitHub release using the `0.1.0` changelog entry.
+4. Verify anonymous access to the README, examples, API guide, and benchmark
+   evidence before publishing the crate. Do not change repository visibility.
+5. Run `cargo publish --locked`. Create and push `v0.2.0` on the qualified commit,
+   then create a GitHub release using the `0.2.0` changelog entry.
 6. Verify the crates.io README, docs.rs build, and a fresh consuming project.
-   Check `cargo install hrxdb --version 0.1.0 --locked`; the executable is
+   Check `cargo install hrxdb --version 0.2.0 --locked`; the executable is
    `hrxdb-bench`. Check execution separately on supported hardware.
 
 For subsequent releases, update the manifest, lockfile, changelog, and versioned
