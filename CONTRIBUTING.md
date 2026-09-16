@@ -22,7 +22,8 @@ cargo package --locked
 
 Use `cargo +1.88.0` to check the minimum supported version explicitly. Cargo
 packaging requires a clean working tree unless you add `--allow-dirty` while
-iterating. The runtime/compiler dependency is pinned to the qualified bundle.
+iterating. The lockfile records the qualified runtime/compiler release;
+the manifest accepts compatible HRX 0.5 updates.
 
 ## Hardware validation
 

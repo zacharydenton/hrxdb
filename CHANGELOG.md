@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 — 2026-09-16
+
+- Accept compatible HRX 0.5 releases instead of requiring an exact patch
+  version. Qualify the lockfile against 0.5.1, including its empty ONNX tensor
+  fix, so applications can share one runtime with their model libraries.
+
 ## 0.1.1 — 2026-09-16
 
 - Require HRX 0.5 and use its shared compiler-target selection,

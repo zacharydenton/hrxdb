@@ -1,6 +1,7 @@
 # Releasing hrxdb
 
-hrxdb `0.1.0` uses the published `hrx-rs =0.5.0` dependency. Release artifacts:
+hrxdb `0.1.2` accepts published `hrx-rs 0.5` releases; its lockfile qualifies
+`0.5.1`. Earlier `0.1.0` release artifacts:
 
 - [Source and release notes](https://github.com/zacharydenton/hrxdb/releases/tag/v0.1.0)
 - [crates.io package](https://crates.io/crates/hrxdb/0.1.0)

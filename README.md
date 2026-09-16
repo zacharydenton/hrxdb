@@ -77,7 +77,7 @@ cargo run --locked --release --example search
 ```
 
 Building does not initialize GPU hardware or download native code. First GPU
-or compiler use provisions the native bundle pinned by `hrx-rs =0.5.0`.
+or compiler use provisions the native bundle pinned by the resolved HRX release.
 Execution needs the AMD kernel driver, `/dev/kfd` and render-device permissions,
 compatible C/C++ runtime libraries and `libatomic`, and **glibc 2.43+**
 (the bundle's baseline is Ubuntu 26.04). See the
@@ -140,7 +140,7 @@ Runnable examples:
 
 The custom scoring kernels illustrate interoperability; they are not tuned GEMMs.
 Applications using HRX types directly should also depend on
-`hrx = { package = "hrx-rs", version = "=0.5.0" }`.
+`hrx = { package = "hrx-rs", version = "0.5" }`.
 
 ## Measured performance
 
