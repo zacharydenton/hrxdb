@@ -1,6 +1,6 @@
 # Releasing hrxdb
 
-hrxdb `0.3.0` accepts compatible `hrx-rs 0.7` releases; its lockfile qualifies
+hrxdb `0.3.1` accepts compatible `hrx-rs 0.7` releases; its lockfile qualifies
 `0.7.0`. Earlier `0.1.0` release artifacts:
 
 - [Source and release notes](https://github.com/zacharydenton/hrxdb/releases/tag/v0.1.0)
@@ -9,6 +9,26 @@ hrxdb `0.3.0` accepts compatible `hrx-rs 0.7` releases; its lockfile qualifies
 
 There is no automatic publishing workflow. Repository visibility, package
 publication, and release creation are managed explicitly.
+
+## 0.3.1 qualification — 2026-09-18
+
+All 38 hardware correctness tests pass on gfx1151 with HRX 0.7.0, including
+context retention, runtime-isolated residency keys, shared budget refusal and
+rollback, and the large shard-boundary cases. Native corpus buffers remain
+native allocations; the new constructors retain the caller's context and share
+its memory budget without converting storage to coordinated `BufferView`s.
+CPU tests, doctests, Clippy and Rustdoc pass on Rust 1.91.0 and stable 1.97.1.
+All five examples pass, including a scoped gather kernel that reads native
+corpus buffers, writes a context tensor and feeds it into prepared search.
+
+Gitleaks 8.30.1 found no leaks in the existing history or release source.
+Cargo-audit 0.22.2 against RustSec database
+`f58ccfe51a5954186716998f01360d1079a8a3a5` (2026-09-17) reports
+[RUSTSEC-2024-0437](https://rustsec.org/advisories/RUSTSEC-2024-0437.html): HRX 0.7.0
+pins `protobuf =3.4.0`, whose unknown-field parser can overflow the stack on
+malicious input. hrxdb does not parse ONNX/protobuf input. This pre-existing
+dependency finding remains in the qualified lockfile; resolving the exact pin
+requires an upstream HRX change. No dependency versions changed for this release.
 
 ## 0.3 qualification — 2026-09-17
 
@@ -106,10 +126,10 @@ For the already public repository and package:
    dry run from the clean tree; retain the hardware qualification results.
 4. Verify anonymous access to the README, examples, API guide, and benchmark
    evidence before publishing the crate. Do not change repository visibility.
-5. Run `cargo publish --locked`. Create and push `v0.3.0` on the qualified commit,
-   then create a GitHub release using the `0.3.0` changelog entry.
+5. Run `cargo publish --locked`. Create and push `v0.3.1` on the qualified commit,
+   then create a GitHub release using the `0.3.1` changelog entry.
 6. Verify the crates.io README, docs.rs build, and a fresh consuming project.
-   Check `cargo install hrxdb --version 0.3.0 --locked`; the executable is
+   Check `cargo install hrxdb --version 0.3.1 --locked`; the executable is
    `hrxdb-bench`. Check execution separately on supported hardware.
 
 For subsequent releases, update the manifest, lockfile, changelog, and versioned

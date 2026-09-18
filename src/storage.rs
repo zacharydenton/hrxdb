@@ -1,6 +1,68 @@
 //! Immutable shared vector storage, independent of search execution.
 use crate::*;
+use hrx::inference::ModelContext;
 impl Corpus {
+    /// Build FP32 rows using the caller's GPU, allocation ceiling and context.
+    /// Normalization and input requirements match [`Self::build`]. The context
+    /// is retained by corpus clones and workers. Native storage, upload staging
+    /// and subsequent workspace allocations use its memory budget, if present.
+    pub fn build_in<I, R>(context: &ModelContext, dimensions: usize, rows: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = R>,
+        I::IntoIter: ExactSizeIterator,
+        R: AsRef<[f32]>,
+    {
+        Self::build_encoded_in(context, dimensions, rows, |r, d, p, b| {
+            encode(r.as_ref(), d, p, b)
+        })
+    }
+
+    /// Build little-endian FP16 rows in the caller's retained model context.
+    /// Values and input requirements match [`Self::build_fp16`]. Native corpus
+    /// buffers and upload staging share the context's GPU and allocation
+    /// ceiling; they are not exported as coordinated `BufferView`s. Searchers
+    /// inherit the ceiling, and prepared searches require this same runtime.
+    ///
+    /// ```no_run
+    /// # fn example(context: &hrx::inference::ModelContext) -> hrxdb::Result<()> {
+    /// let corpus = hrxdb::Corpus::build_fp16_in(context, 3, [[0, 0x3c, 0, 0, 0, 0]])?;
+    /// let search = corpus.prepare_search(context, 1, 1, 1)?;
+    /// // Submit an encoder's DeviceTensor directly to search.submit(&tensor).
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn build_fp16_in<I, R>(context: &ModelContext, dimensions: usize, rows: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = R>,
+        I::IntoIter: ExactSizeIterator,
+        R: AsRef<[u8]>,
+    {
+        Self::build_encoded_in(context, dimensions, rows, |r, d, p, b| {
+            encode_fp16(r.as_ref(), d, p, b)
+        })
+    }
+
+    fn build_encoded_in<I, R>(
+        context: &ModelContext,
+        dimensions: usize,
+        rows: I,
+        encode_row: impl FnMut(&R, usize, usize, &mut Vec<u8>) -> Result<f32>,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = R>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let device = Device::open(context.runtime().gpu()?.index())?;
+        Self::build_encoded_with_context(
+            &device,
+            Some(context),
+            dimensions,
+            rows,
+            MAX_ELEMENTS,
+            encode_row,
+        )
+    }
+
     /// Build shared, immutable storage from FP32 rows, normalizing before FP16 conversion.
     /// Dimensions must be 1..=16384; rows must be finite and nonzero.
     pub fn build<I, R>(device: &Device, dimensions: usize, rows: I) -> Result<Self>
@@ -30,6 +92,21 @@ impl Corpus {
         dimensions: usize,
         rows: I,
         element_limit: usize,
+        encode_row: impl FnMut(&R, usize, usize, &mut Vec<u8>) -> Result<f32>,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = R>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        Self::build_encoded_with_context(device, None, dimensions, rows, element_limit, encode_row)
+    }
+
+    fn build_encoded_with_context<I, R>(
+        device: &Device,
+        context: Option<&ModelContext>,
+        dimensions: usize,
+        rows: I,
+        element_limit: usize,
         mut encode_row: impl FnMut(&R, usize, usize, &mut Vec<u8>) -> Result<f32>,
     ) -> Result<Self>
     where
@@ -43,7 +120,14 @@ impl Corpus {
         let count = rows.len();
         let (padded, _) = layout(dimensions, count)?;
         let mut stream = device.stream()?;
-        let chunk_rows = (CHUNK_BYTES / (padded * 2)).max(1).min(count.max(1));
+        let budget = context.and_then(|context| context.runtime().memory_budget());
+        if let Some(budget) = budget {
+            stream = stream.with_memory_budget(budget.clone());
+        }
+        let chunk_rows = (CHUNK_BYTES / (padded * 2)).max(1).min(count);
+        let _conversion = budget
+            .map(|budget| budget.reserve(chunk_rows * (padded * 2 + 4)))
+            .transpose()?;
         let mut chunk = Vec::with_capacity(chunk_rows * padded * 2);
         let mut norm_chunk = Vec::with_capacity(chunk_rows * 4);
         let mut shards = Vec::new();
@@ -96,8 +180,9 @@ impl Corpus {
             return Err(invalid("row iterator returned more rows than declared"));
         }
         Ok(Self {
-            workspace_budget: None,
+            workspace_budget: budget.cloned(),
             inner: std::sync::Arc::new(CorpusStorage {
+                context: context.map(crate::corpus::CorpusContext::shared),
                 device: device.clone(),
                 device_id: stream.device_id(),
                 shards,
@@ -219,6 +304,7 @@ impl Corpus {
         Ok(Self {
             workspace_budget: None,
             inner: std::sync::Arc::new(CorpusStorage {
+                context: None,
                 device: device.clone(),
                 device_id: stream.device_id(),
                 shards,

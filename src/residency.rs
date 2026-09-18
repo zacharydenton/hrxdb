@@ -14,6 +14,51 @@ pub struct CorpusBuildMemory {
     pub peak_bytes: usize,
 }
 impl Corpus {
+    /// Load or reuse FP16 storage in the caller's model context and residency
+    /// manager. The manager is recovered from the context's memory budget;
+    /// missing budgets or a dropped manager are errors. No second reservation
+    /// is charged for storage already charged by the context's native streams.
+    ///
+    /// Keys include runtime identity, shape and `artifact`. Context clones reuse
+    /// storage; independent runtimes never reuse each other's corpus. Artifact
+    /// identity and pinning follow [`Self::load_resident_fp16`]. This uses HRX's
+    /// allocation-budgeted cache: `lease.bytes()` is zero; use
+    /// `lease.memory_usage().total()` for resident storage bytes. Conversion and
+    /// upload staging are charged while loading; failed loads release charges.
+    pub fn load_resident_fp16_in<I, R>(
+        context: &hrx::inference::ModelContext,
+        artifact: &str,
+        dimensions: usize,
+        rows: I,
+    ) -> Result<ModelLease<Self>>
+    where
+        I: IntoIterator<Item = R>,
+        I::IntoIter: ExactSizeIterator,
+        R: AsRef<[u8]>,
+    {
+        let rows = rows.into_iter();
+        let memory = Self::build_memory(dimensions, rows.len())?;
+        if memory.resident_bytes == 0 {
+            return Err(invalid("budgeted corpus must be nonempty"));
+        }
+        let manager = context
+            .runtime()
+            .memory_budget()
+            .and_then(hrx::residency::MemoryBudget::manager)
+            .ok_or_else(|| invalid("context requires a live residency manager"))?;
+        let domain = crate::corpus::CorpusContext::shared(context);
+        let key = format!(
+            "hrxdb:fp16-context-v1:{}:{dimensions}:{}:{artifact}",
+            domain.id,
+            rows.len()
+        );
+        manager.load_budgeted(
+            key,
+            |corpus: &Corpus| Arc::strong_count(&corpus.inner) == 1,
+            |_| Self::build_fp16_in(&domain.model, dimensions, rows),
+        )
+    }
+
     /// Estimate allocation extents without opening a device or consuming rows.
     /// Empty corpora report zero bytes; budgeted loading requires nonempty rows.
     pub fn build_memory(dimensions: usize, count: usize) -> Result<CorpusBuildMemory> {
@@ -92,6 +137,80 @@ impl Corpus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hrx::{execution::RuntimeOptions, inference::ModelContext};
+
+    #[test]
+    fn context_loader_requires_a_live_manager() -> Result<()> {
+        let context = ModelContext::new(RuntimeOptions::default())?;
+        assert!(
+            Corpus::load_resident_fp16_in(&context, "one", 3, [[0, 0x3c, 0, 0, 0, 0]]).is_err()
+        );
+        let manager = ResidencyManager::new(1_000_000)?;
+        let context = ModelContext::new(RuntimeOptions {
+            memory_budget: Some(manager.budget()),
+            ..Default::default()
+        })?;
+        drop(manager);
+        assert!(
+            Corpus::load_resident_fp16_in(&context, "one", 3, [[0, 0x3c, 0, 0, 0, 0]]).is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151"]
+    fn context_residency_keys_isolate_runtimes_and_retain_charges() -> Result<()> {
+        let rows = [[0, 0x3c, 0, 0, 0, 0]];
+        let memory = Corpus::build_memory(3, 1)?;
+        let manager = ResidencyManager::new(2 * memory.peak_bytes)?;
+        let options = RuntimeOptions {
+            memory_budget: Some(manager.budget()),
+            ..Default::default()
+        };
+        let context = ModelContext::new(options.clone())?;
+        let other = ModelContext::new(options)?;
+        let one = Corpus::load_resident_fp16_in(&context, "one", 3, rows)?;
+        // Cache hits must not validate the rows.
+        let reused =
+            Corpus::load_resident_fp16_in(&context.clone(), "one", 3, rows.map(|_| [0; 6]))?;
+        assert!(Arc::ptr_eq(&one.inner, &reused.inner));
+        let two = Corpus::load_resident_fp16_in(&other, "one", 3, rows)?;
+        assert!(!Arc::ptr_eq(&one.inner, &two.inner));
+        assert_eq!(
+            manager.statistics().reserved_bytes,
+            2 * memory.resident_bytes
+        );
+        assert_eq!(manager.statistics().resources, 2);
+        let pin = one.pin();
+        let exported = (*two).clone();
+        drop(one);
+        drop(reused);
+        drop(two);
+        assert!(matches!(
+            Corpus::load_resident_fp16_in(&context, "three", 3, rows),
+            Err(Error::Execution { source }) if matches!(source.as_ref(), Error::Busy(_))
+        ));
+        assert_eq!(
+            manager.statistics().reserved_bytes,
+            2 * memory.resident_bytes
+        );
+        assert_eq!(manager.statistics().resources, 2);
+        drop(pin);
+        let three = Corpus::load_resident_fp16_in(&context, "three", 3, rows)?;
+        assert_eq!(manager.statistics().evictions, 1);
+        drop(three);
+        drop(manager);
+        assert_eq!(
+            context.runtime().memory_budget().unwrap().reserved_bytes(),
+            memory.resident_bytes
+        );
+        drop(exported);
+        assert_eq!(
+            context.runtime().memory_budget().unwrap().reserved_bytes(),
+            0
+        );
+        Ok(())
+    }
     #[test]
     #[ignore = "requires gfx1151"]
     fn workspace_growth_is_budgeted_and_failed_growth_preserves_search() -> Result<()> {

@@ -24,6 +24,7 @@ pub struct Corpus {
     pub(crate) workspace_budget: Option<hrx::residency::MemoryBudget>,
 }
 pub(crate) struct CorpusStorage {
+    pub(crate) context: Option<Arc<CorpusContext>>,
     pub(crate) device: Device,
     pub(crate) device_id: usize,
     pub(crate) shards: Vec<Shard>,
@@ -31,6 +32,36 @@ pub(crate) struct CorpusStorage {
     pub(crate) padded: usize,
     pub(crate) count: usize,
     pub(crate) gather: std::sync::Mutex<Option<hrx::Kernel>>,
+}
+
+// HRX exposes domain equality, not a numeric ID. Weak entries give residency
+// keys stable identity across ModelContext clones without retaining runtimes.
+pub(crate) struct CorpusContext {
+    pub(crate) model: hrx::inference::ModelContext,
+    pub(crate) id: u64,
+}
+impl CorpusContext {
+    pub(crate) fn shared(model: &hrx::inference::ModelContext) -> Arc<Self> {
+        use std::sync::{Mutex, Weak};
+        static DOMAINS: Mutex<(u64, Vec<Weak<CorpusContext>>)> = Mutex::new((0, Vec::new()));
+        let mut domains = DOMAINS.lock().unwrap_or_else(|e| e.into_inner());
+        domains.1.retain(|domain| domain.strong_count() != 0);
+        for domain in domains.1.iter().filter_map(Weak::upgrade) {
+            if domain.model.runtime().same_domain(model.runtime()) {
+                return domain;
+            }
+        }
+        domains.0 = domains
+            .0
+            .checked_add(1)
+            .expect("corpus context IDs exhausted");
+        let domain = Arc::new(Self {
+            model: model.clone(),
+            id: domains.0,
+        });
+        domains.1.push(Arc::downgrade(&domain));
+        domain
+    }
 }
 /// Borrowed bindings for a contiguous range of insertion IDs. Bindings include
 /// readable slack; only rows in `row_range()` are corpus data.
@@ -43,6 +74,14 @@ pub struct CorpusShardView<'a> {
     capacity: usize,
 }
 impl Corpus {
+    /// Context retained by [`Self::build_in`] or [`Self::build_fp16_in`].
+    /// Device-based constructors return `None`. Clones retain the same runtime.
+    /// Corpus shards remain native buffers; coordinated tensor access uses
+    /// [`Self::prepare_search`] and HRX's scoped GPU handoff.
+    pub fn context(&self) -> Option<&hrx::inference::ModelContext> {
+        self.inner.context.as_ref().map(|context| &context.model)
+    }
+
     /// Create an independent stream on this corpus's device.
     pub fn stream(&self) -> Result<Stream> {
         let stream = self.inner.device.stream()?;

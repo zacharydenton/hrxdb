@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1 — 2026-09-18
+
+- Add `Corpus::build_in` and `build_fp16_in` for a caller's `ModelContext`, with
+  retained context identity and shared native allocation/workspace budgeting.
+- Add `load_resident_fp16_in` using the context's residency manager, with runtime
+  isolation and allocation-owned charges. Context-built corpora reject prepared
+  searches in another runtime; `Corpus::context` exposes their retained context.
+- Preserve native shard bindings: context and budget sharing do not convert
+  corpus storage to HRX runtime-tracked `BufferView`s.
+
 ## 0.3.0 — 2026-09-17
 
 - Move to HRX 0.7 and its explicit inference-slot factory API. Search plans own

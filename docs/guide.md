@@ -18,7 +18,7 @@ Add the dependency to your application:
 
 ```toml
 [dependencies]
-hrxdb = "0.3"
+hrxdb = "0.3.1"
 ```
 
 ```rust
@@ -63,6 +63,50 @@ in one pass. Rows need not be normalized. This avoids allocating FP32 rows and
 rounding them back to FP16. Reject incomplete trailing rows when reading a file:
 `chunks_exact` omits any remainder. Both constructors require an accurately
 sized iterator and upload in bounded chunks.
+
+For an application with an existing HRX `ModelContext` (for example, one shared
+by its encoders), use the context constructors:
+
+```rust
+let corpus = Corpus::build_fp16_in(&context, dimensions, rows)?;
+let search = corpus.prepare_search(&context, 1, 10, 1)?;
+let result = search.submit(&encoder_output)?;
+```
+
+`build_in` provides the equivalent FP32 path. The corpus retains the context;
+`corpus.context()` exposes it, and its clones and prepared searches keep the
+runtime alive. Prepared searches reject another runtime even on the same GPU.
+The context's budget, if configured, charges native corpus storage, bounded host
+conversion buffers, upload staging and subsequent corpus-stream workspaces.
+This preserves the native `shards()`, `stream()` and custom-kernel API: shard
+buffers are not HRX coordinated `BufferView`s. Coordinated encoder tensors enter
+search through `prepare_search`'s scoped GPU handoff. Standalone stream work still
+uses the documented explicit synchronization rules.
+
+A kernel can read native corpus buffers and write a context tensor in the same
+dispatch. Use `context.runtime().graph().gpu_scoped`: declare the tensor binding
+as `Access::Write`, capture a corpus clone and private stream, and bind the
+corpus's read-only shard views alongside the tensor's scoped native view. Drain
+the stream before returning and never retain a scoped view outside the callback.
+Wrap the output with `context.tensor(desc, binding, completion)` to carry that
+graph's producer dependency into downstream inference. Ordinary tracked graph
+nodes cannot directly accept native corpus bindings. The
+[context search example](../examples/context_search.rs) demonstrates this with
+the gather kernel writing a context tensor, then using it as a resident query.
+
+For cached loading, call
+`Corpus::load_resident_fp16_in(&context, artifact, dimensions, rows)`. Keep the
+`ResidencyManager` used by `RuntimeOptions::memory_budget` alive. The loader
+recovers this manager, charges allocations individually, and isolates cache keys
+by runtime, shape and immutable artifact identity. Cloned contexts reuse the
+entry without consuming its row iterator. A different runtime gets a separate
+entry. Leases, pins, exported corpus clones and searchers prevent eviction.
+`lease.bytes()` is zero for this allocation-budgeted cache; use
+`lease.memory_usage().total()` for corpus storage and manager statistics for the
+shared ceiling. Unlike the device-based loader, this path acquires charges as
+allocations are made rather than reserving the entire loader peak up front.
+Failures roll back charges. See the runnable
+[context search example](../examples/context_search.rs).
 
 `Corpus` owns immutable storage and is `Clone + Send + Sync`. Cloning retains
 those allocations without copying vectors. Each `corpus.searcher()` creates a

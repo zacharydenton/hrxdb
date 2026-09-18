@@ -15,6 +15,8 @@ impl Corpus {
     /// Prepare shared-context query normalization, exhaustive scan and top-k.
     /// Each slot owns private search workspace. `workers=1` is the conservative
     /// bandwidth-bound default; increasing it never duplicates the corpus.
+    /// A context-built corpus requires the same runtime (context clones work).
+    /// Device-built corpora require only the same native GPU.
     pub fn prepare_search(
         &self,
         context: &ModelContext,
@@ -22,6 +24,12 @@ impl Corpus {
         k: usize,
         workers: usize,
     ) -> Result<PreparedSearch> {
+        if self
+            .context()
+            .is_some_and(|owner| !owner.runtime().same_domain(context.runtime()))
+        {
+            return Err(invalid("corpus belongs to another runtime"));
+        }
         if batch == 0 || batch > crate::MAX_BATCH || !(1..=crate::MAX_K).contains(&k) {
             return Err(invalid("invalid coordinated search shape"));
         }
