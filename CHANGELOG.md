@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — cached native GPU memory
+## Unreleased — cached native GPU memory and prepared search
 
 - Require HRX 0.8.3, restoring GPU caching for corpus and search workspace.
 - Publish direct host writes to query/exclusion buffers and acquire GPU writes
@@ -8,6 +8,11 @@
 - On gfx1151, five alternating process runs at 1M × 384, k=10 reduce full search
   from 4.1591 ms (0.8.2) to 3.4112 ms. Old HRX 0.7.0 measured 3.2765 ms;
   scan time is within 0.6% of that baseline. All timed result IDs/scores match.
+
+- Reuse one prepared scan/mask/selection/readback graph per worker, keyed by
+  effective k and exclusion mode; invalidate it when kernels or scratch change.
+  Five fresh alternating runs measure 3.2674 ms versus 3.3988 ms without the
+  graph and 3.2760 ms on HRX 0.7. All timed result IDs and scores match.
 
 ## 0.3.1 — 2026-09-18
 

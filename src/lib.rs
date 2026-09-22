@@ -36,8 +36,10 @@
 //! [`Searcher::corpus`] provides borrowed storage bindings for application-owned
 //! GPU kernels, side arrays, and reductions; see [`Corpus`] for the contract.
 mod batch;
+mod commands;
 mod corpus;
 mod host;
+use commands::Commands;
 mod kernels;
 mod storage;
 pub use storage::ResidentShard;
@@ -190,6 +192,7 @@ pub struct Searcher {
     reports: Vec<Compilation>,
     batch: Option<batch::BatchScratch>,
     device_queries: Option<queries::QueryWorkspace>,
+    search_graph: Option<(usize, bool, hrx::GraphExec)>,
 }
 
 struct Shard {
@@ -543,6 +546,7 @@ impl Searcher {
             reports,
             batch: None,
             device_queries: None,
+            search_graph: None,
         })
     }
 
@@ -612,6 +616,7 @@ impl Searcher {
             self.reports[i * 2] = sr;
             self.reports[i * 2 + 1] = cr;
         }
+        self.search_graph = None;
         self.config = config;
         Ok(())
     }
@@ -637,6 +642,15 @@ impl Searcher {
     }
 
     fn dispatch_scan_from(&self, control: bool, query: hrx::View<'_>) -> Result<()> {
+        self.scan_commands(control, query, &mut Commands::immediate(&self.stream))
+    }
+
+    fn scan_commands<'a>(
+        &'a self,
+        control: bool,
+        query: hrx::View<'a>,
+        commands: &mut Commands<'a>,
+    ) -> Result<()> {
         if self.count == 0 {
             return Ok(());
         }
@@ -648,7 +662,7 @@ impl Searcher {
             // Norms are shard-local; scores use the global row range. The
             // specialized kernel guards tail rows. One stream orders accesses.
             unsafe {
-                self.stream.dispatch(
+                commands.dispatch(
                     if control { control_kernel } else { scan },
                     [groups as u32, 1, 1],
                     [self.config.threads as u32, 1, 1],
@@ -666,8 +680,12 @@ impl Searcher {
     }
 
     fn select(&self, k: usize) -> Result<usize> {
+        self.select_commands(k, &mut Commands::immediate(&self.stream))
+    }
+
+    fn select_commands<'a>(&'a self, k: usize, commands: &mut Commands<'a>) -> Result<usize> {
         if k > 32 {
-            return self.select_sorted(k);
+            return self.select_sorted(k, commands);
         }
         let mut count = self.count;
         let mut output = 0;
@@ -691,7 +709,7 @@ impl Searcher {
             // and writes k outputs. Both scratch pairs reserve the maximum first
             // level size at k=32. Later levels shrink; ping-pong avoids aliasing.
             unsafe {
-                self.stream.dispatch(
+                commands.dispatch(
                     if first {
                         &self.first_select
                     } else {
@@ -733,13 +751,14 @@ impl Searcher {
         if capacity > self.selection_capacity {
             self.stream.synchronize()?;
             let candidates = allocate_candidates(&self.stream, self.count, capacity)?;
+            self.search_graph = None;
             self.candidates = candidates;
             self.selection_capacity = capacity;
         }
         Ok(())
     }
 
-    fn select_sorted(&self, k: usize) -> Result<usize> {
+    fn select_sorted<'a>(&'a self, k: usize, commands: &mut Commands<'a>) -> Result<usize> {
         let mut groups = self.count.div_ceil(1024);
         let mut constants = Constants::new();
         constants.push(self.count as u32)?;
@@ -748,7 +767,7 @@ impl Searcher {
         // SAFETY: each group sorts 1024 guarded scores in workgroup memory and
         // writes k candidates; reserve_search sizes both pairs for this level.
         unsafe {
-            self.stream.dispatch(
+            commands.dispatch(
                 &self.sort_select,
                 [groups as u32, 1, 1],
                 [256, 1, 1],
@@ -770,7 +789,7 @@ impl Searcher {
             // group, and writes their top k to disjoint, smaller output lists.
             // The buffers ping-pong so reads never alias writes.
             unsafe {
-                self.stream.dispatch(
+                commands.dispatch(
                     &self.sorted_merge,
                     [groups.div_ceil(2) as u32, 1, 1],
                     [256, 1, 1],
@@ -789,17 +808,21 @@ impl Searcher {
         Ok(output)
     }
 
-    fn apply_exclusions(&self) -> Result<()> {
-        self.apply_exclusions_from(self.exclusions.buffer().binding())
+    fn apply_exclusions_from(&self, bitmap: hrx::View<'_>) -> Result<()> {
+        self.mask_commands(bitmap, &mut Commands::immediate(&self.stream))
     }
 
-    fn apply_exclusions_from(&self, bitmap: hrx::View<'_>) -> Result<()> {
+    fn mask_commands<'a>(
+        &'a self,
+        bitmap: hrx::View<'a>,
+        commands: &mut Commands<'a>,
+    ) -> Result<()> {
         let mut constants = Constants::new();
         constants.push(self.count as u32)?;
         // SAFETY: mask_scores guards every row, reads ceil(count/32) bitmap
         // words, and writes only the corresponding owned score allocation.
         unsafe {
-            self.stream.dispatch(
+            commands.dispatch(
                 &self.mask_scores,
                 [self.count.div_ceil(256) as u32, 1, 1],
                 [256, 1, 1],
@@ -809,6 +832,7 @@ impl Searcher {
         }
     }
 
+    #[cfg(test)]
     fn read_neighbors_into(
         &mut self,
         output: usize,
@@ -824,6 +848,10 @@ impl Searcher {
             self.candidates[output].1.try_slice(0, k * 4)?,
         )?;
         self.stream.synchronize()?;
+        self.decode_neighbors(k, neighbors)
+    }
+
+    fn decode_neighbors(&self, k: usize, neighbors: &mut Vec<Neighbor>) -> Result<()> {
         // SAFETY: the copies into readback completed on this stream.
         let bytes = unsafe { self.readback.bytes()? };
         neighbors.clear();
@@ -850,6 +878,8 @@ impl Searcher {
     /// score, then ascending insertion ID. The query is normalized to FP32.
     /// FP16 storage and FP32 arithmetic can change rankings from the original
     /// vectors. This method blocks until results are readable on the host.
+    /// The latest effective k and exclusion mode reuse a prepared command graph.
+    /// Changing either records a new graph; query and mask contents stay dynamic.
     /// Selection scratch grows on the first larger-k query and is reused;
     /// [`Self::reserve_search`] can reserve it before serving queries.
     ///
@@ -943,12 +973,34 @@ impl Searcher {
             }
         }
         self.reserve_search(k)?;
-        self.dispatch_scan(false)?;
-        if !excluded.is_empty() {
-            self.apply_exclusions()?;
+        let masked = !excluded.is_empty();
+        if !self
+            .search_graph
+            .as_ref()
+            .is_some_and(|(cached_k, cached_mask, _)| *cached_k == k && *cached_mask == masked)
+        {
+            // Retain only the most recent shape, bounding prepared command storage.
+            self.search_graph = None;
+            let mut commands = Commands::record(&self.stream)?;
+            self.scan_commands(false, self.query.buffer().binding(), &mut commands)?;
+            if masked {
+                self.mask_commands(self.exclusions.buffer().binding(), &mut commands)?;
+            }
+            let selected = self.select_commands(k, &mut commands)?;
+            commands.copy(
+                self.readback.buffer().try_slice(0, k * 4)?,
+                self.candidates[selected].0.try_slice(0, k * 4)?,
+            )?;
+            commands.copy(
+                self.readback.buffer().try_slice(MAX_K * 4, k * 4)?,
+                self.candidates[selected].1.try_slice(0, k * 4)?,
+            )?;
+            self.search_graph = Some((k, masked, commands.finish()?));
         }
-        let selected = self.select(k)?;
-        self.read_neighbors_into(selected, k, output)
+        self.stream
+            .launch(&mut self.search_graph.as_mut().unwrap().2)?;
+        self.stream.synchronize()?;
+        self.decode_neighbors(k, output)
     }
 
     /// Measure separate, completed control/scan/full-search invocations.
@@ -1169,6 +1221,59 @@ mod tests {
         assert!(norm(&[1.0], 2).is_err());
         assert!(norm(&[f32::MAX, f32::MAX], 2).unwrap().is_finite());
         assert!(norm(&[f32::from_bits(1)], 1).unwrap() > 0.0);
+    }
+
+    #[test]
+    #[ignore = "requires gfx1151"]
+    fn prepared_search_replays_changed_queries_masks_and_capacity() -> Result<()> {
+        let device = Device::open(0)?;
+        let rows: Vec<[f32; 3]> = (0..2057)
+            .map(|i| [1.0, (i % 31) as f32 - 15.0, (i % 17) as f32 - 8.0])
+            .collect();
+        let mut db = Searcher::build(&device, 3, &rows)?;
+        let mut reference = Searcher::build(&device, 3, &rows)?;
+        for config in [
+            ScanConfig::default(),
+            ScanConfig {
+                threads: 256,
+                rows_per_wave: 1,
+                load_width: 2,
+            },
+        ] {
+            db.configure(config)?;
+            reference.configure(config)?;
+            assert!(db.search_graph.is_none());
+            for k in [10, 10, 33, 1024, 1, 10] {
+                for excluded in [&[][..], &[0, 1, 1, 2056][..], &[5, 6, 7][..]] {
+                    for query in [[1.0, 2.0, -3.0], [-1.0, -2.0, 3.0]] {
+                        let actual = db.search_excluding(&query, k, excluded)?;
+                        // Independently submit the same kernels without graph recording.
+                        reference.prepare_query(&query, k)?;
+                        reference.reserve_search(k)?;
+                        reference.dispatch_scan(false)?;
+                        let mut expected = Vec::new();
+                        let mut bytes = vec![0; rows.len() * 4];
+                        reference
+                            .stream
+                            .read_blocking(reference.scores.binding(), &mut bytes)?;
+                        for (id, bytes) in bytes.as_chunks::<4>().0.iter().enumerate() {
+                            if !excluded.contains(&(id as u32)) {
+                                expected.push(Neighbor {
+                                    id: id as u32,
+                                    similarity: f32::from_le_bytes(*bytes),
+                                });
+                            }
+                        }
+                        expected.sort_by(|a, b| {
+                            b.similarity.total_cmp(&a.similarity).then(a.id.cmp(&b.id))
+                        });
+                        expected.truncate(k);
+                        assert_eq!(actual, expected);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]
