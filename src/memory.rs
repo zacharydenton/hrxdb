@@ -21,7 +21,7 @@ impl CorpusMemory {
     }
 }
 /// Private buffer bytes owned by one searcher, excluding shared storage and
-/// caller-owned device outputs. Host-imported buffers include page rounding.
+/// caller-owned device outputs and native allocation granularity.
 #[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct WorkspaceMemory {
     /// Single-query input storage.

@@ -223,12 +223,17 @@ mod tests {
         let mut search = corpus.searcher()?;
         let initial = manager.statistics().reserved_bytes;
         assert!(initial > corpus_bytes);
+        // Force pressure independently of native allocation granularity.
+        let pressure = manager.budget().reserve(120_000 - initial - 1)?;
+        let constrained = manager.statistics().reserved_bytes;
         assert!(
             search
                 .reserve_batch(crate::MAX_BATCH, crate::MAX_K)
                 .is_err()
         );
-        assert!(manager.statistics().reserved_bytes <= 120_000);
+        assert_eq!(manager.statistics().reserved_bytes, constrained);
+        drop(pressure);
+        assert_eq!(manager.statistics().reserved_bytes, initial);
         assert_eq!(search.search(&[1., 0., 0.], 1)?[0].id, 0);
         drop(search);
         assert_eq!(manager.statistics().reserved_bytes, corpus_bytes);
