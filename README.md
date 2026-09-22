@@ -166,7 +166,7 @@ Runnable examples:
 
 The custom scoring kernels illustrate interoperability; they are not tuned GEMMs.
 Applications using HRX types directly should also depend on
-`hrx = { package = "hrx-rs", version = "0.8.3" }`.
+`hrx = { package = "hrx-rs", version = "0.8.5" }`.
 
 ## Measured performance
 
