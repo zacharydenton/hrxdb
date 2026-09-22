@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — cached native GPU memory
+
+- Require HRX 0.8.3, restoring GPU caching for corpus and search workspace.
+- Publish direct host writes to query/exclusion buffers and acquire GPU writes
+  before result readback. These transitions also cover batched searches.
+- On gfx1151, five alternating process runs at 1M × 384, k=10 reduce full search
+  from 4.1591 ms (0.8.2) to 3.4112 ms. Old HRX 0.7.0 measured 3.2765 ms;
+  scan time is within 0.6% of that baseline. All timed result IDs/scores match.
+
 ## 0.3.1 — 2026-09-18
 
 - Add `Corpus::build_in` and `build_fp16_in` for a caller's `ModelContext`, with

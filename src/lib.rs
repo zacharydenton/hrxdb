@@ -627,6 +627,8 @@ impl Searcher {
         for (&x, bytes) in query.iter().zip(target.as_chunks_mut::<4>().0) {
             bytes.copy_from_slice(&((x as f64 / length) as f32).to_le_bytes());
         }
+        // SAFETY: no device use was submitted after the synchronization.
+        unsafe { self.query.publish()? };
         Ok(k.min(self.count))
     }
 
@@ -823,7 +825,7 @@ impl Searcher {
         )?;
         self.stream.synchronize()?;
         // SAFETY: the copies into readback completed on this stream.
-        let bytes = unsafe { self.readback.bytes() };
+        let bytes = unsafe { self.readback.bytes()? };
         neighbors.clear();
         neighbors.reserve(k);
         for i in 0..k {
@@ -932,6 +934,8 @@ impl Searcher {
                     *byte |= bit;
                 }
             }
+            // SAFETY: the bitmap remains exclusively host-owned here.
+            unsafe { self.exclusions.publish()? };
             k = k.min(remaining);
             if k == 0 {
                 output.clear();

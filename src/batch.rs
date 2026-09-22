@@ -286,6 +286,10 @@ impl Searcher {
                 }
             }
         }
+        if !excluded.is_empty() {
+            // SAFETY: no device work has been submitted since synchronization.
+            unsafe { self.exclusions.publish()? };
+        }
         let k = k.min(remaining);
         if k == 0 {
             return Ok(());
@@ -304,6 +308,8 @@ impl Searcher {
                     .copy_from_slice(&((value as f64 / lengths[q]) as f32).to_le_bytes());
             }
         }
+        // SAFETY: the query remains exclusively host-owned here.
+        unsafe { scratch.query.publish()? };
         scratch.scan(
             &self.stream,
             &self.corpus,
@@ -327,7 +333,7 @@ impl Searcher {
         )?;
         self.stream.synchronize()?;
         // SAFETY: the stream completed both copies to this owned readback buffer.
-        let readback = unsafe { scratch.readback.bytes() };
+        let readback = unsafe { scratch.readback.bytes()? };
         for (q, neighbors) in result.iter_mut().enumerate() {
             neighbors.reserve(k);
             for rank in 0..k {

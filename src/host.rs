@@ -29,14 +29,22 @@ impl HostBuffer {
         self.buffer.as_ref().unwrap()
     }
     /// Caller must establish completion of device work touching this allocation.
-    pub(crate) unsafe fn bytes(&self) -> &[u8] {
+    pub(crate) unsafe fn bytes(&self) -> Result<&[u8]> {
+        // SAFETY: the caller establishes device completion and excludes host writes.
+        unsafe { self.buffer().cache_control(false, 0, self.bytes)? };
         // SAFETY: native backing remains owned; caller establishes completion.
-        unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), self.bytes) }
+        Ok(unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), self.bytes) })
     }
     /// Caller must establish completion of device work touching this allocation.
+    /// Publish the modified range before submitting device work.
     pub(crate) unsafe fn bytes_mut(&mut self) -> &mut [u8] {
         // SAFETY: exclusive object borrow and caller's device completion proof.
         unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr(), self.bytes) }
+    }
+    /// Caller must exclude device access until the host writes are published.
+    pub(crate) unsafe fn publish(&self) -> Result<()> {
+        // SAFETY: the caller excludes device use until this publication completes.
+        unsafe { self.buffer().cache_control(true, 0, self.bytes) }
     }
     pub(crate) fn abandon(&mut self) {
         // Uncertain completion retains the entire native mapping/queue owner.
