@@ -291,7 +291,7 @@ fn compile(
     let report = Compilation {
         symbol: spec.symbol().to_owned(),
         artifact: artifact.path().display().to_string(),
-        report: artifact.report().cloned(),
+        report: artifact.report().map(|report| report.json().clone()),
         diagnostics: artifact
             .diagnostics()
             .iter()

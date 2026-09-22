@@ -13,7 +13,7 @@ pub fn named_spec(symbol: &str) -> Specialization {
         spec.set_config("db.select.limit", (1usize << 30).to_string());
         spec.set_config("db.merge.planar", "0");
     }
-    spec.set_report(true);
+    spec.set_report(hrx::loom::ReportMode::Summary);
     spec
 }
 pub fn scan_spec(n: usize, d: usize, c: ScanConfig, control: bool) -> Specialization {
@@ -28,7 +28,7 @@ pub fn scan_spec(n: usize, d: usize, c: ScanConfig, control: bool) -> Specializa
     ] {
         spec.set_config(key, value.to_string());
     }
-    spec.set_report(true);
+    spec.set_report(hrx::loom::ReportMode::Summary);
     spec
 }
 pub fn select_spec(first: bool) -> Specialization {
@@ -36,6 +36,6 @@ pub fn select_spec(first: bool) -> Specialization {
     spec.set_config("db.select.first", usize::from(first).to_string());
     spec.set_config("db.batch", "1");
     spec.set_config("db.select.limit", (1usize << 30).to_string());
-    spec.set_report(true);
+    spec.set_report(hrx::loom::ReportMode::Summary);
     spec
 }

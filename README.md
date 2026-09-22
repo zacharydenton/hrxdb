@@ -88,7 +88,7 @@ or compiler use provisions the native bundle pinned by the resolved HRX release.
 Execution needs the AMD kernel driver, `/dev/kfd` and render-device permissions,
 compatible C/C++ runtime libraries and `libatomic`, and **glibc 2.43+**
 (the bundle's baseline is Ubuntu 26.04). See the
-[HRX setup guide](https://github.com/zacharydenton/hrx-rs/blob/v0.7.0/docs/GPU-NPU.md#native-setup).
+[HRX setup guide](https://github.com/zacharydenton/hrx-rs/blob/v0.8.0/docs/GPU-NPU.md#native-setup).
 After provisioning, `HRX_OFFLINE=1` prevents runtime downloads.
 
 ## Choose your operation
@@ -166,7 +166,7 @@ Runnable examples:
 
 The custom scoring kernels illustrate interoperability; they are not tuned GEMMs.
 Applications using HRX types directly should also depend on
-`hrx = { package = "hrx-rs", version = "0.7.0" }`.
+`hrx = { package = "hrx-rs", version = "0.8.0" }`.
 
 ## Measured performance
 
@@ -214,4 +214,4 @@ for setup, validation, and reporting issues; [CHANGELOG.md](CHANGELOG.md) for
 the release contents; and [RELEASE.md](RELEASE.md) for publication steps.
 
 MIT licensed. The separately distributed HRX runtime and compiler have their
-own [third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.7.0/THIRD-PARTY.md).
+own [third-party notices](https://github.com/zacharydenton/hrx-rs/blob/v0.8.0/THIRD-PARTY.md).
