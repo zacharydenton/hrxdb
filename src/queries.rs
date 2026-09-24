@@ -177,7 +177,7 @@ impl Searcher {
                 &self.corpus,
                 workspace.query.binding(),
                 excluded,
-                width,
+                queries.batch,
                 k,
             )?;
             device::finish(

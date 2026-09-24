@@ -3,6 +3,14 @@ use super::*;
 
 const TILE_ROWS: usize = 262_144;
 
+fn selection_width(queries: usize, k: usize) -> usize {
+    if k > 32 {
+        queries
+    } else {
+        queries.next_power_of_two().max(8)
+    }
+}
+
 pub(crate) struct BatchScratch {
     width: usize,
     k: usize,
@@ -19,7 +27,7 @@ pub(crate) struct BatchScratch {
 struct BatchPlan {
     width: usize,
     scan: Kernel,
-    selection: crate::selection::SelectionPlan,
+    selections: std::collections::HashMap<usize, crate::selection::SelectionPlan>,
     running_merge: Kernel,
 }
 
@@ -92,8 +100,9 @@ impl Searcher {
     /// Reserve and compile workspace for a batch of `query_count` queries.
     ///
     /// `search_batch` calls this automatically. Call it during setup to exclude
-    /// allocation and compilation from the first batch. Query widths are rounded
-    /// to 8, 16, 32, or 64; compiled widths are cached and workspace is retained.
+    /// allocation and compilation from the first batch. Scan widths are rounded
+    /// to 8, 16, 32, or 64; large-k selection omits padded query rows.
+    /// Both are cached and workspace is retained.
     /// Score storage covers at most 262,144 corpus rows, independent of index size.
     /// At width 64 this uses about 66 MiB for k=5 or 322 MiB for k=1,024, plus
     /// query storage (96 KiB at 384 dimensions). A one-query batch uses `search`.
@@ -112,10 +121,15 @@ impl Searcher {
             return self.reserve_search(k);
         }
         let width = query_count.next_power_of_two().max(8);
+        let query_count = selection_width(query_count, k.min(self.count));
         let capacity = k.min(self.count).next_power_of_two();
         let tile_rows = self.count.min(TILE_ROWS);
         if self.batch.as_ref().is_some_and(|s| {
-            s.width >= width && s.k >= capacity && s.plans.iter().any(|p| p.width == width)
+            s.width >= width
+                && s.k >= capacity
+                && s.plans
+                    .iter()
+                    .any(|p| p.width == width && p.selections.contains_key(&query_count))
         }) {
             return Ok(());
         }
@@ -139,14 +153,26 @@ impl Searcher {
             }
             self.batch = Some(scratch);
         }
-        if self
+        if let Some(plan) = self
             .batch
-            .as_ref()
+            .as_mut()
             .unwrap()
             .plans
-            .iter()
-            .any(|p| p.width == width)
+            .iter_mut()
+            .find(|p| p.width == width)
         {
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                plan.selections.entry(query_count)
+            {
+                let (selection, reports) = crate::selection::SelectionPlan::new(
+                    &self.compiler,
+                    &self.stream,
+                    query_count,
+                    TILE_ROWS,
+                )?;
+                entry.insert(selection);
+                self.reports.extend(reports);
+            }
             return Ok(());
         }
         let mut reports = Vec::new();
@@ -165,13 +191,17 @@ impl Searcher {
         let mut running_spec = kernels::named_spec("sorted_merge");
         running_spec.set_config("db.merge.planar", "1");
         let running_merge = build(kernels::SORT, running_spec, 1)?;
-        let (selection, selection_reports) =
-            crate::selection::SelectionPlan::new(&self.compiler, &self.stream, width, TILE_ROWS)?;
+        let (selection, selection_reports) = crate::selection::SelectionPlan::new(
+            &self.compiler,
+            &self.stream,
+            query_count,
+            TILE_ROWS,
+        )?;
         reports.extend(selection_reports);
         self.batch.as_mut().unwrap().plans.push(BatchPlan {
             width,
             scan,
-            selection,
+            selections: std::collections::HashMap::from([(query_count, selection)]),
             running_merge,
         });
         self.reports.extend(reports);
@@ -319,7 +349,7 @@ impl Searcher {
             } else {
                 Some(self.exclusions.buffer().binding())
             },
-            width,
+            count,
             k,
         )?;
         let bytes = count * k * 4;
@@ -357,17 +387,18 @@ fn select_tile(
     rows: usize,
     start: usize,
     k: usize,
+    queries: usize,
 ) -> Result<usize> {
     crate::selection::select_scores(
         stream,
         &scratch.candidates,
-        &plan.selection,
+        &plan.selections[&queries],
         crate::selection::SelectionInput {
             scores: scratch.scores.binding(),
             rows,
             start,
             k,
-            batch: plan.width,
+            batch: queries,
         },
     )
 }
@@ -379,9 +410,11 @@ impl BatchScratch {
         corpus: &Corpus,
         query: hrx::View<'_>,
         exclusions: Option<hrx::View<'_>>,
-        width: usize,
+        queries: usize,
         k: usize,
     ) -> Result<()> {
+        let width = queries.next_power_of_two().max(8);
+        let queries = selection_width(queries, k);
         let plan = self.plans.iter().find(|p| p.width == width).unwrap();
         let mut started = false;
         for shard in &corpus.inner.shards {
@@ -415,8 +448,8 @@ impl BatchScratch {
                         ],
                     )?;
                 }
-                let output = select_tile(stream, self, plan, rows, start, k)?;
-                let bytes = width * k * 4;
+                let output = select_tile(stream, self, plan, rows, start, k, queries)?;
+                let bytes = queries * k * 4;
                 if !started {
                     stream.copy(
                         self.running.0.try_slice(0, bytes)?,
@@ -436,14 +469,14 @@ impl BatchScratch {
                         stream.copy(joined.try_slice(bytes, bytes)?, tile.try_slice(0, bytes)?)?;
                     }
                     let mut constants = Constants::new();
-                    constants.push((width * 2) as u32)?;
+                    constants.push((queries * 2) as u32)?;
                     constants.push(k as u32)?;
                     // SAFETY: planar merge pairs each query's running list with
-                    // that query's tile list; output is a separate width*k pair.
+                    // that query's tile list; output is a separate queries*k pair.
                     unsafe {
                         stream.dispatch(
                             &plan.running_merge,
-                            [width as u32, 1, 1],
+                            [queries as u32, 1, 1],
                             [256, 1, 1],
                             &constants,
                             &[
@@ -487,7 +520,7 @@ mod tests {
             let mut db = Searcher::build_fp16(&device, 3, encoded)?;
             // Exercise cached wide -> narrow -> wide query plans as well as
             // a final corpus tile smaller than all preceding dispatches.
-            for batch in [60usize, 2, 17, 33, 9] {
+            for batch in [60usize, 2, 3, 4, 8, 17, 33, 64, 9, 3] {
                 let queries: Vec<f32> = (0..batch)
                     .flat_map(|q| {
                         [
@@ -583,9 +616,12 @@ mod tests {
         let some = [0, 7, 8, 31, 32, 33, 256, 257, 1030, 1031, 1032, 2064, 1031];
         for excluded in [&[][..], &some, &all[2..], &all] {
             for k in [1, 5, 32, 33, 1024] {
-                let batch = db.search_batch_excluding(&queries, k, excluded)?;
-                for (actual, query) in batch.iter().zip(queries.as_chunks::<3>().0) {
-                    assert_eq!(*actual, db.search_excluding(query, k, excluded)?);
+                for count in [3usize, 60, 4] {
+                    let queries = &queries[..count * 3];
+                    let batch = db.search_batch_excluding(queries, k, excluded)?;
+                    for (actual, query) in batch.iter().zip(queries.as_chunks::<3>().0) {
+                        assert_eq!(*actual, db.search_excluding(query, k, excluded)?);
+                    }
                 }
             }
         }
@@ -666,7 +702,7 @@ mod tests {
                 })
                 .collect();
             let mut db = Searcher::build_fp16(&device, d, &raw)?;
-            for batch in [2usize, 9, 17, 33, 64] {
+            for batch in [2usize, 3, 4, 8, 9, 17, 33, 64, 3] {
                 let queries: Vec<_> = (0..batch)
                     .flat_map(|q| (0..d).map(move |j| ((q * 43 + j * 11) % 97) as f32 - 47.25))
                     .collect();
