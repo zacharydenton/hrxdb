@@ -4,9 +4,12 @@
 //! exhaustive cosine search and composable GPU scoring on AMD Strix Halo.
 //! The Rust API exposes FP16 corpus storage and FP32 scores.
 //!
-//! A shared [`Corpus`] owns immutable storage. Each [`Searcher`] owns its stream
-//! and reusable workspace. [`TopK`] selects from application-defined GPU scores.
-//! Scores describe the quantized corpus, not the original FP32 rows.
+//! A [`Corpus`] is an immutable snapshot of GPU storage. [`Corpus::append`] and
+//! [`Corpus::update`] return new snapshots that share its allocations; existing
+//! handles keep their rows. Each [`Searcher`] owns its stream and reusable
+//! workspace, and [`Searcher::set_corpus`] moves it to a newer snapshot.
+//! [`TopK`] selects from application-defined GPU scores. Scores describe the
+//! quantized corpus, not the original FP32 rows.
 //!
 //! Execution requires Linux x86_64, a gfx1151 AMD GPU, and the native runtime
 //! prerequisites in the [hrx-rs documentation](https://docs.rs/hrx-rs/0.5.0/hrx/).
@@ -30,9 +33,10 @@
 //! # }
 //! ```
 //!
-//! IDs are insertion positions, not application IDs. The index does not persist
-//! vectors, map external IDs, or support updates, metadata filters, or approximate
-//! search. Query-time exclusions use insertion IDs.
+//! IDs are insertion positions, not application IDs: appends take the next
+//! positions and updates replace rows in place of their positions. The index does
+//! not persist vectors, map external IDs, delete rows, or support metadata
+//! filters or approximate search. Query-time exclusions use insertion IDs.
 //! [`Searcher::corpus`] provides borrowed storage bindings for application-owned
 //! GPU kernels, side arrays, and reductions; see [`Corpus`] for the contract.
 mod batch;
@@ -48,6 +52,7 @@ mod exclusions;
 mod gather;
 mod inference;
 mod memory;
+pub(crate) mod mutation;
 mod residency;
 pub use residency::CorpusBuildMemory;
 mod queries;
@@ -66,6 +71,7 @@ extern crate self as hrxdb;
 use half::f16;
 use hrx::{Buffer, Constants, Kernel, Stream};
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, atomic::AtomicUsize};
 use std::time::Instant;
 
 use corpus::CorpusStorage;
@@ -75,6 +81,8 @@ pub use hrx::{Device, Error, Result};
 const MAX_ROWS: usize = 1 << 30;
 const MAX_ELEMENTS: usize = 1 << 32;
 const SHARD_ROW_ALIGNMENT: usize = 256;
+/// Copy-on-write granularity of [`Corpus::update`], in rows of an allocation.
+const PAGE_ROWS: usize = 16_384;
 /// Largest supported top-k result count for search and standalone selection.
 pub const MAX_K: usize = 1024;
 /// Largest supported query count for batched search and standalone selection.
@@ -164,9 +172,10 @@ pub struct Compilation {
     pub diagnostics: Vec<String>,
 }
 
-/// Independent search worker over a shared immutable [`Corpus`].
+/// Independent search worker over a shared immutable [`Corpus`] snapshot.
 ///
 /// Owns an ordered stream, compiled kernels, and reusable query/result workspace.
+/// It serves one snapshot until [`Self::set_corpus`] moves it to another.
 /// A searcher is [`Send`] but not [`Sync`]; operations require `&mut self`. Create
 /// multiple workers from the same corpus to submit queries independently.
 pub struct Searcher {
@@ -195,12 +204,79 @@ pub struct Searcher {
     search_graph: Option<(usize, bool, hrx::GraphExec)>,
 }
 
-struct Shard {
+/// One GPU allocation of padded FP16 rows and their FP32 inverse norms.
+/// Snapshots derived by [`Corpus::append`] or [`Corpus::update`] share it.
+struct Allocation {
     data: Buffer,
     norms: Buffer,
+    /// Rows held by both buffers, a multiple of [`SHARD_ROW_ALIGNMENT`].
+    capacity: usize,
+    /// Rows `0..claimed` may be logical rows of some snapshot and are never
+    /// written again. Rows at or past the mark belong to no snapshot; an append
+    /// writes them only after advancing the mark over them, so concurrent
+    /// appends from different snapshots never write the same row.
+    claimed: AtomicUsize,
+    /// Created by an append. When its reserve is exhausted, the last segment
+    /// moves to a larger allocation instead of starting another segment.
+    appended: bool,
+}
+
+impl Allocation {
+    fn new(
+        stream: &Stream,
+        padded: usize,
+        capacity: usize,
+        rows: usize,
+        appended: bool,
+    ) -> Result<Arc<Self>> {
+        let data = stream.allocate(capacity * padded * 2)?;
+        let norms = stream.allocate(capacity * 4)?;
+        if capacity > rows {
+            // Initialize only the slack; these are not indexed zero rows.
+            // Contents are deliberately not part of the public contract.
+            stream.fill(
+                data.try_slice(rows * padded * 2, (capacity - rows) * padded * 2)?,
+                0,
+            )?;
+            stream.fill(norms.try_slice(rows * 4, (capacity - rows) * 4)?, 0)?;
+        }
+        Ok(Arc::new(Self {
+            data,
+            norms,
+            capacity,
+            claimed: AtomicUsize::new(rows),
+            appended,
+        }))
+    }
+}
+
+/// A snapshot's contiguous run of insertion IDs within one allocation.
+///
+/// `offset` is a multiple of [`PAGE_ROWS`], so every binding starts on a
+/// 256-row boundary. `capacity` is the readable extent from `offset`, a
+/// multiple of 256 and at least `count`; rows past `count` are slack.
+#[derive(Clone)]
+struct Shard {
+    storage: Arc<Allocation>,
+    offset: usize,
     start: usize,
     count: usize,
     capacity: usize,
+}
+
+impl Shard {
+    /// FP16 rows `local..local + rows` of this segment.
+    fn vectors(&self, padded: usize, local: usize, rows: usize) -> Result<hrx::View<'_>> {
+        self.storage
+            .data
+            .try_slice((self.offset + local) * padded * 2, rows * padded * 2)
+    }
+    /// Inverse norms of rows `local..local + rows` of this segment.
+    fn inverse_norms(&self, local: usize, rows: usize) -> Result<hrx::View<'_>> {
+        self.storage
+            .norms
+            .try_slice((self.offset + local) * 4, rows * 4)
+    }
 }
 
 fn invalid(message: &str) -> Error {
@@ -471,27 +547,30 @@ impl Searcher {
         let compiler = hrx::loom::Compiler::for_stream(None, &stream)?;
         let mut scans = Vec::new();
         let mut reports = Vec::new();
-        for shard in &corpus.inner.shards {
+        for index in 0..corpus.inner.shards.len() {
+            let rows = corpus.scan_rows(index);
             let (scan, sr) = compile(
                 &compiler,
                 &stream,
                 kernels::SCAN,
-                kernels::scan_spec(shard.count, padded, config, false),
+                kernels::scan_spec(rows, padded, config, false),
             )?;
             let (control, cr) = compile(
                 &compiler,
                 &stream,
                 kernels::SCAN,
-                kernels::scan_spec(shard.count, padded, config, true),
+                kernels::scan_spec(rows, padded, config, true),
             )?;
             scans.push((scan, control));
             reports.extend([sr, cr]);
         }
         let query = HostBuffer::new(&stream, padded * 4)?;
         let readback = HostBuffer::new(&stream, MAX_K * 8)?;
-        let exclusions = HostBuffer::new(&stream, count.div_ceil(32) * 4)?;
-        let scores = stream.allocate(count * 4)?;
-        let candidates = allocate_candidates(&stream, count, 32)?;
+        // Score storage covers the last shard's reserve, which its scan reads.
+        let rows = corpus.capacity_range().end;
+        let exclusions = HostBuffer::new(&stream, rows.div_ceil(32) * 4)?;
+        let scores = stream.allocate(rows * 4)?;
+        let candidates = allocate_candidates(&stream, rows, 32)?;
         let (first_select, fr) = compile(
             &compiler,
             &stream,
@@ -595,18 +674,19 @@ impl Searcher {
         config.validate()?;
         self.stream.synchronize()?;
         let mut compiled = Vec::with_capacity(self.corpus.inner.shards.len());
-        for shard in &self.corpus.inner.shards {
+        for index in 0..self.corpus.inner.shards.len() {
+            let rows = self.corpus.scan_rows(index);
             let (scan, sr) = compile(
                 &self.compiler,
                 &self.stream,
                 kernels::SCAN,
-                kernels::scan_spec(shard.count.max(1), self.padded, config, false),
+                kernels::scan_spec(rows, self.padded, config, false),
             )?;
             let (control, cr) = compile(
                 &self.compiler,
                 &self.stream,
                 kernels::SCAN,
-                kernels::scan_spec(shard.count.max(1), self.padded, config, true),
+                kernels::scan_spec(rows, self.padded, config, true),
             )?;
             compiled.push((scan, sr, control, cr));
         }
@@ -654,13 +734,14 @@ impl Searcher {
         if self.count == 0 {
             return Ok(());
         }
-        for (shard, (scan, control_kernel)) in self.corpus.inner.shards.iter().zip(&self.scans) {
-            let groups = shard
-                .count
-                .div_ceil(self.config.threads / 32 * self.config.rows_per_wave);
+        let shards = self.corpus.inner.shards.iter().enumerate();
+        for ((index, shard), (scan, control_kernel)) in shards.zip(&self.scans) {
+            let rows = self.corpus.scan_rows(index);
+            let groups = rows.div_ceil(self.config.threads / 32 * self.config.rows_per_wave);
             // SAFETY: each data shard fits the 32-bit element address limit.
-            // Norms are shard-local; scores use the global row range. The
-            // specialized kernel guards tail rows. One stream orders accesses.
+            // Norms are shard-local; scores use the global row range, which
+            // covers the last shard's reserve. The specialized kernel guards
+            // tail rows. One stream orders accesses.
             unsafe {
                 commands.dispatch(
                     if control { control_kernel } else { scan },
@@ -668,10 +749,10 @@ impl Searcher {
                     [self.config.threads as u32, 1, 1],
                     &Constants::new(),
                     &[
-                        shard.data.binding(),
+                        shard.vectors(self.padded, 0, shard.capacity)?,
                         query,
-                        shard.norms.binding(),
-                        self.scores.try_slice(shard.start * 4, shard.count * 4)?,
+                        shard.inverse_norms(0, shard.capacity)?,
+                        self.scores.try_slice(shard.start * 4, rows * 4)?,
                     ],
                 )?;
             }
@@ -750,7 +831,8 @@ impl Searcher {
         let capacity = k.min(self.count).next_power_of_two().min(MAX_K);
         if capacity > self.selection_capacity {
             self.stream.synchronize()?;
-            let candidates = allocate_candidates(&self.stream, self.count, capacity)?;
+            let rows = self.corpus.capacity_range().end;
+            let candidates = allocate_candidates(&self.stream, rows, capacity)?;
             self.search_graph = None;
             self.candidates = candidates;
             self.selection_capacity = capacity;

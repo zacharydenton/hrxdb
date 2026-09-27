@@ -135,24 +135,8 @@ impl Corpus {
         for start in (0..count).step_by(per_shard) {
             let shard_count = (count - start).min(per_shard);
             let capacity = shard_capacity(shard_count);
-            let data = stream.allocate(capacity * padded * 2)?;
-            let norms = stream.allocate(capacity * 4)?;
-            if capacity > shard_count {
-                // Initialize only the slack; these are not indexed zero rows.
-                // Contents are deliberately not part of the public contract.
-                // The ingestion synchronization below also completes the fills.
-                stream.fill(
-                    data.try_slice(
-                        shard_count * padded * 2,
-                        (capacity - shard_count) * padded * 2,
-                    )?,
-                    0,
-                )?;
-                stream.fill(
-                    norms.try_slice(shard_count * 4, (capacity - shard_count) * 4)?,
-                    0,
-                )?;
-            }
+            // The ingestion synchronization below also completes slack fills.
+            let storage = Allocation::new(&stream, padded, capacity, shard_count, false)?;
             for local in (0..shard_count).step_by(chunk_rows) {
                 chunk.clear();
                 norm_chunk.clear();
@@ -163,14 +147,20 @@ impl Corpus {
                     let inverse = encode_row(&row, dimensions, padded, &mut chunk)?;
                     norm_chunk.extend_from_slice(&inverse.to_le_bytes());
                 }
-                stream.upload(data.try_slice(local * padded * 2, chunk.len())?, &chunk)?;
-                stream.upload(norms.try_slice(local * 4, norm_chunk.len())?, &norm_chunk)?;
+                stream.upload(
+                    storage.data.try_slice(local * padded * 2, chunk.len())?,
+                    &chunk,
+                )?;
+                stream.upload(
+                    storage.norms.try_slice(local * 4, norm_chunk.len())?,
+                    &norm_chunk,
+                )?;
                 // Bound HRX's owned staging as well as the conversion buffers.
                 stream.synchronize()?;
             }
             shards.push(Shard {
-                data,
-                norms,
+                storage,
+                offset: 0,
                 start,
                 count: shard_count,
                 capacity,
@@ -190,6 +180,7 @@ impl Corpus {
                 padded,
                 count,
                 gather: Default::default(),
+                writer: Default::default(),
             }),
         })
     }
@@ -285,9 +276,17 @@ impl Corpus {
                     &[shard.vectors.binding(), norms.binding(), status.binding()],
                 )?;
             }
+            // Adopted allocations are never extended in place: the producer's
+            // slack is left as it was handed over.
             shards.push(Shard {
-                data: shard.vectors,
-                norms,
+                storage: std::sync::Arc::new(Allocation {
+                    data: shard.vectors,
+                    norms,
+                    capacity,
+                    claimed: capacity.into(),
+                    appended: false,
+                }),
+                offset: 0,
                 start,
                 count: shard.rows,
                 capacity,
@@ -312,6 +311,7 @@ impl Corpus {
                 padded,
                 count,
                 gather: Default::default(),
+                writer: Default::default(),
             }),
         })
     }

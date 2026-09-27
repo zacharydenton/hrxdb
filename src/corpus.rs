@@ -1,12 +1,18 @@
 //! Shared ownership and borrowed bindings for immutable GPU vector storage.
-use crate::{Device, Result, ScanConfig, Searcher, Shard};
+use crate::{
+    Device, HostBuffer, Result, ScanConfig, Searcher, Shard, allocate_candidates, compile, invalid,
+    kernels,
+};
 use hrx::{Stream, View};
 use std::{ops::Range, sync::Arc};
 
-/// Cheaply cloned, immutable GPU-resident FP16 corpus. Clones share allocations.
+/// Cheaply cloned, immutable snapshot of a GPU-resident FP16 corpus. Clones
+/// share allocations.
 ///
 /// A corpus is Send + Sync. Independent searchers own their own streams and
-/// workspace. Replacing a snapshot leaves old clones and in-flight users valid.
+/// workspace. [`Self::append`], [`Self::update`] and [`Self::compact`] return
+/// new snapshots that share unchanged storage; a handle's logical rows never
+/// change, so replacing a snapshot leaves old clones and in-flight users valid.
 /// Logical rows are insertion-ordered, zero-padded FP16 with FP32 inverse norms.
 /// Treat exported bindings as read-only; HRX does not enforce write protection.
 /// Callers own synchronization for their custom kernels. Construction completes
@@ -32,6 +38,8 @@ pub(crate) struct CorpusStorage {
     pub(crate) padded: usize,
     pub(crate) count: usize,
     pub(crate) gather: std::sync::Mutex<Option<hrx::Kernel>>,
+    /// Stream for appends and updates, shared by snapshots of one lineage.
+    pub(crate) writer: Arc<std::sync::Mutex<Option<crate::mutation::Lineage>>>,
 }
 
 // HRX exposes domain equality, not a numeric ID. Weak entries give residency
@@ -124,7 +132,9 @@ impl Corpus {
     /// Global row-coordinate extent needed by side arrays covering every shard's
     /// readable capacity. Includes slack, which has no insertion IDs. Empty
     /// corpora return `0..0`. This is the maximum shard end, not the sum of their
-    /// capacities: interior slack can overlap later shards' logical rows.
+    /// capacities: interior slack can overlap later shards' logical rows. After
+    /// an append it includes the tail's reserve, and it stays unchanged while
+    /// further appends fit that reserve.
     pub fn capacity_range(&self) -> Range<usize> {
         0..self
             .inner
@@ -134,11 +144,28 @@ impl Corpus {
             .max()
             .unwrap_or(0)
     }
+    /// Rows the single-query scan of shard `index` scores. The last shard is
+    /// scanned through its reserve, whose scores lie past `len()` and are never
+    /// selected: its kernel then depends on the capacity, which appends within
+    /// the reserve leave unchanged, rather than on the row count.
+    pub(crate) fn scan_rows(&self, index: usize) -> usize {
+        let shards = &self.inner.shards;
+        if index + 1 == shards.len() {
+            shards[index].capacity
+        } else {
+            shards[index].count
+        }
+    }
     /// Nonempty storage shards in insertion order, partitioning `0..len()`.
+    /// Built corpora have one shard per 2^32 FP16 elements; appends add one
+    /// tail shard, and copy-on-write updates may split shards (see
+    /// [`Self::update`]). Shards of different snapshots can share allocations.
     pub fn shards(&self) -> impl ExactSizeIterator<Item = CorpusShardView<'_>> {
-        self.inner.shards.iter().map(|s| CorpusShardView {
-            vectors: s.data.binding(),
-            inverse_norms: s.norms.binding(),
+        let padded = self.inner.padded;
+        self.inner.shards.iter().map(move |s| CorpusShardView {
+            // Segment extents are validated when the snapshot is created.
+            vectors: s.vectors(padded, 0, s.capacity).expect("segment extent"),
+            inverse_norms: s.inverse_norms(0, s.capacity).expect("segment extent"),
             start: s.start,
             count: s.count,
             capacity: s.capacity,
@@ -150,6 +177,87 @@ impl Searcher {
     /// another searcher without copying vectors.
     pub fn corpus(&self) -> &Corpus {
         &self.corpus
+    }
+    /// Serve another snapshot of the same vectors, such as one returned by
+    /// [`Corpus::append`], [`Corpus::update`] or [`Corpus::compact`].
+    ///
+    /// Waits for this searcher's queued work, then keeps its stream, compiled
+    /// selection and batch kernels, and workspace. Scan kernels are reused for
+    /// shards of unchanged extent; after an append within the tail's reserve,
+    /// nothing is compiled or allocated. Score and exclusion storage grows
+    /// with [`Corpus::capacity_range`]. The next search records a new graph.
+    /// This is cheaper than [`Corpus::searcher`] and releases the previous
+    /// snapshot's reference, which [`Corpus::update`] needs to write in place.
+    ///
+    /// # Errors
+    /// The corpus must be on this searcher's device with the same dimensions.
+    /// On error the searcher still serves its previous snapshot.
+    pub fn set_corpus(&mut self, corpus: Corpus) -> Result<()> {
+        if corpus.inner.device_id != self.corpus.inner.device_id {
+            return Err(invalid("corpus belongs to another device"));
+        }
+        if corpus.dimensions() != self.dimensions {
+            return Err(invalid("corpus dimension mismatch"));
+        }
+        self.stream.synchronize()?;
+        let reused: Vec<usize> = (0..self.scans.len())
+            .map(|i| self.corpus.scan_rows(i))
+            .collect();
+        let mut scans = Vec::with_capacity(corpus.inner.shards.len());
+        let mut reports = Vec::with_capacity(2 * corpus.inner.shards.len());
+        for index in 0..corpus.inner.shards.len() {
+            let rows = corpus.scan_rows(index);
+            if let Some(i) = reused.iter().position(|&r| r == rows) {
+                scans.push(self.scans[i].clone());
+                reports.extend_from_slice(&self.reports[2 * i..2 * i + 2]);
+                continue;
+            }
+            let scan = |control| {
+                compile(
+                    &self.compiler,
+                    &self.stream,
+                    kernels::SCAN,
+                    kernels::scan_spec(rows, self.padded, self.config, control),
+                )
+            };
+            let ((scan, scan_report), (control, control_report)) = (scan(false)?, scan(true)?);
+            scans.push((scan, control));
+            reports.extend([scan_report, control_report]);
+        }
+        // Storage sized by the capacity range is reused until the reserve grows.
+        let rows = corpus.capacity_range().end;
+        let scores = (self.scores.bytes() < rows * 4)
+            .then(|| self.stream.allocate(rows * 4))
+            .transpose()?;
+        let candidates = (self.candidates[0].0.bytes()
+            < rows.div_ceil(1024).max(1) * self.selection_capacity * 4)
+            .then(|| allocate_candidates(&self.stream, rows, self.selection_capacity))
+            .transpose()?;
+        let exclusions = (self.exclusions.buffer().bytes() < rows.div_ceil(32) * 4)
+            .then(|| HostBuffer::new(&self.stream, rows.div_ceil(32) * 4))
+            .transpose()?;
+        let count = corpus.len();
+        match (&mut self.batch, count) {
+            (batch, 0) => *batch = None,
+            (Some(batch), _) => batch.retile(&self.stream, rows, self.padded)?,
+            (None, _) => {}
+        }
+        if let Some(scores) = scores {
+            self.scores = scores;
+        }
+        if let Some(candidates) = candidates {
+            self.candidates = candidates;
+        }
+        if let Some(exclusions) = exclusions {
+            self.exclusions = exclusions;
+        }
+        let shards = self.scans.len();
+        self.reports.splice(..2 * shards, reports);
+        self.scans = scans;
+        self.search_graph = None;
+        self.count = count;
+        self.corpus = corpus;
+        Ok(())
     }
     /// This searcher's ordered execution stream. Use it to submit producers or
     /// consumers around device search. Do not replace or synchronize other queues
@@ -165,7 +273,10 @@ impl<'a> CorpusShardView<'a> {
     }
     /// Readable rows in both bindings, a multiple of 256 and at least the logical
     /// count. Extra rows have unspecified contents and must be masked before
-    /// reduction/selection. Caller side arrays must also cover their own reads.
+    /// reduction/selection. An append to a newer snapshot can write them while
+    /// this view is in use; such rows are finite, and never logical rows of this
+    /// snapshot. Caller side arrays must also cover their own reads. The last
+    /// shard of an appended corpus can hold up to twice its rows as reserve.
     /// Capacity times padded dimensions is at most 2^32 FP16 elements.
     pub fn capacity_rows(&self) -> usize {
         self.capacity
@@ -189,7 +300,7 @@ impl<'a> CorpusShardView<'a> {
 }
 #[cfg(test)]
 #[path = "../examples/support/album_scores.rs"]
-mod album_example;
+pub(crate) mod album_example;
 
 #[cfg(test)]
 mod tests {
@@ -406,16 +517,8 @@ mod tests {
                     row[..2].copy_from_slice(&f16::ONE.to_le_bytes());
                 }
                 let inverses: Vec<_> = (0..extra).flat_map(|_| 1.0f32.to_le_bytes()).collect();
-                writer.upload(
-                    shard
-                        .data
-                        .try_slice(shard.count * 128 * 2, positive.len())?,
-                    &positive,
-                )?;
-                writer.upload(
-                    shard.norms.try_slice(shard.count * 4, inverses.len())?,
-                    &inverses,
-                )?;
+                writer.upload(shard.vectors(128, shard.count, extra)?, &positive)?;
+                writer.upload(shard.inverse_norms(shard.count, extra)?, &inverses)?;
             }
             writer.synchronize()?;
             let query = [1.0, 0.0, 0.0];

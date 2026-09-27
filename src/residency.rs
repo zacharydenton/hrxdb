@@ -54,7 +54,7 @@ impl Corpus {
         );
         manager.load_budgeted(
             key,
-            |corpus: &Corpus| Arc::strong_count(&corpus.inner) == 1,
+            |corpus: &Corpus| Arc::strong_count(&corpus.inner) == 1 && corpus.inner.exclusive(),
             |_| Self::build_fp16_in(&domain.model, dimensions, rows),
         )
     }
@@ -121,7 +121,7 @@ impl Corpus {
         manager.load(
             key,
             memory.peak_bytes,
-            |corpus: &Corpus| Arc::strong_count(&corpus.inner) == 1,
+            |corpus: &Corpus| Arc::strong_count(&corpus.inner) == 1 && corpus.inner.exclusive(),
             || {
                 let corpus = Self::build_fp16(device, dimensions, rows)?;
                 let bytes = corpus.memory_usage().total();

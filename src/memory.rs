@@ -1,17 +1,20 @@
 //! Allocation accounting. Shared storage is reported separately from each worker.
 use crate::*;
 /// Bytes in one shared corpus allocation set; cloned handles do not duplicate it.
+/// Allocations a snapshot shares with snapshots derived from it are counted in
+/// full by each of them.
 #[derive(Clone, Copy, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct CorpusMemory {
     /// Logical FP16 components, excluding dimension padding.
     pub vectors: usize,
     /// Zero padding within logical vector rows.
     pub dimension_padding: usize,
-    /// Readable vector rows beyond logical shard lengths.
+    /// Allocated vector rows that are not logical rows of this snapshot: tile
+    /// slack, append reserve, and rows superseded by copy-on-write updates.
     pub vector_slack: usize,
     /// FP32 inverse norms for logical rows.
     pub norms: usize,
-    /// Readable inverse norms beyond logical shard lengths.
+    /// Inverse norms of the same rows as `vector_slack`.
     pub norm_slack: usize,
 }
 impl CorpusMemory {
@@ -62,7 +65,14 @@ pub struct SearcherMemory {
 impl Corpus {
     /// Report storage bytes without initializing a searcher or querying hardware.
     pub fn memory_usage(&self) -> CorpusMemory {
-        let capacity: usize = self.inner.shards.iter().map(|s| s.capacity).sum();
+        let mut seen = std::collections::HashSet::new();
+        let capacity: usize = self
+            .inner
+            .shards
+            .iter()
+            .filter(|s| seen.insert(std::sync::Arc::as_ptr(&s.storage)))
+            .map(|s| s.storage.capacity)
+            .sum();
         CorpusMemory {
             vectors: self.len() * self.dimensions() * 2,
             dimension_padding: self.len() * (self.padded_dimensions() - self.dimensions()) * 2,

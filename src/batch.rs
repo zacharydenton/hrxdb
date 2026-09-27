@@ -55,6 +55,20 @@ impl BatchScratch {
         })
     }
 
+    /// Resize tile storage for a corpus whose capacity range ends at `rows`,
+    /// keeping compiled plans. Scratch of any tile size serves any corpus, so
+    /// failure leaves it valid.
+    pub(crate) fn retile(&mut self, stream: &Stream, rows: usize, padded: usize) -> Result<()> {
+        let tile_rows = rows.min(TILE_ROWS);
+        if tile_rows == self.tile_rows {
+            return Ok(());
+        }
+        let mut fresh = Self::new(stream, self.width, self.k, tile_rows, padded)?;
+        fresh.plans = std::mem::take(&mut self.plans);
+        *self = fresh;
+        Ok(())
+    }
+
     pub(crate) fn abandon(&mut self) {
         self.query.abandon();
         self.readback.abandon();
@@ -123,7 +137,8 @@ impl Searcher {
         let width = query_count.next_power_of_two().max(8);
         let query_count = selection_width(query_count, k.min(self.count));
         let capacity = k.min(self.count).next_power_of_two();
-        let tile_rows = self.count.min(TILE_ROWS);
+        // Sized by capacity, so appends within the reserve keep this scratch.
+        let tile_rows = self.corpus.capacity_range().end.min(TILE_ROWS);
         if self.batch.as_ref().is_some_and(|s| {
             s.width >= width
                 && s.k >= capacity
@@ -437,12 +452,9 @@ impl BatchScratch {
                         [(width * 4) as u32, 1, 1],
                         &constants,
                         &[
-                            shard.data.try_slice(
-                                local * corpus.padded_dimensions() * 2,
-                                rows * corpus.padded_dimensions() * 2,
-                            )?,
+                            shard.vectors(corpus.padded_dimensions(), local, rows)?,
                             query,
-                            shard.norms.try_slice(local * 4, rows * 4)?,
+                            shard.inverse_norms(local, rows)?,
                             exclusions.unwrap_or(self.scores.binding()),
                             self.scores.binding(),
                         ],

@@ -62,7 +62,8 @@ impl Corpus {
         }
         let shards = &self.inner.shards;
         if shards.iter().any(|s| {
-            std::ptr::eq(output.owner(), &s.data) || std::ptr::eq(output.owner(), &s.norms)
+            std::ptr::eq(output.owner(), &s.storage.data)
+                || std::ptr::eq(output.owner(), &s.storage.norms)
         }) {
             return Err(invalid("gather output must not alias corpus storage"));
         }
@@ -104,8 +105,8 @@ impl Corpus {
                     [128, 1, 1],
                     &constants,
                     &[
-                        shard.data.binding(),
-                        shard.norms.binding(),
+                        shard.vectors(self.padded_dimensions(), 0, shard.capacity)?,
+                        shard.inverse_norms(0, shard.capacity)?,
                         routing.try_slice(offset, requests.len() * 8)?,
                         output,
                     ],

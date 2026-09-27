@@ -1,0 +1,51 @@
+// One workgroup writes one staged row into corpus storage. Host routing names
+// a unique destination row per staged row. Rows move as 32-bit words, so FP16
+// components and FP32 inverse norms are copied bit for bit.
+amdgpu.target<gfx1151> @target {subgroup_size = 32}
+config.decl @scatter.words : %v:index where [range(%v,64,8192),mul(%v,64)]
+config.decl @scatter.limit : %v:index where [range(%v,1,1073741824)]
+kernel.def target(@target) export("scatter") @scatter(%count_arg:i32) {
+  %one=index.constant 1 : index
+  %threads=index.constant 128 : index
+  %raw=index.cast %count_arg : i32 to index
+  %count=index.assume %raw [range(%raw,1,1073741824)] : index
+  kernel.launch.config workgroups(%count,%one,%one) workgroup_size(%threads,%one,%one) : index
+} launch(%count_arg:i32,%staged_arg:i32,%rows_arg:i32,%source:buffer,%source_norms:buffer,%routing:buffer,%vectors:buffer,%norms:buffer) {
+  %zero=index.constant 0 : offset
+  %i0=index.constant 0 : index
+  %i1=index.constant 1 : index
+  %step=index.constant 128 : index
+  %w=config.get @scatter.words : index
+  %limit=config.get @scatter.limit : index
+  %n0=index.cast %count_arg : i32 to index
+  %n=index.assume %n0 [range(%n0,1,1073741824)] : index
+  %s0=index.cast %staged_arg : i32 to index
+  %staged=index.assume %s0 [range(%s0,1,1073741824),le(%s0,%limit)] : index
+  %rows0=index.cast %rows_arg : i32 to index
+  %rows=index.assume %rows0 [range(%rows0,1,1073741824),le(%rows0,%limit)] : index
+  %group0=kernel.workgroup.id<x> : index
+  %group=index.assume %group0 [range(%group0,0,1073741823),lt(%group0,%n)] : index
+  %tid=kernel.workitem.id<x> : index
+  %rv=buffer.view %routing[%zero] : buffer -> view<[%n]x2xi32>
+  %sv=buffer.view %source[%zero] : buffer -> view<[%staged]x[%w]xi32>
+  %sn=buffer.view %source_norms[%zero] : buffer -> view<[%staged]xi32>
+  %dv=buffer.view %vectors[%zero] : buffer -> view<[%rows]x[%w]xi32>
+  %dn=buffer.view %norms[%zero] : buffer -> view<[%rows]xi32>
+  %from=view.load %rv[%group,%i0] : view<[%n]x2xi32> -> i32
+  %to=view.load %rv[%group,%i1] : view<[%n]x2xi32> -> i32
+  %f0=index.cast %from : i32 to index
+  %f=index.assume %f0 [range(%f0,0,1073741823),lt(%f0,%staged)] : index
+  %t0=index.cast %to : i32 to index
+  %t=index.assume %t0 [range(%t0,0,1073741823),lt(%t0,%rows)] : index
+  scf.for %col=[%tid to %w step %step] {
+    %c=index.assume %col [range(%col,0,8191),lt(%col,%w)] : index
+    %word=view.load %sv[%f,%c] : view<[%staged]x[%w]xi32> -> i32
+    view.store %word,%dv[%t,%c] : i32,view<[%rows]x[%w]xi32>
+  }
+  %first=index.cmp eq, %tid, %i0 : index
+  scf.if %first {
+    %inverse=view.load %sn[%f] : view<[%staged]xi32> -> i32
+    view.store %inverse,%dn[%t] : i32,view<[%rows]xi32>
+  }
+  kernel.return
+}
