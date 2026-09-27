@@ -44,6 +44,15 @@ pub(crate) fn select_scores(
     plan: &SelectionPlan,
     input: SelectionInput<'_>,
 ) -> Result<usize> {
+    select_score_commands(&mut Commands::immediate(stream), candidates, plan, input)
+}
+
+pub(crate) fn select_score_commands<'a>(
+    commands: &mut Commands<'a>,
+    candidates: &'a [(Buffer, Buffer); 2],
+    plan: &'a SelectionPlan,
+    input: SelectionInput<'a>,
+) -> Result<usize> {
     let SelectionInput {
         scores,
         rows,
@@ -74,7 +83,7 @@ pub(crate) fn select_scores(
         // output never alias. Only the first pass assigns global insertion IDs.
         unsafe {
             if k > 32 {
-                stream.dispatch(
+                commands.dispatch(
                     &plan.sort,
                     [groups as u32, batch as u32, 1],
                     [256, 1, 1],
@@ -82,7 +91,7 @@ pub(crate) fn select_scores(
                     &[input_scores, out_scores.binding(), out_ids.binding()],
                 )?;
             } else {
-                stream.dispatch(
+                commands.dispatch(
                     if first { &plan.first } else { &plan.merge },
                     [groups as u32, batch as u32, 1],
                     [256, 1, 1],
@@ -106,7 +115,7 @@ pub(crate) fn select_scores(
                 // SAFETY: each query merges its own adjacent sorted k-lists;
                 // the number of lists halves, and outputs use the other pair.
                 unsafe {
-                    stream.dispatch(
+                    commands.dispatch(
                         &plan.sorted_merge,
                         [lists.div_ceil(2) as u32, batch as u32, 1],
                         [256, 1, 1],

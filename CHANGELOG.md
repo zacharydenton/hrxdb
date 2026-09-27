@@ -2,6 +2,21 @@
 
 ## Unreleased — cached native GPU memory, prepared search, live snapshots
 
+- Upgrade to HRX 0.8.11 and the published `native-20260927-244cd3801b` bundle.
+  Move protobuf to 3.7.2 and remove the obsolete onnx-protobuf dependency.
+- Add `Searcher::profile_search` for explicit single/batch GPU timestamp
+  replays, command geometry and arguments, transfers, and per-stage totals.
+  Use the ordinary search commands and check bitwise result parity; normal
+  searches remain uninstrumented.
+- Add `Searcher::detailed_compilation_reports` and retain compiler/target
+  identity, specialization, resource facts, wait reasons and related diagnostic
+  locations. Keep library compilation at summary level; detailed collection
+  is explicit and does not replace loaded kernels.
+- Benchmark JSON collects detailed compiler reports by default, with
+  `--compile-report summary` to omit detailed collection. `--profile` adds three
+  diagnostic replays after ordinary measurement windows. Resource selection now
+  consumes Loom evidence directly, without an `llvm-readobj` subprocess.
+
 - Add `Corpus::append` and `append_fp16`, returning a snapshot with new rows at
   the next insertion IDs and sharing every existing allocation. Rows fill a
   geometric tail reserve guarded by an atomic claim, so repeated appends keep

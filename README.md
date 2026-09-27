@@ -33,6 +33,8 @@ unified memory does not make every operation zero-copy or remove bandwidth limit
   completion events, and persistent exclusion bitmaps.
 - **Large resident corpora:** automatic sharding, direct FP16 ingestion,
   validated zero-copy adoption of device buffers, and memory accounting.
+- **Search diagnostics:** [GPU command timings and detailed compiler reports](docs/profiling.md)
+  for scans, selection, merges, and transfers, with ordinary latency measured separately.
 
 hrxdb is an embedded vector index and GPU computation library. Persistence,
 embedding generation, application metadata, deletion, approximate search, and

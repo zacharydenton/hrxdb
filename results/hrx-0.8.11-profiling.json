@@ -1,0 +1,4280 @@
+{
+  "date": "2026-09-27",
+  "hrx_version": "0.8.11",
+  "hrx_system_revision": "244cd3801b",
+  "source_base": "9ff7011",
+  "target": "gfx1151",
+  "kernel": "7.2.7-arch1-1",
+  "rustc": "rustc 1.95.0-nightly (5fb2ff861 2026-02-21)",
+  "scope": "Profiler and compiler-report qualification under concurrent krea2-final GPU activity and system load. Not an isolated latency benchmark or speedup comparison. Five ordinary samples after three warmups, followed by three separately instrumented replays. Detailed reports collected after ordinary timing.",
+  "retained_evidence": "Runtime manifest, ordinary samples, compiler identity/resources/wait reasons/diagnostics, selected detailed compiler sections, command geometry/constants/transfers, raw timestamp samples and stage distributions. Large repeated raw compiler trees are omitted; CLI commands reproduce full reports.",
+  "cases": [
+    {
+      "command": [
+        "target/release/hrxdb-bench",
+        "--rows",
+        "100000",
+        "--dimensions",
+        "384",
+        "--batch",
+        "1",
+        "--samples",
+        "5",
+        "--profile",
+        "--output",
+        "single.json"
+      ],
+      "rows": 100000,
+      "dimensions": 384,
+      "batch": 1,
+      "k": 10,
+      "runtime": {
+        "configured_manifest": {
+          "archive_sha256": "7cfc49bb4d3d083e45698676817f907ea8aa888bc95fef2a19aa62f94d207abc",
+          "files": {
+            "LICENSE-AMDGPU-ISA.txt": "4b58c86ef9b8f1be198079e5b62ea5c2bea0cc2f9187d21463a9c5e4ca75d69c",
+            "LICENSE-CORE-MATH.txt": "4639ae96f455d387fd2b042ce11a2713ac3ee9bfc82591182683f4ee503be011",
+            "LICENSE-CXX.txt": "fbcf2caa49cf94ef7c0f00ef8225238350ece6b08b7d8a8264a4586c88e036ac",
+            "LICENSE-HRX-RS.txt": "a6caccf2f94f6c05092d13af23421c4d097e4e09015f6c2d8a5233289b0e6edd",
+            "LICENSE-HRX.txt": "579fa63489ca4714793e90fa778b320f84527d7ebee37f1798db487e80c13cc0",
+            "LICENSE-HSA-headers.txt": "437b7fc31bfad2be8bb6d972845fcf79ae08c817ed2c421490cf69ac9ae44701",
+            "LICENSE-SPIRV-Headers.txt": "ea43b1de38a6f90c488800d66dec1ed671e68cda530266bc96951fb5b6307613",
+            "LICENSE-Vulkan-Headers.txt": "1ca3502222d967f3be5751c55f6b7ee735b5383909c3b501495f54b216dbf227",
+            "LICENSE-linux-gpl2-license.txt": "8780e78a1a737e127f25a65f6d95269bffd36158dc261114de7859b490bfc5aa",
+            "LICENSE-linux-syscall-note.txt": "8e378ab93586eb55135d3bc119cce787f7324f48394777d00c34fa3d0be3303f",
+            "LICENSE-linux-uapi.txt": "aa58e02703c9fe5ddb9ff0a971db64f6f3a331fe9f855efb86ff0abeb6ecef3f",
+            "NOTICE": "dd7bcb88d9896e736f6e99af53fe0755d476a561259378f5d01b8b0b1a1349f0",
+            "THIRD-PARTY.json": "b3a6089f98fdc49092804c426bcaa2eaa6af0500fbe60c8c287616aa76efd5e1",
+            "libamdf.so": "a535883a40639339e89fd6c6e5e8c4937e31cda7bfd12b859e03b550f98b133d",
+            "libhrx_fabric.so": "618df415a82c309ce8a0cefe5e28a05a32798f91f2a1ebf586e5f6b7389f4c94",
+            "libloomc.so": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+            "provenance.json": "4685f50b0610a53d113d04077c018976273da4fbecd3758ad95a63402e9fa6ed"
+          },
+          "revision": "HRX 244cd3801b; native libamdf; related diagnostics and bank reports; qualified LDS overlap; Ubuntu 26.04",
+          "schema": 1,
+          "target": "x86_64-unknown-linux-gnu-gfx1151",
+          "url": "https://github.com/zacharydenton/hrx-rs/releases/download/native-20260927-244cd3801b/hrx-linux-x86_64-gfx1151.tar.gz"
+        },
+        "hrxdb_version": "0.3.1",
+        "override_variables_set": [],
+        "scope": "Configured bundle identity; overrides may replace loaded libraries. Compilation records identify the actual compiler by digest."
+      },
+      "ordinary_median_ms": 1.591827,
+      "ordinary_samples": [
+        {
+          "scan_ms": 1.467731,
+          "search_ms": 2.2720190000000002,
+          "read_control_ms": 1.364533
+        },
+        {
+          "scan_ms": 1.589377,
+          "search_ms": 2.076324,
+          "read_control_ms": 1.439501
+        },
+        {
+          "scan_ms": 1.564968,
+          "search_ms": 1.591827,
+          "read_control_ms": 1.4260810000000002
+        },
+        {
+          "scan_ms": 1.449411,
+          "search_ms": 1.564298,
+          "read_control_ms": 1.4182109999999999
+        },
+        {
+          "scan_ms": 1.413842,
+          "search_ms": 1.348013,
+          "read_control_ms": 1.47455
+        }
+      ],
+      "profile": {
+        "measurement_relationship": "Separate instrumented replays after ordinary timing; no subtraction relationship with ordinary host latency. Replay host intervals enclose GPU execution and timestamp harvest; graph preparation, query encoding and neighbor decoding are excluded.",
+        "results_match_ordinary": true,
+        "samples": [
+          {
+            "commands": [
+              {
+                "binding_bytes": [
+                  76873728,
+                  1536,
+                  400384,
+                  400384
+                ],
+                "block": [
+                  128,
+                  1,
+                  1
+                ],
+                "constants": [],
+                "copy_bytes": null,
+                "grid": [
+                  12512,
+                  1,
+                  1
+                ],
+                "label": "0.scan",
+                "operation": "scan"
+              },
+              {
+                "binding_bytes": [
+                  400384,
+                  400384,
+                  12544,
+                  12544
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  160,
+                  134,
+                  1,
+                  0,
+                  10,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  98,
+                  1,
+                  1
+                ],
+                "label": "1.select",
+                "operation": "select"
+              },
+              {
+                "binding_bytes": [
+                  12544,
+                  12544,
+                  12544,
+                  12544
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  212,
+                  3,
+                  0,
+                  0,
+                  10,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  1,
+                  1,
+                  1
+                ],
+                "label": "2.select",
+                "operation": "select"
+              },
+              {
+                "binding_bytes": [
+                  40,
+                  40
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 40,
+                "grid": null,
+                "label": "3.copy",
+                "operation": "copy"
+              },
+              {
+                "binding_bytes": [
+                  40,
+                  40
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 40,
+                "grid": null,
+                "label": "4.copy",
+                "operation": "copy"
+              }
+            ],
+            "device": {
+              "device": [
+                226,
+                128
+              ],
+              "execution": 1,
+              "frequency_hz": 99810000,
+              "gaps_ms": 0.0038473098887886986,
+              "interval_union_ms": 2.37102494740006,
+              "intervals": [
+                {
+                  "end_tick": 10150557978100,
+                  "label": "0.scan",
+                  "start_tick": 10150557788684
+                },
+                {
+                  "end_tick": 10150557982712,
+                  "label": "1.select",
+                  "start_tick": 10150557978192
+                },
+                {
+                  "end_tick": 10150558023912,
+                  "label": "2.select",
+                  "start_tick": 10150557982804
+                },
+                {
+                  "end_tick": 10150558024584,
+                  "label": "3.copy",
+                  "start_tick": 10150558024016
+                },
+                {
+                  "end_tick": 10150558025720,
+                  "label": "4.copy",
+                  "start_tick": 10150558024680
+                }
+              ],
+              "process": 2491623,
+              "queue": 94339544963328,
+              "recorder": 1,
+              "span_ms": 2.3748722572888488
+            },
+            "preparation_ms": 2.796275,
+            "replay_host_ms": 2.382216,
+            "stages": {
+              "copy": {
+                "commands": 2,
+                "device_ms": 0.016110610159302676
+              },
+              "scan": {
+                "commands": 1,
+                "device_ms": 1.8977657549343754
+              },
+              "select": {
+                "commands": 2,
+                "device_ms": 0.4571485823063821
+              }
+            }
+          },
+          {
+            "commands": [
+              {
+                "binding_bytes": [
+                  76873728,
+                  1536,
+                  400384,
+                  400384
+                ],
+                "block": [
+                  128,
+                  1,
+                  1
+                ],
+                "constants": [],
+                "copy_bytes": null,
+                "grid": [
+                  12512,
+                  1,
+                  1
+                ],
+                "label": "0.scan",
+                "operation": "scan"
+              },
+              {
+                "binding_bytes": [
+                  400384,
+                  400384,
+                  12544,
+                  12544
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  160,
+                  134,
+                  1,
+                  0,
+                  10,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  98,
+                  1,
+                  1
+                ],
+                "label": "1.select",
+                "operation": "select"
+              },
+              {
+                "binding_bytes": [
+                  12544,
+                  12544,
+                  12544,
+                  12544
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  212,
+                  3,
+                  0,
+                  0,
+                  10,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  1,
+                  1,
+                  1
+                ],
+                "label": "2.select",
+                "operation": "select"
+              },
+              {
+                "binding_bytes": [
+                  40,
+                  40
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 40,
+                "grid": null,
+                "label": "3.copy",
+                "operation": "copy"
+              },
+              {
+                "binding_bytes": [
+                  40,
+                  40
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 40,
+                "grid": null,
+                "label": "4.copy",
+                "operation": "copy"
+              }
+            ],
+            "device": {
+              "device": [
+                226,
+                128
+              ],
+              "execution": 1,
+              "frequency_hz": 99810000,
+              "gaps_ms": 0.005290051097084461,
+              "interval_union_ms": 2.698887886985272,
+              "intervals": [
+                {
+                  "end_tick": 10150558372540,
+                  "label": "0.scan",
+                  "start_tick": 10150558110384
+                },
+                {
+                  "end_tick": 10150558378644,
+                  "label": "1.select",
+                  "start_tick": 10150558372732
+                },
+                {
+                  "end_tick": 10150558379492,
+                  "label": "2.select",
+                  "start_tick": 10150558378760
+                },
+                {
+                  "end_tick": 10150558379892,
+                  "label": "3.copy",
+                  "start_tick": 10150558379596
+                },
+                {
+                  "end_tick": 10150558380288,
+                  "label": "4.copy",
+                  "start_tick": 10150558380008
+                }
+              ],
+              "process": 2491623,
+              "queue": 94339544963328,
+              "recorder": 2,
+              "span_ms": 2.7041779380823567
+            },
+            "preparation_ms": 0.824438,
+            "replay_host_ms": 2.708078,
+            "stages": {
+              "copy": {
+                "commands": 2,
+                "device_ms": 0.005770964833183048
+              },
+              "scan": {
+                "commands": 1,
+                "device_ms": 2.6265504458471094
+              },
+              "select": {
+                "commands": 2,
+                "device_ms": 0.06656647630497946
+              }
+            }
+          },
+          {
+            "commands": [
+              {
+                "binding_bytes": [
+                  76873728,
+                  1536,
+                  400384,
+                  400384
+                ],
+                "block": [
+                  128,
+                  1,
+                  1
+                ],
+                "constants": [],
+                "copy_bytes": null,
+                "grid": [
+                  12512,
+                  1,
+                  1
+                ],
+                "label": "0.scan",
+                "operation": "scan"
+              },
+              {
+                "binding_bytes": [
+                  400384,
+                  400384,
+                  12544,
+                  12544
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  160,
+                  134,
+                  1,
+                  0,
+                  10,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  98,
+                  1,
+                  1
+                ],
+                "label": "1.select",
+                "operation": "select"
+              },
+              {
+                "binding_bytes": [
+                  12544,
+                  12544,
+                  12544,
+                  12544
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  212,
+                  3,
+                  0,
+                  0,
+                  10,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  1,
+                  1,
+                  1
+                ],
+                "label": "2.select",
+                "operation": "select"
+              },
+              {
+                "binding_bytes": [
+                  40,
+                  40
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 40,
+                "grid": null,
+                "label": "3.copy",
+                "operation": "copy"
+              },
+              {
+                "binding_bytes": [
+                  40,
+                  40
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 40,
+                "grid": null,
+                "label": "4.copy",
+                "operation": "copy"
+              }
+            ],
+            "device": {
+              "device": [
+                226,
+                128
+              ],
+              "execution": 1,
+              "frequency_hz": 99810000,
+              "gaps_ms": 0.004688908926961227,
+              "interval_union_ms": 6.245746919146378,
+              "intervals": [
+                {
+                  "end_tick": 10150559067576,
+                  "label": "0.scan",
+                  "start_tick": 10150558502508
+                },
+                {
+                  "end_tick": 10150559078388,
+                  "label": "1.select",
+                  "start_tick": 10150559067700
+                },
+                {
+                  "end_tick": 10150559085952,
+                  "label": "2.select",
+                  "start_tick": 10150559078500
+                },
+                {
+                  "end_tick": 10150559125888,
+                  "label": "3.copy",
+                  "start_tick": 10150559086072
+                },
+                {
+                  "end_tick": 10150559126364,
+                  "label": "4.copy",
+                  "start_tick": 10150559126000
+                }
+              ],
+              "process": 2491623,
+              "queue": 94339544963328,
+              "recorder": 3,
+              "span_ms": 6.250435828073339
+            },
+            "preparation_ms": 1.2058170000000001,
+            "replay_host_ms": 6.247152,
+            "stages": {
+              "copy": {
+                "commands": 2,
+                "device_ms": 0.4025648732591925
+              },
+              "scan": {
+                "commands": 1,
+                "device_ms": 5.661436729786595
+              },
+              "select": {
+                "commands": 2,
+                "device_ms": 0.18174531610059114
+              }
+            }
+          }
+        ],
+        "stages": {
+          "copy": {
+            "median_ms": 0.016110610159302676,
+            "p95_ms": 0.4025648732591925
+          },
+          "scan": {
+            "median_ms": 2.6265504458471094,
+            "p95_ms": 5.661436729786595
+          },
+          "select": {
+            "median_ms": 0.18174531610059114,
+            "p95_ms": 0.4571485823063821
+          }
+        },
+        "warnings": [
+          "Timestamp markers and completion barriers perturb dispatch timing; these are not hardware utilization or stall counters.",
+          "Native timestamp storage is diagnostic overhead outside workspace budgets."
+        ]
+      },
+      "compiler": [
+        {
+          "symbol": "scan",
+          "artifact": "hrx-cache/kernels/539576179360ee3b047013d772bc589ef866ed2efcece1f77f0e1842c23628ca/kernel.hsaco",
+          "diagnostics": [],
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "target": "gfx1151",
+          "processor_mode": "default",
+          "configuration": {
+            "db.scan.count": "100096",
+            "db.scan.dimensions": "384",
+            "db.scan.mode": "0",
+            "db.scan.rows": "2",
+            "db.scan.threads": "128",
+            "db.scan.width": "4"
+          },
+          "report_mode": "details",
+          "resources": [
+            {
+              "function": "scan",
+              "code_bytes": 848,
+              "scalar_registers": 16,
+              "vector_registers": 31,
+              "local_bytes": 0,
+              "private_bytes": 0,
+              "spills": 0,
+              "occupancy_percent": 100,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null
+            }
+          ],
+          "wait_reasons": [
+            {
+              "function": "scan",
+              "counter": "vmem_load",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 9,
+                "explicit_action_count": 0,
+                "planned_action_count": 9,
+                "full_drain_count": 3,
+                "partial_wait_count": 6
+              }
+            },
+            {
+              "function": "scan",
+              "counter": "vmem_store",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "scan",
+              "counter": "vmem_store",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "scan",
+              "counter": "smem",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            }
+          ],
+          "diagnostic_details": [],
+          "selected_details": {
+            "kind": "loom.compile_report",
+            "schema_version": 0,
+            "mode": "details",
+            "residency_constraints": {
+              "count": 4,
+              "rows": [
+                {
+                  "allocation_granularity": 106,
+                  "allocation_scope": "subgroup",
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 0,
+                  "kind": "unconstrained_resource",
+                  "limiting": false,
+                  "name": "amdgpu.sgpr",
+                  "pool_scope": "SIMD",
+                  "pool_units": 800,
+                  "rounded_units": 106,
+                  "unit": "registers",
+                  "units": 16
+                },
+                {
+                  "allocation_granularity": 24,
+                  "allocation_scope": "subgroup",
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 1,
+                  "kind": "pooled_resource",
+                  "limiting": false,
+                  "name": "amdgpu.vgpr",
+                  "pool_scope": "SIMD",
+                  "pool_units": 1536,
+                  "rounded_units": 48,
+                  "unit": "registers",
+                  "units": 31
+                },
+                {
+                  "allocation_granularity": 512,
+                  "allocation_scope": "workgroup",
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 2,
+                  "kind": "pooled_resource",
+                  "limiting": false,
+                  "name": "amdgpu.lds",
+                  "pool_scope": "occupancy domain",
+                  "pool_units": 131072,
+                  "rounded_units": 0,
+                  "unit": "bytes",
+                  "units": 0
+                },
+                {
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 3,
+                  "kind": "fixed_limit",
+                  "limiting": false,
+                  "name": "amdgpu.workgroup_slots"
+                }
+              ]
+            },
+            "schedule_band_summary_rows": null,
+            "wait_action_rows": {
+              "count": 0,
+              "rows": []
+            },
+            "move_causes": {
+              "causes": [
+                {
+                  "cause": "constant_materialization",
+                  "packet_count": 6,
+                  "unit_count": 6
+                }
+              ],
+              "kind_count": 1,
+              "packet_count": 6,
+              "unit_count": 6
+            },
+            "static_instruction_mix": {
+              "atomic_count": 0,
+              "branch_count": 3,
+              "buffer_load_byte_count": 0,
+              "buffer_load_count": 0,
+              "buffer_store_byte_count": 0,
+              "buffer_store_count": 0,
+              "cache_count": 0,
+              "control_count": 7,
+              "conversion_count": 24,
+              "descriptor_count": 131,
+              "dot_count": 0,
+              "execution_barrier_count": 0,
+              "flat_memory_count": 0,
+              "flat_read_byte_count": 0,
+              "flat_write_byte_count": 0,
+              "generic_memory_count": 14,
+              "global_load_byte_count": 104,
+              "global_load_count": 11,
+              "global_memory_count": 13,
+              "global_store_byte_count": 8,
+              "global_store_count": 2,
+              "local_memory_count": 0,
+              "local_read_byte_count": 0,
+              "local_write_byte_count": 0,
+              "matrix_count": 0,
+              "memory_read_byte_count": 136,
+              "memory_read_unknown_width_count": 0,
+              "memory_write_byte_count": 8,
+              "memory_write_unknown_width_count": 0,
+              "mfma_count": 0,
+              "private_memory_count": 0,
+              "private_read_byte_count": 0,
+              "private_write_byte_count": 0,
+              "register_move_count": 0,
+              "scalar_alu_count": 33,
+              "scalar_memory_count": 1,
+              "scalar_read_byte_count": 32,
+              "scalar_write_byte_count": 0,
+              "smfmac_count": 0,
+              "swmmac_count": 0,
+              "unclassified_read_byte_count": 0,
+              "unclassified_write_byte_count": 0,
+              "unknown_count": 0,
+              "vector_alu_count": 84,
+              "wmma_count": 0
+            }
+          }
+        },
+        {
+          "symbol": "scan",
+          "artifact": "hrx-cache/kernels/c94b60f31da7a1ec9c94ce4da1ea3bf8efdb159161a88d791742a7265080f1dd/kernel.hsaco",
+          "diagnostics": [],
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "target": "gfx1151",
+          "processor_mode": "default",
+          "configuration": {
+            "db.scan.count": "100096",
+            "db.scan.dimensions": "384",
+            "db.scan.mode": "1",
+            "db.scan.rows": "2",
+            "db.scan.threads": "128",
+            "db.scan.width": "4"
+          },
+          "report_mode": "details",
+          "resources": [
+            {
+              "function": "scan",
+              "code_bytes": 748,
+              "scalar_registers": 14,
+              "vector_registers": 18,
+              "local_bytes": 0,
+              "private_bytes": 0,
+              "spills": 0,
+              "occupancy_percent": 100,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null
+            }
+          ],
+          "wait_reasons": [
+            {
+              "function": "scan",
+              "counter": "vmem_load",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 6,
+                "explicit_action_count": 0,
+                "planned_action_count": 6,
+                "full_drain_count": 1,
+                "partial_wait_count": 5
+              }
+            },
+            {
+              "function": "scan",
+              "counter": "vmem_store",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "scan",
+              "counter": "smem",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            }
+          ],
+          "diagnostic_details": [],
+          "selected_details": {
+            "kind": "loom.compile_report",
+            "schema_version": 0,
+            "mode": "details",
+            "residency_constraints": {
+              "count": 4,
+              "rows": [
+                {
+                  "allocation_granularity": 106,
+                  "allocation_scope": "subgroup",
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 0,
+                  "kind": "unconstrained_resource",
+                  "limiting": false,
+                  "name": "amdgpu.sgpr",
+                  "pool_scope": "SIMD",
+                  "pool_units": 800,
+                  "rounded_units": 106,
+                  "unit": "registers",
+                  "units": 14
+                },
+                {
+                  "allocation_granularity": 24,
+                  "allocation_scope": "subgroup",
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 1,
+                  "kind": "pooled_resource",
+                  "limiting": false,
+                  "name": "amdgpu.vgpr",
+                  "pool_scope": "SIMD",
+                  "pool_units": 1536,
+                  "rounded_units": 24,
+                  "unit": "registers",
+                  "units": 18
+                },
+                {
+                  "allocation_granularity": 512,
+                  "allocation_scope": "workgroup",
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 2,
+                  "kind": "pooled_resource",
+                  "limiting": false,
+                  "name": "amdgpu.lds",
+                  "pool_scope": "occupancy domain",
+                  "pool_units": 131072,
+                  "rounded_units": 0,
+                  "unit": "bytes",
+                  "units": 0
+                },
+                {
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 3,
+                  "kind": "fixed_limit",
+                  "limiting": false,
+                  "name": "amdgpu.workgroup_slots"
+                }
+              ]
+            },
+            "schedule_band_summary_rows": null,
+            "wait_action_rows": {
+              "count": 0,
+              "rows": []
+            },
+            "move_causes": {
+              "causes": [
+                {
+                  "cause": "constant_materialization",
+                  "packet_count": 4,
+                  "unit_count": 4
+                }
+              ],
+              "kind_count": 1,
+              "packet_count": 4,
+              "unit_count": 4
+            },
+            "static_instruction_mix": {
+              "atomic_count": 0,
+              "branch_count": 3,
+              "buffer_load_byte_count": 0,
+              "buffer_load_count": 0,
+              "buffer_store_byte_count": 0,
+              "buffer_store_count": 0,
+              "cache_count": 0,
+              "control_count": 7,
+              "conversion_count": 24,
+              "descriptor_count": 116,
+              "dot_count": 0,
+              "execution_barrier_count": 0,
+              "flat_memory_count": 0,
+              "flat_read_byte_count": 0,
+              "flat_write_byte_count": 0,
+              "generic_memory_count": 10,
+              "global_load_byte_count": 48,
+              "global_load_count": 6,
+              "global_memory_count": 8,
+              "global_store_byte_count": 8,
+              "global_store_count": 2,
+              "local_memory_count": 0,
+              "local_read_byte_count": 0,
+              "local_write_byte_count": 0,
+              "matrix_count": 0,
+              "memory_read_byte_count": 64,
+              "memory_read_unknown_width_count": 0,
+              "memory_write_byte_count": 8,
+              "memory_write_unknown_width_count": 0,
+              "mfma_count": 0,
+              "private_memory_count": 0,
+              "private_read_byte_count": 0,
+              "private_write_byte_count": 0,
+              "register_move_count": 0,
+              "scalar_alu_count": 27,
+              "scalar_memory_count": 2,
+              "scalar_read_byte_count": 16,
+              "scalar_write_byte_count": 0,
+              "smfmac_count": 0,
+              "swmmac_count": 0,
+              "unclassified_read_byte_count": 0,
+              "unclassified_write_byte_count": 0,
+              "unknown_count": 0,
+              "vector_alu_count": 79,
+              "wmma_count": 0
+            }
+          }
+        },
+        {
+          "symbol": "select",
+          "artifact": "hrx-cache/kernels/c29164334653fb39ca31a96c5ccd620775dea4aed627b3764db1b6864b0b9050/kernel.hsaco",
+          "diagnostics": [],
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "target": "gfx1151",
+          "processor_mode": "default",
+          "configuration": {
+            "db.batch": "1",
+            "db.select.first": "1",
+            "db.select.limit": "1073741824"
+          },
+          "report_mode": "details",
+          "resources": [
+            {
+              "function": "select",
+              "code_bytes": 1272,
+              "scalar_registers": 24,
+              "vector_registers": 16,
+              "local_bytes": 64,
+              "private_bytes": 0,
+              "spills": 0,
+              "occupancy_percent": 100,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null
+            }
+          ],
+          "wait_reasons": [
+            {
+              "function": "select",
+              "counter": "vmem_load",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "planned_action_count": 4,
+                "full_drain_count": 1,
+                "partial_wait_count": 3
+              }
+            },
+            {
+              "function": "select",
+              "counter": "vmem_store",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "select",
+              "counter": "vmem_store",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "select",
+              "counter": "lds",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 3,
+                "explicit_action_count": 0,
+                "planned_action_count": 3,
+                "full_drain_count": 3,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "select",
+              "counter": "lds",
+              "reason": "amdgpu.barrier",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "planned_action_count": 2,
+                "full_drain_count": 2,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "select",
+              "counter": "lds",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "select",
+              "counter": "lds",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "planned_action_count": 2,
+                "full_drain_count": 2,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "select",
+              "counter": "smem",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "select",
+              "counter": "smem",
+              "reason": "amdgpu.loop_entry_conservative_ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            }
+          ],
+          "diagnostic_details": []
+        },
+        {
+          "symbol": "select",
+          "artifact": "hrx-cache/kernels/8f8319cc1e8928abf3b35c8e8408ff6d6767d34ad6adf19f7099c661132bd414/kernel.hsaco",
+          "diagnostics": [],
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "target": "gfx1151",
+          "processor_mode": "default",
+          "configuration": {
+            "db.batch": "1",
+            "db.select.first": "0",
+            "db.select.limit": "1073741824"
+          },
+          "report_mode": "details",
+          "resources": [
+            {
+              "function": "select",
+              "code_bytes": 1284,
+              "scalar_registers": 28,
+              "vector_registers": 17,
+              "local_bytes": 64,
+              "private_bytes": 0,
+              "spills": 0,
+              "occupancy_percent": 100,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null
+            }
+          ],
+          "wait_reasons": [
+            {
+              "function": "select",
+              "counter": "vmem_load",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "planned_action_count": 4,
+                "full_drain_count": 0,
+                "partial_wait_count": 4
+              }
+            },
+            {
+              "function": "select",
+              "counter": "vmem_load",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "planned_action_count": 4,
+                "full_drain_count": 1,
+                "partial_wait_count": 3
+              }
+            },
+            {
+              "function": "select",
+              "counter": "vmem_store",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "select",
+              "counter": "vmem_store",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "select",
+              "counter": "lds",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 3,
+                "explicit_action_count": 0,
+                "planned_action_count": 3,
+                "full_drain_count": 3,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "select",
+              "counter": "lds",
+              "reason": "amdgpu.barrier",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "planned_action_count": 2,
+                "full_drain_count": 2,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "select",
+              "counter": "lds",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "select",
+              "counter": "lds",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "planned_action_count": 2,
+                "full_drain_count": 2,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "select",
+              "counter": "smem",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            }
+          ],
+          "diagnostic_details": []
+        },
+        {
+          "symbol": "sort_select",
+          "artifact": "hrx-cache/kernels/f226d0d417b5b69567715a1c34a370e18924b9dfe6b209665f2399c8fd3e36a6/kernel.hsaco",
+          "diagnostics": [],
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "target": "gfx1151",
+          "processor_mode": "default",
+          "configuration": {
+            "db.batch": "1",
+            "db.merge.planar": "0",
+            "db.select.limit": "1073741824"
+          },
+          "report_mode": "details",
+          "resources": [
+            {
+              "function": "sort_select",
+              "code_bytes": 1448,
+              "scalar_registers": 26,
+              "vector_registers": 10,
+              "local_bytes": 8192,
+              "private_bytes": 0,
+              "spills": 0,
+              "occupancy_percent": 100,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null
+            }
+          ],
+          "wait_reasons": [
+            {
+              "function": "sort_select",
+              "counter": "vmem_load",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "planned_action_count": 4,
+                "full_drain_count": 1,
+                "partial_wait_count": 3
+              }
+            },
+            {
+              "function": "sort_select",
+              "counter": "vmem_store",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "sort_select",
+              "counter": "lds",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "planned_action_count": 4,
+                "full_drain_count": 2,
+                "partial_wait_count": 2
+              }
+            },
+            {
+              "function": "sort_select",
+              "counter": "lds",
+              "reason": "amdgpu.barrier",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "planned_action_count": 2,
+                "full_drain_count": 2,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "sort_select",
+              "counter": "lds",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "sort_select",
+              "counter": "smem",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "sort_select",
+              "counter": "smem",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "planned_action_count": 4,
+                "full_drain_count": 4,
+                "partial_wait_count": 0
+              }
+            }
+          ],
+          "diagnostic_details": []
+        },
+        {
+          "symbol": "sorted_merge",
+          "artifact": "hrx-cache/kernels/b430e1a4b96781836aaa159ec810403cd199e81d38fbd23bef61ac559091ab87/kernel.hsaco",
+          "diagnostics": [],
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "target": "gfx1151",
+          "processor_mode": "default",
+          "configuration": {
+            "db.batch": "1",
+            "db.merge.planar": "0",
+            "db.select.limit": "1073741824"
+          },
+          "report_mode": "details",
+          "resources": [
+            {
+              "function": "sorted_merge",
+              "code_bytes": 560,
+              "scalar_registers": 34,
+              "vector_registers": 12,
+              "local_bytes": 0,
+              "private_bytes": 0,
+              "spills": 0,
+              "occupancy_percent": 100,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null
+            }
+          ],
+          "wait_reasons": [
+            {
+              "function": "sorted_merge",
+              "counter": "vmem_load",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 3,
+                "explicit_action_count": 0,
+                "planned_action_count": 3,
+                "full_drain_count": 1,
+                "partial_wait_count": 2
+              }
+            },
+            {
+              "function": "sorted_merge",
+              "counter": "vmem_load",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "sorted_merge",
+              "counter": "vmem_load",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "sorted_merge",
+              "counter": "vmem_store",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "planned_action_count": 2,
+                "full_drain_count": 2,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "sorted_merge",
+              "counter": "vmem_store",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "sorted_merge",
+              "counter": "smem",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "sorted_merge",
+              "counter": "smem",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            }
+          ],
+          "diagnostic_details": []
+        },
+        {
+          "symbol": "mask_scores",
+          "artifact": "hrx-cache/kernels/906c92778c1b3b5498d9040438c4df232a857a60fa19b62a9c50df80de03653a/kernel.hsaco",
+          "diagnostics": [],
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "target": "gfx1151",
+          "processor_mode": "default",
+          "configuration": {},
+          "report_mode": "details",
+          "resources": [
+            {
+              "function": "mask_scores",
+              "code_bytes": 160,
+              "scalar_registers": 8,
+              "vector_registers": 4,
+              "local_bytes": 0,
+              "private_bytes": 0,
+              "spills": 0,
+              "occupancy_percent": 100,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null
+            }
+          ],
+          "wait_reasons": [
+            {
+              "function": "mask_scores",
+              "counter": "vmem_load",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "mask_scores",
+              "counter": "vmem_store",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            },
+            {
+              "function": "mask_scores",
+              "counter": "smem",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "planned_action_count": 1,
+                "full_drain_count": 1,
+                "partial_wait_count": 0
+              }
+            }
+          ],
+          "diagnostic_details": []
+        }
+      ]
+    },
+    {
+      "command": [
+        "target/release/hrxdb-bench",
+        "--rows",
+        "100000",
+        "--dimensions",
+        "384",
+        "--batch",
+        "60",
+        "--samples",
+        "5",
+        "--profile",
+        "--output",
+        "batch.json"
+      ],
+      "rows": 100000,
+      "dimensions": 384,
+      "batch": 60,
+      "k": 10,
+      "runtime": {
+        "configured_manifest": {
+          "archive_sha256": "7cfc49bb4d3d083e45698676817f907ea8aa888bc95fef2a19aa62f94d207abc",
+          "files": {
+            "LICENSE-AMDGPU-ISA.txt": "4b58c86ef9b8f1be198079e5b62ea5c2bea0cc2f9187d21463a9c5e4ca75d69c",
+            "LICENSE-CORE-MATH.txt": "4639ae96f455d387fd2b042ce11a2713ac3ee9bfc82591182683f4ee503be011",
+            "LICENSE-CXX.txt": "fbcf2caa49cf94ef7c0f00ef8225238350ece6b08b7d8a8264a4586c88e036ac",
+            "LICENSE-HRX-RS.txt": "a6caccf2f94f6c05092d13af23421c4d097e4e09015f6c2d8a5233289b0e6edd",
+            "LICENSE-HRX.txt": "579fa63489ca4714793e90fa778b320f84527d7ebee37f1798db487e80c13cc0",
+            "LICENSE-HSA-headers.txt": "437b7fc31bfad2be8bb6d972845fcf79ae08c817ed2c421490cf69ac9ae44701",
+            "LICENSE-SPIRV-Headers.txt": "ea43b1de38a6f90c488800d66dec1ed671e68cda530266bc96951fb5b6307613",
+            "LICENSE-Vulkan-Headers.txt": "1ca3502222d967f3be5751c55f6b7ee735b5383909c3b501495f54b216dbf227",
+            "LICENSE-linux-gpl2-license.txt": "8780e78a1a737e127f25a65f6d95269bffd36158dc261114de7859b490bfc5aa",
+            "LICENSE-linux-syscall-note.txt": "8e378ab93586eb55135d3bc119cce787f7324f48394777d00c34fa3d0be3303f",
+            "LICENSE-linux-uapi.txt": "aa58e02703c9fe5ddb9ff0a971db64f6f3a331fe9f855efb86ff0abeb6ecef3f",
+            "NOTICE": "dd7bcb88d9896e736f6e99af53fe0755d476a561259378f5d01b8b0b1a1349f0",
+            "THIRD-PARTY.json": "b3a6089f98fdc49092804c426bcaa2eaa6af0500fbe60c8c287616aa76efd5e1",
+            "libamdf.so": "a535883a40639339e89fd6c6e5e8c4937e31cda7bfd12b859e03b550f98b133d",
+            "libhrx_fabric.so": "618df415a82c309ce8a0cefe5e28a05a32798f91f2a1ebf586e5f6b7389f4c94",
+            "libloomc.so": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+            "provenance.json": "4685f50b0610a53d113d04077c018976273da4fbecd3758ad95a63402e9fa6ed"
+          },
+          "revision": "HRX 244cd3801b; native libamdf; related diagnostics and bank reports; qualified LDS overlap; Ubuntu 26.04",
+          "schema": 1,
+          "target": "x86_64-unknown-linux-gnu-gfx1151",
+          "url": "https://github.com/zacharydenton/hrx-rs/releases/download/native-20260927-244cd3801b/hrx-linux-x86_64-gfx1151.tar.gz"
+        },
+        "hrxdb_version": "0.3.1",
+        "override_variables_set": [],
+        "scope": "Configured bundle identity; overrides may replace loaded libraries. Compilation records identify the actual compiler by digest."
+      },
+      "ordinary_median_ms": 5.3070770000000005,
+      "ordinary_samples": [
+        {
+          "batch_ms": 5.3070770000000005,
+          "sequential_ms": 110.849279
+        },
+        {
+          "batch_ms": 4.759112,
+          "sequential_ms": 119.100047
+        },
+        {
+          "batch_ms": 3.7185400000000004,
+          "sequential_ms": 118.75572600000001
+        },
+        {
+          "batch_ms": 5.420135,
+          "sequential_ms": 97.60643400000001
+        },
+        {
+          "batch_ms": 24.766804,
+          "sequential_ms": 97.60828500000001
+        }
+      ],
+      "profile": {
+        "measurement_relationship": "Separate instrumented replays after ordinary timing; no subtraction relationship with ordinary host latency. Replay host intervals enclose GPU execution and timestamp harvest; graph preparation, query encoding and neighbor decoding are excluded.",
+        "results_match_ordinary": true,
+        "samples": [
+          {
+            "commands": [
+              {
+                "binding_bytes": [
+                  76800000,
+                  98304,
+                  400000,
+                  25624576,
+                  25624576
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  160,
+                  134,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  160,
+                  134,
+                  1,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  1563,
+                  1,
+                  1
+                ],
+                "label": "0.batch_scan",
+                "operation": "batch_scan"
+              },
+              {
+                "binding_bytes": [
+                  25624576,
+                  25624576,
+                  401408,
+                  401408
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  160,
+                  134,
+                  1,
+                  0,
+                  10,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  98,
+                  64,
+                  1
+                ],
+                "label": "1.select",
+                "operation": "select"
+              },
+              {
+                "binding_bytes": [
+                  401408,
+                  401408,
+                  401408,
+                  401408
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  212,
+                  3,
+                  0,
+                  0,
+                  10,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  1,
+                  64,
+                  1
+                ],
+                "label": "2.select",
+                "operation": "select"
+              },
+              {
+                "binding_bytes": [
+                  2560,
+                  2560
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 2560,
+                "grid": null,
+                "label": "3.copy",
+                "operation": "copy"
+              },
+              {
+                "binding_bytes": [
+                  2560,
+                  2560
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 2560,
+                "grid": null,
+                "label": "4.copy",
+                "operation": "copy"
+              },
+              {
+                "binding_bytes": [
+                  2400,
+                  2400
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 2400,
+                "grid": null,
+                "label": "5.copy",
+                "operation": "copy"
+              },
+              {
+                "binding_bytes": [
+                  2400,
+                  2400
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 2400,
+                "grid": null,
+                "label": "6.copy",
+                "operation": "copy"
+              }
+            ],
+            "device": {
+              "device": [
+                226,
+                128
+              ],
+              "execution": 1,
+              "frequency_hz": 99810000,
+              "gaps_ms": 0.003887386033463581,
+              "interval_union_ms": 4.248432020839595,
+              "intervals": [
+                {
+                  "end_tick": 10150745947356,
+                  "label": "0.batch_scan",
+                  "start_tick": 10150745616556
+                },
+                {
+                  "end_tick": 10150746038984,
+                  "label": "1.select",
+                  "start_tick": 10150745947436
+                },
+                {
+                  "end_tick": 10150746039916,
+                  "label": "2.select",
+                  "start_tick": 10150746039048
+                },
+                {
+                  "end_tick": 10150746040244,
+                  "label": "3.copy",
+                  "start_tick": 10150746039984
+                },
+                {
+                  "end_tick": 10150746040492,
+                  "label": "4.copy",
+                  "start_tick": 10150746040300
+                },
+                {
+                  "end_tick": 10150746040748,
+                  "label": "5.copy",
+                  "start_tick": 10150746040552
+                },
+                {
+                  "end_tick": 10150746040980,
+                  "label": "6.copy",
+                  "start_tick": 10150746040808
+                }
+              ],
+              "process": 2491643,
+              "queue": 94528494749968,
+              "recorder": 1,
+              "span_ms": 4.252319406873059
+            },
+            "preparation_ms": 1.3957819999999999,
+            "replay_host_ms": 4.258026,
+            "stages": {
+              "batch_scan": {
+                "commands": 1,
+                "device_ms": 3.314297164612764
+              },
+              "copy": {
+                "commands": 4,
+                "device_ms": 0.008215609658350866
+              },
+              "select": {
+                "commands": 2,
+                "device_ms": 0.9259192465684801
+              }
+            }
+          },
+          {
+            "commands": [
+              {
+                "binding_bytes": [
+                  76800000,
+                  98304,
+                  400000,
+                  25624576,
+                  25624576
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  160,
+                  134,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  160,
+                  134,
+                  1,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  1563,
+                  1,
+                  1
+                ],
+                "label": "0.batch_scan",
+                "operation": "batch_scan"
+              },
+              {
+                "binding_bytes": [
+                  25624576,
+                  25624576,
+                  401408,
+                  401408
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  160,
+                  134,
+                  1,
+                  0,
+                  10,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  98,
+                  64,
+                  1
+                ],
+                "label": "1.select",
+                "operation": "select"
+              },
+              {
+                "binding_bytes": [
+                  401408,
+                  401408,
+                  401408,
+                  401408
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  212,
+                  3,
+                  0,
+                  0,
+                  10,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  1,
+                  64,
+                  1
+                ],
+                "label": "2.select",
+                "operation": "select"
+              },
+              {
+                "binding_bytes": [
+                  2560,
+                  2560
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 2560,
+                "grid": null,
+                "label": "3.copy",
+                "operation": "copy"
+              },
+              {
+                "binding_bytes": [
+                  2560,
+                  2560
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 2560,
+                "grid": null,
+                "label": "4.copy",
+                "operation": "copy"
+              },
+              {
+                "binding_bytes": [
+                  2400,
+                  2400
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 2400,
+                "grid": null,
+                "label": "5.copy",
+                "operation": "copy"
+              },
+              {
+                "binding_bytes": [
+                  2400,
+                  2400
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 2400,
+                "grid": null,
+                "label": "6.copy",
+                "operation": "copy"
+              }
+            ],
+            "device": {
+              "device": [
+                226,
+                128
+              ],
+              "execution": 1,
+              "frequency_hz": 99810000,
+              "gaps_ms": 0.003887386033463581,
+              "interval_union_ms": 3.2599138362889493,
+              "intervals": [
+                {
+                  "end_tick": 10150746461524,
+                  "label": "0.batch_scan",
+                  "start_tick": 10150746209300
+                },
+                {
+                  "end_tick": 10150746533040,
+                  "label": "1.select",
+                  "start_tick": 10150746461600
+                },
+                {
+                  "end_tick": 10150746533976,
+                  "label": "2.select",
+                  "start_tick": 10150746533108
+                },
+                {
+                  "end_tick": 10150746534300,
+                  "label": "3.copy",
+                  "start_tick": 10150746534044
+                },
+                {
+                  "end_tick": 10150746534536,
+                  "label": "4.copy",
+                  "start_tick": 10150746534360
+                },
+                {
+                  "end_tick": 10150746534824,
+                  "label": "5.copy",
+                  "start_tick": 10150746534592
+                },
+                {
+                  "end_tick": 10150746535060,
+                  "label": "6.copy",
+                  "start_tick": 10150746534884
+                }
+              ],
+              "process": 2491643,
+              "queue": 94528494749968,
+              "recorder": 2,
+              "span_ms": 3.2638012223224124
+            },
+            "preparation_ms": 1.5254590000000001,
+            "replay_host_ms": 3.267702,
+            "stages": {
+              "batch_scan": {
+                "commands": 1,
+                "device_ms": 2.527041378619377
+              },
+              "copy": {
+                "commands": 4,
+                "device_ms": 0.008415990381725278
+              },
+              "select": {
+                "commands": 2,
+                "device_ms": 0.724456467287847
+              }
+            }
+          },
+          {
+            "commands": [
+              {
+                "binding_bytes": [
+                  76800000,
+                  98304,
+                  400000,
+                  25624576,
+                  25624576
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  160,
+                  134,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  160,
+                  134,
+                  1,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  1563,
+                  1,
+                  1
+                ],
+                "label": "0.batch_scan",
+                "operation": "batch_scan"
+              },
+              {
+                "binding_bytes": [
+                  25624576,
+                  25624576,
+                  401408,
+                  401408
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  160,
+                  134,
+                  1,
+                  0,
+                  10,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  98,
+                  64,
+                  1
+                ],
+                "label": "1.select",
+                "operation": "select"
+              },
+              {
+                "binding_bytes": [
+                  401408,
+                  401408,
+                  401408,
+                  401408
+                ],
+                "block": [
+                  256,
+                  1,
+                  1
+                ],
+                "constants": [
+                  212,
+                  3,
+                  0,
+                  0,
+                  10,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "copy_bytes": null,
+                "grid": [
+                  1,
+                  64,
+                  1
+                ],
+                "label": "2.select",
+                "operation": "select"
+              },
+              {
+                "binding_bytes": [
+                  2560,
+                  2560
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 2560,
+                "grid": null,
+                "label": "3.copy",
+                "operation": "copy"
+              },
+              {
+                "binding_bytes": [
+                  2560,
+                  2560
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 2560,
+                "grid": null,
+                "label": "4.copy",
+                "operation": "copy"
+              },
+              {
+                "binding_bytes": [
+                  2400,
+                  2400
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 2400,
+                "grid": null,
+                "label": "5.copy",
+                "operation": "copy"
+              },
+              {
+                "binding_bytes": [
+                  2400,
+                  2400
+                ],
+                "block": null,
+                "constants": null,
+                "copy_bytes": 2400,
+                "grid": null,
+                "label": "6.copy",
+                "operation": "copy"
+              }
+            ],
+            "device": {
+              "device": [
+                226,
+                128
+              ],
+              "execution": 1,
+              "frequency_hz": 99810000,
+              "gaps_ms": 0.0062518785692816355,
+              "interval_union_ms": 23.518124436429215,
+              "intervals": [
+                {
+                  "end_tick": 10150748138624,
+                  "label": "0.batch_scan",
+                  "start_tick": 10150746630260
+                },
+                {
+                  "end_tick": 10150748959212,
+                  "label": "1.select",
+                  "start_tick": 10150748138748
+                },
+                {
+                  "end_tick": 10150748971664,
+                  "label": "2.select",
+                  "start_tick": 10150748959316
+                },
+                {
+                  "end_tick": 10150748973312,
+                  "label": "3.copy",
+                  "start_tick": 10150748971764
+                },
+                {
+                  "end_tick": 10150748974856,
+                  "label": "4.copy",
+                  "start_tick": 10150748973408
+                },
+                {
+                  "end_tick": 10150748976640,
+                  "label": "5.copy",
+                  "start_tick": 10150748974968
+                },
+                {
+                  "end_tick": 10150748978228,
+                  "label": "6.copy",
+                  "start_tick": 10150748976728
+                }
+              ],
+              "process": 2491643,
+              "queue": 94528494749968,
+              "recorder": 3,
+              "span_ms": 23.5243763149985
+            },
+            "preparation_ms": 0.8005380000000001,
+            "replay_host_ms": 23.489039,
+            "stages": {
+              "batch_scan": {
+                "commands": 1,
+                "device_ms": 15.112353471596032
+              },
+              "copy": {
+                "commands": 4,
+                "device_ms": 0.06179741508866848
+              },
+              "select": {
+                "commands": 2,
+                "device_ms": 8.343973549744515
+              }
+            }
+          }
+        ],
+        "stages": {
+          "batch_scan": {
+            "median_ms": 3.314297164612764,
+            "p95_ms": 15.112353471596032
+          },
+          "copy": {
+            "median_ms": 0.008415990381725278,
+            "p95_ms": 0.06179741508866848
+          },
+          "select": {
+            "median_ms": 0.9259192465684801,
+            "p95_ms": 8.343973549744515
+          }
+        },
+        "warnings": [
+          "Timestamp markers and completion barriers perturb dispatch timing; these are not hardware utilization or stall counters.",
+          "Native timestamp storage is diagnostic overhead outside workspace budgets."
+        ]
+      },
+      "compiler": [
+        {
+          "artifact": "hrx-cache/kernels/539576179360ee3b047013d772bc589ef866ed2efcece1f77f0e1842c23628ca/kernel.hsaco",
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "configuration": {
+            "db.scan.count": "100096",
+            "db.scan.dimensions": "384",
+            "db.scan.mode": "0",
+            "db.scan.rows": "2",
+            "db.scan.threads": "128",
+            "db.scan.width": "4"
+          },
+          "diagnostic_details": [],
+          "diagnostics": [],
+          "processor_mode": "default",
+          "report_mode": "details",
+          "resources": [
+            {
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "code_bytes": 848,
+              "function": "scan",
+              "local_bytes": 0,
+              "occupancy_percent": 100,
+              "private_bytes": 0,
+              "scalar_registers": 16,
+              "spills": 0,
+              "vector_registers": 31
+            }
+          ],
+          "symbol": "scan",
+          "target": "gfx1151",
+          "wait_reasons": [
+            {
+              "counter": "vmem_load",
+              "function": "scan",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 9,
+                "explicit_action_count": 0,
+                "full_drain_count": 3,
+                "partial_wait_count": 6,
+                "planned_action_count": 9
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "scan",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "scan",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "scan",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            }
+          ],
+          "selected_details": {
+            "kind": "loom.compile_report",
+            "schema_version": 0,
+            "mode": "details",
+            "residency_constraints": {
+              "count": 4,
+              "rows": [
+                {
+                  "allocation_granularity": 106,
+                  "allocation_scope": "subgroup",
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 0,
+                  "kind": "unconstrained_resource",
+                  "limiting": false,
+                  "name": "amdgpu.sgpr",
+                  "pool_scope": "SIMD",
+                  "pool_units": 800,
+                  "rounded_units": 106,
+                  "unit": "registers",
+                  "units": 16
+                },
+                {
+                  "allocation_granularity": 24,
+                  "allocation_scope": "subgroup",
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 1,
+                  "kind": "pooled_resource",
+                  "limiting": false,
+                  "name": "amdgpu.vgpr",
+                  "pool_scope": "SIMD",
+                  "pool_units": 1536,
+                  "rounded_units": 48,
+                  "unit": "registers",
+                  "units": 31
+                },
+                {
+                  "allocation_granularity": 512,
+                  "allocation_scope": "workgroup",
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 2,
+                  "kind": "pooled_resource",
+                  "limiting": false,
+                  "name": "amdgpu.lds",
+                  "pool_scope": "occupancy domain",
+                  "pool_units": 131072,
+                  "rounded_units": 0,
+                  "unit": "bytes",
+                  "units": 0
+                },
+                {
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 3,
+                  "kind": "fixed_limit",
+                  "limiting": false,
+                  "name": "amdgpu.workgroup_slots"
+                }
+              ]
+            },
+            "schedule_band_summary_rows": null,
+            "wait_action_rows": {
+              "count": 0,
+              "rows": []
+            },
+            "move_causes": {
+              "causes": [
+                {
+                  "cause": "constant_materialization",
+                  "packet_count": 6,
+                  "unit_count": 6
+                }
+              ],
+              "kind_count": 1,
+              "packet_count": 6,
+              "unit_count": 6
+            },
+            "static_instruction_mix": {
+              "atomic_count": 0,
+              "branch_count": 3,
+              "buffer_load_byte_count": 0,
+              "buffer_load_count": 0,
+              "buffer_store_byte_count": 0,
+              "buffer_store_count": 0,
+              "cache_count": 0,
+              "control_count": 7,
+              "conversion_count": 24,
+              "descriptor_count": 131,
+              "dot_count": 0,
+              "execution_barrier_count": 0,
+              "flat_memory_count": 0,
+              "flat_read_byte_count": 0,
+              "flat_write_byte_count": 0,
+              "generic_memory_count": 14,
+              "global_load_byte_count": 104,
+              "global_load_count": 11,
+              "global_memory_count": 13,
+              "global_store_byte_count": 8,
+              "global_store_count": 2,
+              "local_memory_count": 0,
+              "local_read_byte_count": 0,
+              "local_write_byte_count": 0,
+              "matrix_count": 0,
+              "memory_read_byte_count": 136,
+              "memory_read_unknown_width_count": 0,
+              "memory_write_byte_count": 8,
+              "memory_write_unknown_width_count": 0,
+              "mfma_count": 0,
+              "private_memory_count": 0,
+              "private_read_byte_count": 0,
+              "private_write_byte_count": 0,
+              "register_move_count": 0,
+              "scalar_alu_count": 33,
+              "scalar_memory_count": 1,
+              "scalar_read_byte_count": 32,
+              "scalar_write_byte_count": 0,
+              "smfmac_count": 0,
+              "swmmac_count": 0,
+              "unclassified_read_byte_count": 0,
+              "unclassified_write_byte_count": 0,
+              "unknown_count": 0,
+              "vector_alu_count": 84,
+              "wmma_count": 0
+            }
+          }
+        },
+        {
+          "artifact": "hrx-cache/kernels/c94b60f31da7a1ec9c94ce4da1ea3bf8efdb159161a88d791742a7265080f1dd/kernel.hsaco",
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "configuration": {
+            "db.scan.count": "100096",
+            "db.scan.dimensions": "384",
+            "db.scan.mode": "1",
+            "db.scan.rows": "2",
+            "db.scan.threads": "128",
+            "db.scan.width": "4"
+          },
+          "diagnostic_details": [],
+          "diagnostics": [],
+          "processor_mode": "default",
+          "report_mode": "details",
+          "resources": [
+            {
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "code_bytes": 748,
+              "function": "scan",
+              "local_bytes": 0,
+              "occupancy_percent": 100,
+              "private_bytes": 0,
+              "scalar_registers": 14,
+              "spills": 0,
+              "vector_registers": 18
+            }
+          ],
+          "symbol": "scan",
+          "target": "gfx1151",
+          "wait_reasons": [
+            {
+              "counter": "vmem_load",
+              "function": "scan",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 6,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 5,
+                "planned_action_count": 6
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "scan",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "scan",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            }
+          ],
+          "selected_details": {
+            "kind": "loom.compile_report",
+            "schema_version": 0,
+            "mode": "details",
+            "residency_constraints": {
+              "count": 4,
+              "rows": [
+                {
+                  "allocation_granularity": 106,
+                  "allocation_scope": "subgroup",
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 0,
+                  "kind": "unconstrained_resource",
+                  "limiting": false,
+                  "name": "amdgpu.sgpr",
+                  "pool_scope": "SIMD",
+                  "pool_units": 800,
+                  "rounded_units": 106,
+                  "unit": "registers",
+                  "units": 14
+                },
+                {
+                  "allocation_granularity": 24,
+                  "allocation_scope": "subgroup",
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 1,
+                  "kind": "pooled_resource",
+                  "limiting": false,
+                  "name": "amdgpu.vgpr",
+                  "pool_scope": "SIMD",
+                  "pool_units": 1536,
+                  "rounded_units": 24,
+                  "unit": "registers",
+                  "units": 18
+                },
+                {
+                  "allocation_granularity": 512,
+                  "allocation_scope": "workgroup",
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 2,
+                  "kind": "pooled_resource",
+                  "limiting": false,
+                  "name": "amdgpu.lds",
+                  "pool_scope": "occupancy domain",
+                  "pool_units": 131072,
+                  "rounded_units": 0,
+                  "unit": "bytes",
+                  "units": 0
+                },
+                {
+                  "function": "scan",
+                  "independent_tier": 16,
+                  "index": 3,
+                  "kind": "fixed_limit",
+                  "limiting": false,
+                  "name": "amdgpu.workgroup_slots"
+                }
+              ]
+            },
+            "schedule_band_summary_rows": null,
+            "wait_action_rows": {
+              "count": 0,
+              "rows": []
+            },
+            "move_causes": {
+              "causes": [
+                {
+                  "cause": "constant_materialization",
+                  "packet_count": 4,
+                  "unit_count": 4
+                }
+              ],
+              "kind_count": 1,
+              "packet_count": 4,
+              "unit_count": 4
+            },
+            "static_instruction_mix": {
+              "atomic_count": 0,
+              "branch_count": 3,
+              "buffer_load_byte_count": 0,
+              "buffer_load_count": 0,
+              "buffer_store_byte_count": 0,
+              "buffer_store_count": 0,
+              "cache_count": 0,
+              "control_count": 7,
+              "conversion_count": 24,
+              "descriptor_count": 116,
+              "dot_count": 0,
+              "execution_barrier_count": 0,
+              "flat_memory_count": 0,
+              "flat_read_byte_count": 0,
+              "flat_write_byte_count": 0,
+              "generic_memory_count": 10,
+              "global_load_byte_count": 48,
+              "global_load_count": 6,
+              "global_memory_count": 8,
+              "global_store_byte_count": 8,
+              "global_store_count": 2,
+              "local_memory_count": 0,
+              "local_read_byte_count": 0,
+              "local_write_byte_count": 0,
+              "matrix_count": 0,
+              "memory_read_byte_count": 64,
+              "memory_read_unknown_width_count": 0,
+              "memory_write_byte_count": 8,
+              "memory_write_unknown_width_count": 0,
+              "mfma_count": 0,
+              "private_memory_count": 0,
+              "private_read_byte_count": 0,
+              "private_write_byte_count": 0,
+              "register_move_count": 0,
+              "scalar_alu_count": 27,
+              "scalar_memory_count": 2,
+              "scalar_read_byte_count": 16,
+              "scalar_write_byte_count": 0,
+              "smfmac_count": 0,
+              "swmmac_count": 0,
+              "unclassified_read_byte_count": 0,
+              "unclassified_write_byte_count": 0,
+              "unknown_count": 0,
+              "vector_alu_count": 79,
+              "wmma_count": 0
+            }
+          }
+        },
+        {
+          "artifact": "hrx-cache/kernels/c29164334653fb39ca31a96c5ccd620775dea4aed627b3764db1b6864b0b9050/kernel.hsaco",
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "configuration": {
+            "db.batch": "1",
+            "db.select.first": "1",
+            "db.select.limit": "1073741824"
+          },
+          "diagnostic_details": [],
+          "diagnostics": [],
+          "processor_mode": "default",
+          "report_mode": "details",
+          "resources": [
+            {
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "code_bytes": 1272,
+              "function": "select",
+              "local_bytes": 64,
+              "occupancy_percent": 100,
+              "private_bytes": 0,
+              "scalar_registers": 24,
+              "spills": 0,
+              "vector_registers": 16
+            }
+          ],
+          "symbol": "select",
+          "target": "gfx1151",
+          "wait_reasons": [
+            {
+              "counter": "vmem_load",
+              "function": "select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 3,
+                "planned_action_count": 4
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "select",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "select",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 3,
+                "explicit_action_count": 0,
+                "full_drain_count": 3,
+                "partial_wait_count": 0,
+                "planned_action_count": 3
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.barrier",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "select",
+              "reason": "amdgpu.loop_entry_conservative_ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            }
+          ]
+        },
+        {
+          "artifact": "hrx-cache/kernels/8f8319cc1e8928abf3b35c8e8408ff6d6767d34ad6adf19f7099c661132bd414/kernel.hsaco",
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "configuration": {
+            "db.batch": "1",
+            "db.select.first": "0",
+            "db.select.limit": "1073741824"
+          },
+          "diagnostic_details": [],
+          "diagnostics": [],
+          "processor_mode": "default",
+          "report_mode": "details",
+          "resources": [
+            {
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "code_bytes": 1284,
+              "function": "select",
+              "local_bytes": 64,
+              "occupancy_percent": 100,
+              "private_bytes": 0,
+              "scalar_registers": 28,
+              "spills": 0,
+              "vector_registers": 17
+            }
+          ],
+          "symbol": "select",
+          "target": "gfx1151",
+          "wait_reasons": [
+            {
+              "counter": "vmem_load",
+              "function": "select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "full_drain_count": 0,
+                "partial_wait_count": 4,
+                "planned_action_count": 4
+              }
+            },
+            {
+              "counter": "vmem_load",
+              "function": "select",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 3,
+                "planned_action_count": 4
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "select",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "select",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 3,
+                "explicit_action_count": 0,
+                "full_drain_count": 3,
+                "partial_wait_count": 0,
+                "planned_action_count": 3
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.barrier",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            }
+          ]
+        },
+        {
+          "artifact": "hrx-cache/kernels/f226d0d417b5b69567715a1c34a370e18924b9dfe6b209665f2399c8fd3e36a6/kernel.hsaco",
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "configuration": {
+            "db.batch": "1",
+            "db.merge.planar": "0",
+            "db.select.limit": "1073741824"
+          },
+          "diagnostic_details": [],
+          "diagnostics": [],
+          "processor_mode": "default",
+          "report_mode": "details",
+          "resources": [
+            {
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "code_bytes": 1448,
+              "function": "sort_select",
+              "local_bytes": 8192,
+              "occupancy_percent": 100,
+              "private_bytes": 0,
+              "scalar_registers": 26,
+              "spills": 0,
+              "vector_registers": 10
+            }
+          ],
+          "symbol": "sort_select",
+          "target": "gfx1151",
+          "wait_reasons": [
+            {
+              "counter": "vmem_load",
+              "function": "sort_select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 3,
+                "planned_action_count": 4
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "sort_select",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "sort_select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 2,
+                "planned_action_count": 4
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "sort_select",
+              "reason": "amdgpu.barrier",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "sort_select",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "sort_select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "sort_select",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "full_drain_count": 4,
+                "partial_wait_count": 0,
+                "planned_action_count": 4
+              }
+            }
+          ]
+        },
+        {
+          "artifact": "hrx-cache/kernels/b430e1a4b96781836aaa159ec810403cd199e81d38fbd23bef61ac559091ab87/kernel.hsaco",
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "configuration": {
+            "db.batch": "1",
+            "db.merge.planar": "0",
+            "db.select.limit": "1073741824"
+          },
+          "diagnostic_details": [],
+          "diagnostics": [],
+          "processor_mode": "default",
+          "report_mode": "details",
+          "resources": [
+            {
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "code_bytes": 560,
+              "function": "sorted_merge",
+              "local_bytes": 0,
+              "occupancy_percent": 100,
+              "private_bytes": 0,
+              "scalar_registers": 34,
+              "spills": 0,
+              "vector_registers": 12
+            }
+          ],
+          "symbol": "sorted_merge",
+          "target": "gfx1151",
+          "wait_reasons": [
+            {
+              "counter": "vmem_load",
+              "function": "sorted_merge",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 3,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 2,
+                "planned_action_count": 3
+              }
+            },
+            {
+              "counter": "vmem_load",
+              "function": "sorted_merge",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "vmem_load",
+              "function": "sorted_merge",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "sorted_merge",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "sorted_merge",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "sorted_merge",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "sorted_merge",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            }
+          ]
+        },
+        {
+          "artifact": "hrx-cache/kernels/906c92778c1b3b5498d9040438c4df232a857a60fa19b62a9c50df80de03653a/kernel.hsaco",
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "configuration": {},
+          "diagnostic_details": [],
+          "diagnostics": [],
+          "processor_mode": "default",
+          "report_mode": "details",
+          "resources": [
+            {
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "code_bytes": 160,
+              "function": "mask_scores",
+              "local_bytes": 0,
+              "occupancy_percent": 100,
+              "private_bytes": 0,
+              "scalar_registers": 8,
+              "spills": 0,
+              "vector_registers": 4
+            }
+          ],
+          "symbol": "mask_scores",
+          "target": "gfx1151",
+          "wait_reasons": [
+            {
+              "counter": "vmem_load",
+              "function": "mask_scores",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "mask_scores",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "mask_scores",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            }
+          ]
+        },
+        {
+          "artifact": "hrx-cache/kernels/93567d44d69b690daa83e193909a7c5cb706e8a98076cde537aea22be3550eb4/kernel.hsaco",
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "configuration": {
+            "db.batch": "64",
+            "db.scan.dimensions": "384"
+          },
+          "diagnostic_details": [],
+          "diagnostics": [],
+          "processor_mode": "default",
+          "report_mode": "details",
+          "resources": [
+            {
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "code_bytes": 8576,
+              "function": "batch_scan",
+              "local_bytes": 12544,
+              "occupancy_percent": 100,
+              "private_bytes": 0,
+              "scalar_registers": 26,
+              "spills": 0,
+              "vector_registers": 29
+            }
+          ],
+          "symbol": "batch_scan",
+          "target": "gfx1151",
+          "wait_reasons": [
+            {
+              "counter": "vmem_load",
+              "function": "batch_scan",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 10,
+                "explicit_action_count": 0,
+                "full_drain_count": 10,
+                "partial_wait_count": 0,
+                "planned_action_count": 10
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "batch_scan",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 3,
+                "explicit_action_count": 0,
+                "full_drain_count": 3,
+                "partial_wait_count": 0,
+                "planned_action_count": 3
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "batch_scan",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "batch_scan",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 64,
+                "explicit_action_count": 0,
+                "full_drain_count": 32,
+                "partial_wait_count": 32,
+                "planned_action_count": 64
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "batch_scan",
+              "reason": "amdgpu.barrier",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "batch_scan",
+              "reason": "amdgpu.loop_entry_conservative_ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            }
+          ],
+          "selected_details": {
+            "kind": "loom.compile_report",
+            "schema_version": 0,
+            "mode": "details",
+            "residency_constraints": {
+              "count": 4,
+              "rows": [
+                {
+                  "allocation_granularity": 106,
+                  "allocation_scope": "subgroup",
+                  "function": "batch_scan",
+                  "independent_tier": 16,
+                  "index": 0,
+                  "kind": "unconstrained_resource",
+                  "limiting": false,
+                  "name": "amdgpu.sgpr",
+                  "pool_scope": "SIMD",
+                  "pool_units": 800,
+                  "rounded_units": 106,
+                  "unit": "registers",
+                  "units": 26
+                },
+                {
+                  "allocation_granularity": 24,
+                  "allocation_scope": "subgroup",
+                  "function": "batch_scan",
+                  "independent_tier": 16,
+                  "index": 1,
+                  "kind": "pooled_resource",
+                  "limiting": false,
+                  "name": "amdgpu.vgpr",
+                  "pool_scope": "SIMD",
+                  "pool_units": 1536,
+                  "rounded_units": 48,
+                  "unit": "registers",
+                  "units": 29
+                },
+                {
+                  "allocation_granularity": 512,
+                  "allocation_scope": "workgroup",
+                  "function": "batch_scan",
+                  "independent_tier": 16,
+                  "index": 2,
+                  "kind": "pooled_resource",
+                  "limiting": false,
+                  "name": "amdgpu.lds",
+                  "pool_scope": "occupancy domain",
+                  "pool_units": 131072,
+                  "rounded_units": 12800,
+                  "unit": "bytes",
+                  "units": 12544
+                },
+                {
+                  "function": "batch_scan",
+                  "independent_tier": 16,
+                  "index": 3,
+                  "kind": "fixed_limit",
+                  "limiting": false,
+                  "name": "amdgpu.workgroup_slots"
+                }
+              ]
+            },
+            "schedule_band_summary_rows": null,
+            "wait_action_rows": {
+              "count": 0,
+              "rows": []
+            },
+            "move_causes": {
+              "causes": [
+                {
+                  "cause": "constant_materialization",
+                  "packet_count": 11,
+                  "unit_count": 11
+                },
+                {
+                  "cause": "branch_edge",
+                  "packet_count": 7,
+                  "unit_count": 25
+                },
+                {
+                  "cause": "operand_bank_materialization",
+                  "packet_count": 11,
+                  "unit_count": 11
+                }
+              ],
+              "kind_count": 3,
+              "packet_count": 29,
+              "unit_count": 47
+            },
+            "static_instruction_mix": {
+              "atomic_count": 0,
+              "branch_count": 20,
+              "buffer_load_byte_count": 0,
+              "buffer_load_count": 0,
+              "buffer_store_byte_count": 0,
+              "buffer_store_count": 0,
+              "cache_count": 0,
+              "control_count": 37,
+              "conversion_count": 128,
+              "descriptor_count": 1063,
+              "dot_count": 0,
+              "execution_barrier_count": 2,
+              "flat_memory_count": 0,
+              "flat_read_byte_count": 0,
+              "flat_write_byte_count": 0,
+              "generic_memory_count": 30,
+              "global_load_byte_count": 56,
+              "global_load_count": 10,
+              "global_memory_count": 26,
+              "global_store_byte_count": 64,
+              "global_store_count": 16,
+              "local_memory_count": 69,
+              "local_read_byte_count": 768,
+              "local_write_byte_count": 24,
+              "matrix_count": 0,
+              "memory_read_byte_count": 876,
+              "memory_read_unknown_width_count": 0,
+              "memory_write_byte_count": 88,
+              "memory_write_unknown_width_count": 0,
+              "mfma_count": 0,
+              "private_memory_count": 0,
+              "private_read_byte_count": 0,
+              "private_write_byte_count": 0,
+              "register_move_count": 36,
+              "scalar_alu_count": 75,
+              "scalar_memory_count": 4,
+              "scalar_read_byte_count": 52,
+              "scalar_write_byte_count": 0,
+              "smfmac_count": 0,
+              "swmmac_count": 0,
+              "unclassified_read_byte_count": 0,
+              "unclassified_write_byte_count": 0,
+              "unknown_count": 0,
+              "vector_alu_count": 887,
+              "wmma_count": 0
+            }
+          }
+        },
+        {
+          "artifact": "hrx-cache/kernels/b2727493a5a6bf66f38a3e78c9f712adea6aeb4f98ddf9efee6b162f2a09d6fd/kernel.hsaco",
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "configuration": {
+            "db.batch": "1",
+            "db.merge.planar": "1",
+            "db.select.limit": "262144"
+          },
+          "diagnostic_details": [],
+          "diagnostics": [],
+          "processor_mode": "default",
+          "report_mode": "details",
+          "resources": [
+            {
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "code_bytes": 560,
+              "function": "sorted_merge",
+              "local_bytes": 0,
+              "occupancy_percent": 100,
+              "private_bytes": 0,
+              "scalar_registers": 34,
+              "spills": 0,
+              "vector_registers": 12
+            }
+          ],
+          "symbol": "sorted_merge",
+          "target": "gfx1151",
+          "wait_reasons": [
+            {
+              "counter": "vmem_load",
+              "function": "sorted_merge",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 3,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 2,
+                "planned_action_count": 3
+              }
+            },
+            {
+              "counter": "vmem_load",
+              "function": "sorted_merge",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "vmem_load",
+              "function": "sorted_merge",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "sorted_merge",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "sorted_merge",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "sorted_merge",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "sorted_merge",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            }
+          ]
+        },
+        {
+          "artifact": "hrx-cache/kernels/4447e5c0efbfce739b911d56d6952e8a828cc642056cd430fbfcccd3b7bd3b24/kernel.hsaco",
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "configuration": {
+            "db.batch": "64",
+            "db.select.first": "1",
+            "db.select.limit": "262144"
+          },
+          "diagnostic_details": [],
+          "diagnostics": [],
+          "processor_mode": "default",
+          "report_mode": "details",
+          "resources": [
+            {
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "code_bytes": 1352,
+              "function": "select",
+              "local_bytes": 64,
+              "occupancy_percent": 100,
+              "private_bytes": 0,
+              "scalar_registers": 28,
+              "spills": 0,
+              "vector_registers": 16
+            }
+          ],
+          "symbol": "select",
+          "target": "gfx1151",
+          "wait_reasons": [
+            {
+              "counter": "vmem_load",
+              "function": "select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "full_drain_count": 4,
+                "partial_wait_count": 0,
+                "planned_action_count": 4
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "select",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "select",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 3,
+                "explicit_action_count": 0,
+                "full_drain_count": 3,
+                "partial_wait_count": 0,
+                "planned_action_count": 3
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.barrier",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            }
+          ]
+        },
+        {
+          "artifact": "hrx-cache/kernels/96baa9df5596d8d2889ef838f845980c5616282de47e7c36f24ae5c710c93d75/kernel.hsaco",
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "configuration": {
+            "db.batch": "64",
+            "db.select.first": "0",
+            "db.select.limit": "262144"
+          },
+          "diagnostic_details": [],
+          "diagnostics": [],
+          "processor_mode": "default",
+          "report_mode": "details",
+          "resources": [
+            {
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "code_bytes": 1404,
+              "function": "select",
+              "local_bytes": 64,
+              "occupancy_percent": 100,
+              "private_bytes": 0,
+              "scalar_registers": 26,
+              "spills": 0,
+              "vector_registers": 17
+            }
+          ],
+          "symbol": "select",
+          "target": "gfx1151",
+          "wait_reasons": [
+            {
+              "counter": "vmem_load",
+              "function": "select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "full_drain_count": 0,
+                "partial_wait_count": 4,
+                "planned_action_count": 4
+              }
+            },
+            {
+              "counter": "vmem_load",
+              "function": "select",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "full_drain_count": 4,
+                "partial_wait_count": 0,
+                "planned_action_count": 4
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "select",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "select",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 3,
+                "explicit_action_count": 0,
+                "full_drain_count": 3,
+                "partial_wait_count": 0,
+                "planned_action_count": 3
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.barrier",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "select",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            }
+          ]
+        },
+        {
+          "artifact": "hrx-cache/kernels/eea43541ae48a7c487a386eea6ec8fb5b7e9e6983b62f73a79dc462a71b78ea3/kernel.hsaco",
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "configuration": {
+            "db.batch": "64",
+            "db.merge.planar": "0",
+            "db.select.limit": "262144"
+          },
+          "diagnostic_details": [],
+          "diagnostics": [],
+          "processor_mode": "default",
+          "report_mode": "details",
+          "resources": [
+            {
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "code_bytes": 1616,
+              "function": "sort_select",
+              "local_bytes": 8192,
+              "occupancy_percent": 100,
+              "private_bytes": 0,
+              "scalar_registers": 28,
+              "spills": 0,
+              "vector_registers": 10
+            }
+          ],
+          "symbol": "sort_select",
+          "target": "gfx1151",
+          "wait_reasons": [
+            {
+              "counter": "vmem_load",
+              "function": "sort_select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "full_drain_count": 4,
+                "partial_wait_count": 0,
+                "planned_action_count": 4
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "sort_select",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "sort_select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 2,
+                "planned_action_count": 4
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "sort_select",
+              "reason": "amdgpu.barrier",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            },
+            {
+              "counter": "lds",
+              "function": "sort_select",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "sort_select",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "sort_select",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 4,
+                "explicit_action_count": 0,
+                "full_drain_count": 4,
+                "partial_wait_count": 0,
+                "planned_action_count": 4
+              }
+            }
+          ]
+        },
+        {
+          "artifact": "hrx-cache/kernels/49938486b98f1bd690c1cc408f0f8c8ac3d91a3f49b2716a177a136cadc08d19/kernel.hsaco",
+          "compiler_identity": "bd015662c8840d4e597743630a1bd51a42daeb16b66aa71c982a0c900bea4abb",
+          "configuration": {
+            "db.batch": "64",
+            "db.merge.planar": "0",
+            "db.select.limit": "262144"
+          },
+          "diagnostic_details": [],
+          "diagnostics": [],
+          "processor_mode": "default",
+          "report_mode": "details",
+          "resources": [
+            {
+              "bank_conflicted_packets": null,
+              "bank_extra_rounds": null,
+              "bank_modeled_packets": null,
+              "bank_unmodeled_packets": null,
+              "code_bytes": 780,
+              "function": "sorted_merge",
+              "local_bytes": 0,
+              "occupancy_percent": 100,
+              "private_bytes": 0,
+              "scalar_registers": 36,
+              "spills": 0,
+              "vector_registers": 12
+            }
+          ],
+          "symbol": "sorted_merge",
+          "target": "gfx1151",
+          "wait_reasons": [
+            {
+              "counter": "vmem_load",
+              "function": "sorted_merge",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 3,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 2,
+                "planned_action_count": 3
+              }
+            },
+            {
+              "counter": "vmem_load",
+              "function": "sorted_merge",
+              "reason": "amdgpu.read_result_reuse",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "vmem_load",
+              "function": "sorted_merge",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "sorted_merge",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 2,
+                "explicit_action_count": 0,
+                "full_drain_count": 2,
+                "partial_wait_count": 0,
+                "planned_action_count": 2
+              }
+            },
+            {
+              "counter": "vmem_store",
+              "function": "sorted_merge",
+              "reason": "amdgpu.program_exit",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "sorted_merge",
+              "reason": "amdgpu.ssa_use",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            },
+            {
+              "counter": "smem",
+              "function": "sorted_merge",
+              "reason": "amdgpu.memory_effect",
+              "summary": {
+                "action_count": 1,
+                "explicit_action_count": 0,
+                "full_drain_count": 1,
+                "partial_wait_count": 0,
+                "planned_action_count": 1
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

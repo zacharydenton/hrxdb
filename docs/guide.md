@@ -335,7 +335,7 @@ returns all rows, regardless of exclusions supplied to previous searches.
 `db.corpus()` returns `&Corpus` over the existing GPU allocations.
 It performs no copy, allocation, compilation, or GPU work. Applications can bind
 their own Loom kernels to these vectors, together with their own side arrays
-and output buffers. Add `hrx = { package = "hrx-rs", version = "0.7.0" }` to
+and output buffers. Add `hrx = { package = "hrx-rs", version = "0.8.11" }` to
 the application's dependencies to use the matching runtime and compiler API.
 
 ```rust
@@ -640,9 +640,9 @@ reuse caller-owned capacity.
 Rust 1.91+, Linux x86_64, an AMD kernel driver, KFD/render permissions, and
 a gfx1151 GPU are required for execution. The pinned native HRX bundle needs
 glibc 2.43 or newer (Ubuntu 26.04 is its distribution baseline); see the
-[HRX installation guide](https://github.com/zacharydenton/hrx-rs/blob/v0.7.0/docs/GPU-NPU.md#native-setup).
+[HRX installation guide](https://github.com/zacharydenton/hrx-rs/blob/v0.8.11/docs/GPU-NPU.md#native-setup).
 Building and generating documentation do not initialize the GPU. The crate
-uses the published `hrx-rs 0.6` dependency and needs no sibling checkout. HRX provisions its pinned runtime automatically; use
+uses the published `hrx-rs 0.8.11` dependency and needs no sibling checkout. HRX provisions its pinned runtime automatically; use
 `HRX_OFFLINE=1` after provisioning to prohibit downloads.
 
 ```sh
@@ -666,16 +666,19 @@ It records workspace bytes and counts rank differences within numerical
 tolerance. The batch benchmark supports exclusions but cannot use `--sweep`.
 `--sweep` compares all 16 combinations of 128/256 threads, 1/2/4/8 rows per wave,
 and 2/4 components per load on the same corpus. It selects the minimum median
-full-search latency, preferring fewer VGPRs for results within 1%. Optional
-`llvm-readobj` diagnostics supply register/LDS/scratch usage; set
-`HRXDB_LLVM_READOBJ` to override its executable. Without it, selection uses
-latency alone and resource fields are null. Saved benchmark reports use cache-relative
+full-search latency, preferring fewer VGPRs for results within 1%. Loom compiler
+reports supply register/LDS/scratch usage directly. If those facts are missing,
+selection uses latency alone and resource fields remain null. Saved benchmark reports use cache-relative
 artifact identifiers so they contain no user-specific filesystem paths.
 
 Each sample measures separately completed read-control, scoring, and full-search
 invocations. Full search includes query normalization/publication, scan, GPU
-selection, and result readback. Compilation and ingestion are excluded. HRX has
-no GPU timestamps, so all timings use host wall time with explicit completion.
+selection, and result readback. Compilation and ingestion are excluded. Ordinary benchmark
+timings use host wall time with explicit completion. `--profile` adds separate
+instrumented GPU timestamp replays after all ordinary measurements;
+[profiling and compiler evidence](profiling.md) explains how to interpret them.
+Benchmark JSON includes detailed compiler reports by default; use
+`--compile-report summary` to collect only the existing summary evidence.
 Queries vary between samples; the default single-query mode uses no batching. Useful GB/s divides
 **unpadded FP16 vector bytes** by elapsed time, using decimal GB. It excludes
 padding, norms, query, scores, and candidate traffic from the numerator. The

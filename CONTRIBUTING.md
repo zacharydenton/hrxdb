@@ -23,11 +23,11 @@ cargo package --locked
 Use `cargo +1.91.0` to check the minimum supported version explicitly. Cargo
 packaging requires a clean working tree unless you add `--allow-dirty` while
 iterating. The lockfile records the qualified runtime/compiler release;
-the manifest accepts compatible HRX 0.6 updates.
+the manifest accepts compatible HRX 0.8 updates.
 
 ## Hardware validation
 
-Follow the [runtime setup](https://github.com/zacharydenton/hrx-rs/blob/v0.6.0/docs/GPU-NPU.md#native-setup)
+Follow the [runtime setup](https://github.com/zacharydenton/hrx-rs/blob/v0.8.11/docs/GPU-NPU.md#native-setup)
 on a supported host. First use provisions the pinned native bundle; after
 provisioning, run with `HRX_OFFLINE=1` to prevent downloads:
 
@@ -57,6 +57,11 @@ separate from warmed search latency. Compare implementations under the same
 conditions; interleave runs when possible. Small shapes and batch widths matter
 as well as the large-corpus target. See [recorded methodology](https://github.com/zacharydenton/hrxdb/blob/main/results/README.md)
 and `cargo run --release --bin hrxdb-bench -- --help`.
+
+Use `--profile` for a separate diagnostic replay and retain detailed compiler
+reports when investigating a kernel. See [profiling](docs/profiling.md) for
+measurement boundaries and compiler queries. GPU intervals include marker and
+barrier perturbation; do not subtract them from ordinary host timings.
 
 ## Issues and pull requests
 

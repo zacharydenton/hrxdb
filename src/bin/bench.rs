@@ -16,6 +16,8 @@ struct Options {
     appends: usize,
     updates: usize,
     sweep: bool,
+    profile: bool,
+    detailed_reports: bool,
     output: Option<PathBuf>,
     config: ScanConfig,
 }
@@ -32,6 +34,8 @@ fn options() -> Result<Options, String> {
         appends: 1_000,
         updates: 100,
         sweep: false,
+        profile: false,
+        detailed_reports: true,
         output: None,
         config: ScanConfig::default(),
     };
@@ -39,9 +43,13 @@ fn options() -> Result<Options, String> {
     while let Some(key) = args.next() {
         if key == "--help" {
             println!(
-                "hrxdb-bench [--rows 10000000] [--dimensions 384] [--samples 30] [--k 10] [--exclude-first 0] [--batch 1]\n             [--sweep] [--threads 128] [--rows-per-wave 2] [--load-width 4] [--output results.json]\n             [--append 50 [--appends 1000] [--updates 100]]\n             Builds once, checks sample scores, then measures completed single-query work.\n             --sweep tests all 16 schedules on the same corpus.\n             --append times appends of that many rows onto --rows, searcher handover, and\n             search against a single build of the same rows, then scattered updates."
+                "hrxdb-bench [--rows 10000000] [--dimensions 384] [--samples 30] [--k 10] [--exclude-first 0] [--batch 1]\n             [--profile] [--compile-report summary|details] [--sweep] [--threads 128] [--rows-per-wave 2] [--load-width 4] [--output results.json]\n             [--append 50 [--appends 1000] [--updates 100]]\n             Builds once, checks sample scores, then measures completed single-query work.\n             --profile collects three instrumented GPU replays after ordinary timings.\n             --compile-report defaults to details; summary avoids extra evidence collection.\n             --sweep tests all 16 schedules on the same corpus.\n             --append times appends of that many rows onto --rows, searcher handover, and\n             search against a single build of the same rows, then scattered updates."
             );
             std::process::exit(0);
+        }
+        if key == "--profile" {
+            o.profile = true;
+            continue;
         }
         if key == "--sweep" {
             o.sweep = true;
@@ -52,6 +60,14 @@ fn options() -> Result<Options, String> {
             .ok_or_else(|| format!("missing value for {key}"))?;
         if key == "--output" {
             o.output = Some(value.into());
+            continue;
+        }
+        if key == "--compile-report" {
+            o.detailed_reports = match value.as_str() {
+                "summary" => false,
+                "details" => true,
+                _ => return Err("compile-report must be summary or details".into()),
+            };
             continue;
         }
         let value: usize = value
@@ -138,6 +154,24 @@ fn score_row(mut values: Vec<f32>, query: &[f32], quantize: bool) -> f64 {
         * inverse as f64
 }
 
+fn runtime_evidence() -> hrxdb::Result<serde_json::Value> {
+    let overrides: Vec<_> = [
+        "HRX_RUNTIME_DIR",
+        "HRX_BUNDLE_MANIFEST",
+        "HRX_LOOM_LIBRARY",
+        "HRX_FABRIC_LIBRARY",
+    ]
+    .into_iter()
+    .filter(|name| std::env::var_os(name).is_some())
+    .collect();
+    Ok(serde_json::json!({
+        "hrxdb_version": env!("CARGO_PKG_VERSION"),
+        "configured_manifest": hrx::bundle::default_manifest()?,
+        "override_variables_set": overrides,
+        "scope": "Configured bundle identity; overrides may replace loaded libraries. Compilation records identify the actual compiler by digest.",
+    }))
+}
+
 fn distribution(values: impl Iterator<Item = f64>) -> hrxdb::Result<Distribution> {
     Distribution::from_samples(values.collect())
 }
@@ -159,6 +193,7 @@ struct Trial {
     resources: Option<Resources>,
     compiler: Vec<hrxdb::Compilation>,
     samples: Vec<Measurement>,
+    profile: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -169,35 +204,86 @@ struct Resources {
     workgroup_segment_bytes: u64,
 }
 
-// LLVM tools are optional benchmark diagnostics, never a library dependency.
-fn resources(artifact: &str) -> Option<Resources> {
-    let tool = std::env::var_os("HRXDB_LLVM_READOBJ").unwrap_or_else(|| "llvm-readobj".into());
-    let output = std::process::Command::new(tool)
-        .args(["--notes", artifact])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let notes = String::from_utf8(output.stdout).ok()?;
-    let value = |key: &str| {
-        notes.lines().find_map(|line| {
-            let (name, value) = line.trim().split_once(':')?;
-            (name == key)
-                .then(|| value.trim().parse::<u64>().ok())
-                .flatten()
-        })
-    };
+// Consume the compiler's resource evidence directly; unknown facts stay absent.
+fn resources(compilation: &hrxdb::Compilation) -> Option<Resources> {
+    let entry = compilation.resources.first()?;
     Some(Resources {
-        vgpr_count: value(".vgpr_count")?,
-        sgpr_count: value(".sgpr_count")?,
-        private_segment_bytes: value(".private_segment_fixed_size")?,
-        workgroup_segment_bytes: value(".group_segment_fixed_size")?,
+        vgpr_count: entry.vector_registers?,
+        sgpr_count: entry.scalar_registers?,
+        private_segment_bytes: entry.private_bytes?,
+        workgroup_segment_bytes: entry.local_bytes?,
     })
+}
+
+fn compiler_reports(db: &Searcher, detailed: bool) -> hrxdb::Result<Vec<hrxdb::Compilation>> {
+    let mut reports = if detailed {
+        db.detailed_compilation_reports()?
+    } else {
+        db.compilation_reports().to_vec()
+    };
+    for report in &mut reports {
+        let path = std::path::Path::new(&report.artifact);
+        if let (Some(key), Some(file)) = (
+            path.parent().and_then(std::path::Path::file_name),
+            path.file_name(),
+        ) {
+            report.artifact = format!(
+                "hrx-cache/kernels/{}/{}",
+                key.to_string_lossy(),
+                file.to_string_lossy()
+            );
+        }
+    }
+    Ok(reports)
+}
+
+fn profile_search(
+    db: &mut Searcher,
+    queries: &[f32],
+    k: usize,
+    excluded: &[u32],
+    enabled: bool,
+) -> hrxdb::Result<Option<serde_json::Value>> {
+    if !enabled {
+        return Ok(None);
+    }
+    let expected = db.search_batch_excluding(queries, k, excluded)?;
+    let mut samples = Vec::new();
+    for _ in 0..3 {
+        let actual = db.profile_search(queries, k, excluded)?;
+        if actual.neighbors != expected {
+            return Err(hrxdb::Error::Message(
+                "profiled search changed results".into(),
+            ));
+        }
+        if let Some(execution) = actual.execution {
+            samples.push(execution);
+        }
+    }
+    let mut stages = std::collections::BTreeMap::<String, Vec<f64>>::new();
+    for sample in &samples {
+        for (name, stage) in &sample.stages {
+            stages
+                .entry(name.clone())
+                .or_default()
+                .push(stage.device_ms);
+        }
+    }
+    let stages = stages
+        .into_iter()
+        .map(|(name, values)| Ok((name, Distribution::from_samples(values)?)))
+        .collect::<hrxdb::Result<std::collections::BTreeMap<_, _>>>()?;
+    Ok(Some(serde_json::json!({
+        "measurement_relationship": "Separate instrumented replays after ordinary timing; no subtraction relationship with ordinary host latency. Replay host intervals enclose GPU execution and timestamp harvest; graph preparation, query encoding and neighbor decoding are excluded.",
+        "warnings": ["Timestamp markers and completion barriers perturb dispatch timing; these are not hardware utilization or stall counters.", "Native timestamp storage is diagnostic overhead outside workspace budgets."],
+        "results_match_ordinary": true,
+        "stages": stages, "samples": samples,
+    })))
 }
 
 #[derive(Serialize)]
 struct Report {
+    runtime: serde_json::Value,
     target: String,
     rows: usize,
     dimensions: usize,
@@ -361,17 +447,28 @@ fn run(o: Options) -> hrxdb::Result<()> {
             fraction_of_read_control: read / scan,
             fraction_of_256_gb_s: rate(scan) / 256.0,
             scan_target_met: read / scan >= 0.9,
-            resources: resources(&db.compilation_reports()[0].artifact),
-            compiler: db.compilation_reports().to_vec(),
+            resources: resources(&db.compilation_reports()[0]),
+            compiler: Vec::new(),
+            profile: None,
             samples,
         });
+    }
+    // Diagnostic replay and detail compilation happen after every scored window,
+    // including sweeps, so their extra work cannot interrupt the comparison.
+    for trial in &mut trials {
+        if db.config() != trial.config {
+            db.configure(trial.config)?;
+        }
+        let query = row(o.rows + 888, o.dimensions);
+        trial.profile = profile_search(&mut db, &query, o.k, &excluded, o.profile)?;
+        trial.compiler = compiler_reports(&db, o.detailed_reports)?;
     }
     let fastest = trials
         .iter()
         .map(|t| t.search_median_ms)
         .min_by(f64::total_cmp)
         .unwrap();
-    // Prefer fewer VGPRs for results within 1%; without LLVM diagnostics,
+    // Prefer fewer VGPRs for results within 1%; without compiler resource facts,
     // select purely by latency and leave resources explicitly null.
     let best = trials
         .iter()
@@ -406,7 +503,8 @@ fn run(o: Options) -> hrxdb::Result<()> {
         .filter(|(id, _)| original.iter().any(|(other, _)| id == other))
         .count() as f64
         / original.len() as f64;
-    let mut report = Report {
+    let report = Report {
+        runtime: runtime_evidence()?,
         target: device.target().as_str().to_string(),
         rows: o.rows,
         dimensions: o.dimensions,
@@ -425,23 +523,6 @@ fn run(o: Options) -> hrxdb::Result<()> {
         selected_config: best,
         trials,
     };
-    // Preserve content hashes while keeping user-specific cache paths out of
-    // reports intended for sharing. Resource inspection above used local paths.
-    for trial in &mut report.trials {
-        for compilation in &mut trial.compiler {
-            let path = std::path::Path::new(&compilation.artifact);
-            if let (Some(key), Some(file)) = (
-                path.parent().and_then(std::path::Path::file_name),
-                path.file_name(),
-            ) {
-                compilation.artifact = format!(
-                    "hrx-cache/kernels/{}/{}",
-                    key.to_string_lossy(),
-                    file.to_string_lossy()
-                );
-            }
-        }
-    }
     let json = serde_json::to_string_pretty(&report)?;
     if let Some(path) = o.output {
         std::fs::write(path, &json).map_err(|e| hrxdb::Error::Message(e.to_string()))?;
@@ -563,20 +644,13 @@ fn run_batch(o: Options) -> hrxdb::Result<()> {
     )?;
     let sequential = sequential_distribution.median_ms;
     let batched = batch_distribution.median_ms;
-    let mut reports = db.compilation_reports().to_vec();
-    for report in &mut reports {
-        let path = std::path::Path::new(&report.artifact);
-        if let (Some(key), Some(file)) =
-            (path.parent().and_then(|p| p.file_name()), path.file_name())
-        {
-            report.artifact = format!(
-                "hrx-cache/kernels/{}/{}",
-                key.to_string_lossy(),
-                file.to_string_lossy()
-            );
-        }
-    }
+    let queries: Vec<_> = (0..o.batch)
+        .flat_map(|q| row(o.rows + 888 + q, o.dimensions))
+        .collect();
+    let profile = profile_search(&mut db, &queries, o.k, &excluded, o.profile)?;
+    let reports = compiler_reports(&db, o.detailed_reports)?;
     let report = serde_json::json!({
+        "runtime": runtime_evidence()?,
         "target": device.target().as_str(), "rows": o.rows, "dimensions": o.dimensions,
         "batch": o.batch, "k": o.k, "excluded_rows": o.exclude_first, "shards": db.shard_count(),
         "ingestion_and_compile_seconds": build_seconds, "batch_reserve_seconds": reserve_seconds,
@@ -586,7 +660,7 @@ fn run_batch(o: Options) -> hrxdb::Result<()> {
         "max_returned_score_error": max_score_error, "near_tie_rank_differences": near_tie_rank_differences,
         "timing": "Host completion. Three warmups, changing queries, alternating sequential/batch timing order. Compilation and workspace reservation excluded; query preparation, selection, masking and readback included. No concurrent hrxdb benchmark or GPU tests.",
         "validation": "Each batch compared with individual GPU searches. ID differences accepted only within 3e-6 score tolerance and counted. All returned scores checked against quantized CPU reference.",
-        "compiler": reports, "samples": samples,
+        "compiler": reports, "samples": samples, "profile": profile,
     });
     eprintln!(
         "Batch median {batched:.2} ms vs {sequential:.2} ms sequential: {:.2}x",
@@ -837,7 +911,12 @@ fn run_append(o: Options) -> hrxdb::Result<()> {
         ids.len()
     );
 
-    let report = serde_json::json!({
+    let queries: Vec<_> = (0..APPEND_BATCH)
+        .flat_map(|q| row(total + 888 + q, d))
+        .collect();
+    let profile = profile_search(&mut single, &queries, o.k, &[], o.profile)?;
+    let reports = compiler_reports(&single, o.detailed_reports)?;
+    let mut report = serde_json::json!({
         "target": device.target().as_str(),
         "base_rows": o.rows, "dimensions": d, "padded_dimensions": reference.padded_dimensions(),
         "append_rows": o.append, "appends": o.appends, "final_rows": total, "k": o.k,
@@ -861,6 +940,9 @@ fn run_append(o: Options) -> hrxdb::Result<()> {
         "timing": "Host wall time with explicit completion. Appends include host conversion, upload and tail moves. set_corpus includes allocation and scan compilation when a tail move changes capacity; new searchers compile kernels the preceding set_corpus already cached in-process. Searches: three warmups, changing queries, alternating which corpus runs first; single queries and 60-query batches, compilation and workspace reserved beforehand.",
         "validation": "Appended scores bitwise equal to a single build for four queries; every timed search result over the appended corpus equal to the single build's. Updated rows' scores checked against the quantized CPU reference; compaction checked bitwise against the updated snapshot.",
     });
+    report["runtime"] = runtime_evidence()?;
+    report["reference_search_profile"] = serde_json::to_value(profile)?;
+    report["reference_compiler"] = serde_json::to_value(reports)?;
     let json = serde_json::to_string_pretty(&report)?;
     if let Some(path) = o.output {
         std::fs::write(path, json)?;

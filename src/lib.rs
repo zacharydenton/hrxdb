@@ -12,7 +12,7 @@
 //! quantized corpus, not the original FP32 rows.
 //!
 //! Execution requires Linux x86_64, a gfx1151 AMD GPU, and the native runtime
-//! prerequisites in the [hrx-rs documentation](https://docs.rs/hrx-rs/0.5.0/hrx/).
+//! prerequisites in the [hrx-rs documentation](https://docs.rs/hrx-rs/0.8.11/hrx/).
 //! Building and generating documentation do not initialize GPU hardware.
 //!
 //! ```no_run
@@ -41,6 +41,8 @@
 //! GPU kernels, side arrays, and reductions; see [`Corpus`] for the contract.
 mod batch;
 mod commands;
+mod profiling;
+pub use profiling::{CommandProfile, ExecutionProfile, ProfiledSearch, StageProfile};
 mod corpus;
 mod host;
 use commands::Commands;
@@ -170,6 +172,24 @@ pub struct Compilation {
     pub report: Option<serde_json::Value>,
     /// Compiler messages retained from successful compilation.
     pub diagnostics: Vec<String>,
+    /// Producing compiler identity, independent of the artifact cache path.
+    pub compiler_identity: String,
+    /// Exact target used to compile this kernel.
+    pub target: String,
+    /// AMDGPU scheduling domain selected by the compiler options.
+    pub processor_mode: hrx::loom::ProcessorMode,
+    /// Specialization values identifying this variant of the exported symbol.
+    pub configuration: std::collections::BTreeMap<String, String>,
+    /// Amount of evidence collected for this artifact.
+    pub report_mode: hrx::loom::ReportMode,
+    /// Structured resources; missing facts remain unknown, not zero.
+    pub resources: Vec<hrx::loom::EntryResources>,
+    /// Structural wait reasons, available in detailed reports, not measured stalls.
+    pub wait_reasons: Option<Vec<hrx::loom::WaitReason>>,
+    /// Full compiler diagnostics, including source and related locations.
+    pub diagnostic_details: Vec<hrx::loom::Diagnostic>,
+    #[serde(skip)]
+    source: Arc<str>,
 }
 
 /// Independent search worker over a shared immutable [`Corpus`] snapshot.
@@ -367,7 +387,19 @@ fn compile(
     spec: hrx::loom::Specialization,
 ) -> Result<(Kernel, Compilation)> {
     let artifact = compiler.module(source).compile(&spec)?;
-    let report = Compilation {
+    let report = compilation(compiler, source, &spec, &artifact)?;
+    // SAFETY: source is authored in this crate and specialized for this device.
+    let kernel = unsafe { stream.load_artifact(&artifact)? };
+    Ok((kernel, report))
+}
+
+fn compilation(
+    compiler: &hrx::loom::Compiler,
+    source: &str,
+    spec: &hrx::loom::Specialization,
+    artifact: &hrx::loom::Artifact,
+) -> Result<Compilation> {
+    Ok(Compilation {
         symbol: spec.symbol().to_owned(),
         artifact: artifact.path().display().to_string(),
         report: artifact.report().map(|report| report.json().clone()),
@@ -376,10 +408,24 @@ fn compile(
             .iter()
             .map(|d| d.message.clone())
             .collect(),
-    };
-    // SAFETY: source is authored in this crate and specialized for this device.
-    let kernel = unsafe { stream.load_artifact(&artifact)? };
-    Ok((kernel, report))
+        compiler_identity: compiler.identity().to_owned(),
+        target: artifact.target().to_owned(),
+        processor_mode: artifact.processor_mode(),
+        configuration: spec.configuration().clone(),
+        report_mode: spec.report_mode(),
+        resources: artifact
+            .report()
+            .map(|r| r.entries())
+            .transpose()?
+            .unwrap_or_default(),
+        wait_reasons: artifact
+            .report()
+            .map(|r| r.wait_reasons())
+            .transpose()?
+            .flatten(),
+        diagnostic_details: artifact.diagnostics().to_vec(),
+        source: Arc::from(source),
+    })
 }
 
 fn allocate_candidates(stream: &Stream, count: usize, k: usize) -> Result<[(Buffer, Buffer); 2]> {
@@ -663,6 +709,31 @@ impl Searcher {
     /// Artifact paths refer to the local HRX cache.
     pub fn compilation_reports(&self) -> &[Compilation] {
         &self.reports
+    }
+
+    /// Collect detailed compiler evidence for all currently prepared kernels.
+    ///
+    /// Recompiles the same sources, target and specializations with detailed
+    /// provenance, scheduling, bank-service and wait evidence. This is a setup
+    /// operation with its own HRX cache entries; it does not replace executable
+    /// kernels or add work to search. Reports identify their analysis artifacts.
+    /// Compiler failures propagate. Resource models are not hardware counters.
+    pub fn detailed_compilation_reports(&self) -> Result<Vec<Compilation>> {
+        self.reports
+            .iter()
+            .map(|report| {
+                let mut spec = hrx::loom::Specialization::new(&report.symbol)
+                    .with_report(hrx::loom::ReportMode::Details);
+                for (key, value) in &report.configuration {
+                    spec.set_config(key, value);
+                }
+                let artifact = self
+                    .compiler
+                    .module(report.source.as_ref())
+                    .compile(&spec)?;
+                compilation(&self.compiler, &report.source, &spec, &artifact)
+            })
+            .collect()
     }
 
     /// Compile a new scan configuration outside query timing; retains the corpus.
@@ -1023,6 +1094,17 @@ impl Searcher {
         excluded: &[u32],
         output: &mut Vec<Neighbor>,
     ) -> Result<()> {
+        self.search_impl(query, k, excluded, output, None)
+    }
+
+    fn search_impl(
+        &mut self,
+        query: &[f32],
+        k: usize,
+        excluded: &[u32],
+        output: &mut Vec<Neighbor>,
+        profile: Option<&mut Option<ExecutionProfile>>,
+    ) -> Result<()> {
         if excluded.iter().any(|&id| id as usize >= self.count) {
             return Err(invalid("excluded ID is outside the index"));
         }
@@ -1056,6 +1138,19 @@ impl Searcher {
         }
         self.reserve_search(k)?;
         let masked = !excluded.is_empty();
+        if let Some(profile) = profile {
+            let start = Instant::now();
+            let mut commands = Commands::profile(&self.stream)?;
+            self.search_commands(k, masked, &mut commands)?;
+            let (graph, commands) = commands.finish_profiled()?;
+            *profile = Some(profiling::replay(
+                &mut self.stream,
+                graph,
+                commands,
+                start.elapsed().as_secs_f64() * 1000.0,
+            )?);
+            return self.decode_neighbors(k, output);
+        }
         if !self
             .search_graph
             .as_ref()
@@ -1064,25 +1159,35 @@ impl Searcher {
             // Retain only the most recent shape, bounding prepared command storage.
             self.search_graph = None;
             let mut commands = Commands::record(&self.stream)?;
-            self.scan_commands(false, self.query.buffer().binding(), &mut commands)?;
-            if masked {
-                self.mask_commands(self.exclusions.buffer().binding(), &mut commands)?;
-            }
-            let selected = self.select_commands(k, &mut commands)?;
-            commands.copy(
-                self.readback.buffer().try_slice(0, k * 4)?,
-                self.candidates[selected].0.try_slice(0, k * 4)?,
-            )?;
-            commands.copy(
-                self.readback.buffer().try_slice(MAX_K * 4, k * 4)?,
-                self.candidates[selected].1.try_slice(0, k * 4)?,
-            )?;
+            self.search_commands(k, masked, &mut commands)?;
             self.search_graph = Some((k, masked, commands.finish()?));
         }
         self.stream
             .launch(&mut self.search_graph.as_mut().unwrap().2)?;
         self.stream.synchronize()?;
         self.decode_neighbors(k, output)
+    }
+
+    fn search_commands<'a>(
+        &'a self,
+        k: usize,
+        masked: bool,
+        commands: &mut Commands<'a>,
+    ) -> Result<()> {
+        self.scan_commands(false, self.query.buffer().binding(), commands)?;
+        if masked {
+            self.mask_commands(self.exclusions.buffer().binding(), commands)?;
+        }
+        let selected = self.select_commands(k, commands)?;
+        commands.copy(
+            self.readback.buffer().try_slice(0, k * 4)?,
+            self.candidates[selected].0.try_slice(0, k * 4)?,
+        )?;
+        commands.copy(
+            self.readback.buffer().try_slice(MAX_K * 4, k * 4)?,
+            self.candidates[selected].1.try_slice(0, k * 4)?,
+        )?;
+        Ok(())
     }
 
     /// Measure separate, completed control/scan/full-search invocations.

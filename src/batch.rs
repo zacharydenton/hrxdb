@@ -295,6 +295,17 @@ impl Searcher {
         excluded: &[u32],
         result: &mut Vec<Vec<Neighbor>>,
     ) -> Result<()> {
+        self.search_batch_impl(queries, k, excluded, result, None)
+    }
+
+    pub(crate) fn search_batch_impl(
+        &mut self,
+        queries: &[f32],
+        k: usize,
+        excluded: &[u32],
+        result: &mut Vec<Vec<Neighbor>>,
+        profile: Option<&mut Option<ExecutionProfile>>,
+    ) -> Result<()> {
         let count = batch_size(self.dimensions, queries.len(), k)?;
         if excluded.iter().any(|&id| id as usize >= self.count) {
             return Err(invalid("excluded ID is outside the index"));
@@ -314,7 +325,7 @@ impl Searcher {
             return Ok(());
         }
         if count == 1 {
-            return self.search_excluding_into(queries, k, excluded, &mut result[0]);
+            return self.search_impl(queries, k, excluded, &mut result[0], profile);
         }
         self.stream.synchronize()?;
         let mut remaining = self.count;
@@ -355,28 +366,29 @@ impl Searcher {
         }
         // SAFETY: the query remains exclusively host-owned here.
         unsafe { scratch.query.publish()? };
-        scratch.scan(
-            &self.stream,
-            &self.corpus,
-            scratch.query.buffer().binding(),
-            if excluded.is_empty() {
-                None
-            } else {
-                Some(self.exclusions.buffer().binding())
-            },
-            count,
-            k,
-        )?;
         let bytes = count * k * 4;
-        self.stream.copy(
-            scratch.readback.buffer().try_slice(0, bytes)?,
-            scratch.running.0.try_slice(0, bytes)?,
-        )?;
-        self.stream.copy(
-            scratch.readback.buffer().try_slice(bytes, bytes)?,
-            scratch.running.1.try_slice(0, bytes)?,
-        )?;
-        self.stream.synchronize()?;
+        let exclusions = (!excluded.is_empty()).then(|| self.exclusions.buffer().binding());
+        if let Some(profile) = profile {
+            let start = Instant::now();
+            let mut commands = Commands::profile(&self.stream)?;
+            scratch.search_commands(&self.corpus, exclusions, count, k, &mut commands)?;
+            let (graph, commands) = commands.finish_profiled()?;
+            *profile = Some(profiling::replay(
+                &mut self.stream,
+                graph,
+                commands,
+                start.elapsed().as_secs_f64() * 1000.0,
+            )?);
+        } else {
+            scratch.search_commands(
+                &self.corpus,
+                exclusions,
+                count,
+                k,
+                &mut Commands::immediate(&self.stream),
+            )?;
+            self.stream.synchronize()?;
+        }
         // SAFETY: the stream completed both copies to this owned readback buffer.
         let readback = unsafe { scratch.readback.bytes()? };
         for (q, neighbors) in result.iter_mut().enumerate() {
@@ -395,17 +407,17 @@ impl Searcher {
     }
 }
 
-fn select_tile(
-    stream: &Stream,
-    scratch: &BatchScratch,
-    plan: &BatchPlan,
+fn select_tile<'a>(
+    commands: &mut Commands<'a>,
+    scratch: &'a BatchScratch,
+    plan: &'a BatchPlan,
     rows: usize,
     start: usize,
     k: usize,
     queries: usize,
 ) -> Result<usize> {
-    crate::selection::select_scores(
-        stream,
+    crate::selection::select_score_commands(
+        commands,
         &scratch.candidates,
         &plan.selections[&queries],
         crate::selection::SelectionInput {
@@ -419,6 +431,34 @@ fn select_tile(
 }
 
 impl BatchScratch {
+    fn search_commands<'a>(
+        &'a self,
+        corpus: &'a Corpus,
+        exclusions: Option<hrx::View<'a>>,
+        count: usize,
+        k: usize,
+        commands: &mut Commands<'a>,
+    ) -> Result<()> {
+        self.scan_commands(
+            corpus,
+            self.query.buffer().binding(),
+            exclusions,
+            count,
+            k,
+            commands,
+        )?;
+        let bytes = count * k * 4;
+        commands.copy(
+            self.readback.buffer().try_slice(0, bytes)?,
+            self.running.0.try_slice(0, bytes)?,
+        )?;
+        commands.copy(
+            self.readback.buffer().try_slice(bytes, bytes)?,
+            self.running.1.try_slice(0, bytes)?,
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn scan(
         &self,
         stream: &Stream,
@@ -427,6 +467,25 @@ impl BatchScratch {
         exclusions: Option<hrx::View<'_>>,
         queries: usize,
         k: usize,
+    ) -> Result<()> {
+        self.scan_commands(
+            corpus,
+            query,
+            exclusions,
+            queries,
+            k,
+            &mut Commands::immediate(stream),
+        )
+    }
+
+    fn scan_commands<'a>(
+        &'a self,
+        corpus: &'a Corpus,
+        query: hrx::View<'a>,
+        exclusions: Option<hrx::View<'a>>,
+        queries: usize,
+        k: usize,
+        commands: &mut Commands<'a>,
     ) -> Result<()> {
         let width = queries.next_power_of_two().max(8);
         let queries = selection_width(queries, k);
@@ -446,7 +505,7 @@ impl BatchScratch {
                 // and score buffers reserve width rows. Norms use local row
                 // offsets; the exclusion bitmap uses global insertion IDs.
                 unsafe {
-                    stream.dispatch(
+                    commands.dispatch(
                         &plan.scan,
                         [rows.div_ceil(64) as u32, 1, 1],
                         [(width * 4) as u32, 1, 1],
@@ -460,14 +519,14 @@ impl BatchScratch {
                         ],
                     )?;
                 }
-                let output = select_tile(stream, self, plan, rows, start, k, queries)?;
+                let output = select_tile(commands, self, plan, rows, start, k, queries)?;
                 let bytes = queries * k * 4;
                 if !started {
-                    stream.copy(
+                    commands.copy(
                         self.running.0.try_slice(0, bytes)?,
                         self.candidates[output].0.try_slice(0, bytes)?,
                     )?;
-                    stream.copy(
+                    commands.copy(
                         self.running.1.try_slice(0, bytes)?,
                         self.candidates[output].1.try_slice(0, bytes)?,
                     )?;
@@ -477,8 +536,9 @@ impl BatchScratch {
                         (&self.joined.0, &self.running.0, &self.candidates[output].0),
                         (&self.joined.1, &self.running.1, &self.candidates[output].1),
                     ] {
-                        stream.copy(joined.try_slice(0, bytes)?, running.try_slice(0, bytes)?)?;
-                        stream.copy(joined.try_slice(bytes, bytes)?, tile.try_slice(0, bytes)?)?;
+                        commands.copy(joined.try_slice(0, bytes)?, running.try_slice(0, bytes)?)?;
+                        commands
+                            .copy(joined.try_slice(bytes, bytes)?, tile.try_slice(0, bytes)?)?;
                     }
                     let mut constants = Constants::new();
                     constants.push((queries * 2) as u32)?;
@@ -486,7 +546,7 @@ impl BatchScratch {
                     // SAFETY: planar merge pairs each query's running list with
                     // that query's tile list; output is a separate queries*k pair.
                     unsafe {
-                        stream.dispatch(
+                        commands.dispatch(
                             &plan.running_merge,
                             [queries as u32, 1, 1],
                             [256, 1, 1],

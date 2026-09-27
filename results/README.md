@@ -1,5 +1,22 @@
 # Measured results
 
+## HRX 0.8.11 profiling qualification
+
+The [profiler qualification record](hrx-0.8.11-profiling.json) contains single and
+60-query runs over 100K × 384 vectors, k=10, on 2026-09-27. It retains ordinary
+samples, three separate GPU timestamp replays, command geometry and constants,
+compiler resource facts, wait reasons, and selected detailed compiler sections.
+The published bundle was used without runtime/compiler overrides. Another GPU
+workload was active, so these are diagnostic qualification results, not an
+isolated performance baseline. All profiled results matched ordinary search.
+
+See [profiling and compiler evidence](../docs/profiling.md) for reproduction and
+interpretation. All 49 existing GPU tests and three new profiling/report tests
+pass with HRX 0.8.11. The remaining sections below retain their original dates,
+runtime versions, and measurement conditions.
+
+## Original scan measurements
+
 Local gfx1151, 2026-09-11. One query at a time, 10M × 384 FP16 corpus, cosine,
 k=10, three warmups and 30 measured queries per configuration. No other hrxdb
 GPU test or benchmark ran concurrently. Other system activity and clocks were
