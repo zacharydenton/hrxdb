@@ -27,13 +27,15 @@ unified memory does not make every operation zero-copy or remove bandwidth limit
   and running GPU top-k.
 - **Composable storage:** cheap-clone `Corpus` handles, independent `Searcher`
   workspaces, read-only shard bindings, and device-resident row gathering.
+- **Live snapshots:** append rows or replace them at existing IDs without a
+  rebuild; older snapshots and their searchers keep exactly their rows.
 - **Custom GPU pipelines:** standalone `TopK`, device query/result buffers,
   completion events, and persistent exclusion bitmaps.
 - **Large resident corpora:** automatic sharding, direct FP16 ingestion,
   validated zero-copy adoption of device buffers, and memory accounting.
 
 hrxdb is an embedded vector index and GPU computation library. Persistence,
-embedding generation, application metadata, updates, approximate search, and
+embedding generation, application metadata, deletion, approximate search, and
 server APIs belong to the application. Search is exact over the **stored
 quantized representation**; FP16 rounding and FP32 arithmetic can change
 rankings relative to the original vectors.
@@ -98,6 +100,8 @@ After provisioning, `HRX_OFFLINE=1` prevents runtime downloads.
 | Search one query or a batch | `Searcher::search`, `search_batch` |
 | Reuse host result capacity | `search_into`, `search_batch_into`, `scores_into` |
 | Share one corpus across workers | `Corpus::clone`, `Corpus::searcher` |
+| Add rows to a live corpus | `Corpus::append`, `append_fp16`, `Searcher::set_corpus` |
+| Replace rows at existing IDs | `Corpus::update`, `update_fp16`, `Corpus::compact` |
 | Gather selected rows for a custom kernel | `Corpus::gather_into` |
 | Bind resident vectors without a copy | `Corpus::shards` |
 | Adopt owned FP16 device allocations | `Corpus::from_device` |
@@ -126,7 +130,18 @@ stream-ordering contract; they are not coordinated `BufferView`s. See the
 [shared-context example](examples/context_search.rs).
 
 `Corpus` is `Clone + Send + Sync`; clones share immutable allocations. Each
-`Searcher` owns its stream and workspace. Independent workers allow independent
+`Searcher` owns its stream and workspace.
+
+A corpus is a snapshot. `corpus.append(rows)` returns a new snapshot with the
+rows at IDs `len()..len() + n`, sharing every existing allocation: rows go into
+a reserve at the end of the last shard, which grows geometrically, so repeated
+small appends keep one tail shard and search as fast as a fresh build.
+`corpus.update(ids, rows)` replaces vectors at existing IDs. A handle nothing
+else shares is rewritten in place; otherwise the touched pages are copied on the
+device, so older snapshots and in-flight searches never see a change.
+`searcher.set_corpus(next)` moves a worker to the new snapshot, reusing its
+stream, kernels and workspace. See the [guide](docs/guide.md#appending-and-updating-rows)
+for placement, costs and the slack contract. Independent workers allow independent
 submission, but do not guarantee overlapping execution, higher throughput,
 priority, or latency isolation on a saturated GPU. Use batching to share corpus
 reads across queries. Use events to order work between streams.
@@ -176,8 +191,12 @@ Recorded on local gfx1151 with generated data, 2026-09-11:
 |---|---:|
 | One top-10 query over 10M × 384 vectors | 33.7 ms |
 | Sixty top-5 queries over 6,909,092 × 384 vectors | 80.7 ms |
+| Append 50 rows to 7M × 768 vectors (2026-09-27) | 0.54 ms |
+| Replace 100 scattered rows of an unshared 7M × 768 corpus | 0.88 ms |
 
-These are separate runs, not a batching speedup comparison. The sixty-query
+These are separate runs, not a batching speedup comparison. After 1,000 appends
+of 50 rows to 7M × 768 vectors, single and 60-query batch searches took 47.38
+and 144.89 ms against 47.33 and 144.78 ms for one build of the same rows. The sixty-query
 run was **1.42× faster than the preceding batch implementation** in an
 interleaved comparison with identical returned IDs and score bits. Smaller
 shapes can be slower. Timings exclude ingestion and compilation; clocks and
@@ -190,6 +209,7 @@ memory use, compiler reports, and reproduction commands. To benchmark locally:
 ```sh
 cargo run --locked --release --bin hrxdb-bench -- --rows 100000 --samples 10
 cargo run --locked --release --bin hrxdb-bench -- --rows 6909092 --batch 60 --k 5 --samples 10
+cargo run --locked --release --bin hrxdb-bench -- --rows 3000000 --dimensions 768 --append 50
 ```
 
 ## Development and release

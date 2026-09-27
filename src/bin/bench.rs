@@ -12,6 +12,9 @@ struct Options {
     k: usize,
     exclude_first: usize,
     batch: usize,
+    append: usize,
+    appends: usize,
+    updates: usize,
     sweep: bool,
     output: Option<PathBuf>,
     config: ScanConfig,
@@ -25,6 +28,9 @@ fn options() -> Result<Options, String> {
         k: 10,
         exclude_first: 0,
         batch: 1,
+        append: 0,
+        appends: 1_000,
+        updates: 100,
         sweep: false,
         output: None,
         config: ScanConfig::default(),
@@ -33,7 +39,7 @@ fn options() -> Result<Options, String> {
     while let Some(key) = args.next() {
         if key == "--help" {
             println!(
-                "hrxdb-bench [--rows 10000000] [--dimensions 384] [--samples 30] [--k 10] [--exclude-first 0] [--batch 1]\n             [--sweep] [--threads 128] [--rows-per-wave 2] [--load-width 4] [--output results.json]\n             Builds once, checks sample scores, then measures completed single-query work.\n             --sweep tests all 16 schedules on the same corpus."
+                "hrxdb-bench [--rows 10000000] [--dimensions 384] [--samples 30] [--k 10] [--exclude-first 0] [--batch 1]\n             [--sweep] [--threads 128] [--rows-per-wave 2] [--load-width 4] [--output results.json]\n             [--append 50 [--appends 1000] [--updates 100]]\n             Builds once, checks sample scores, then measures completed single-query work.\n             --sweep tests all 16 schedules on the same corpus.\n             --append times appends of that many rows onto --rows, searcher handover, and\n             search against a single build of the same rows, then scattered updates."
             );
             std::process::exit(0);
         }
@@ -58,6 +64,9 @@ fn options() -> Result<Options, String> {
             "--k" => o.k = value,
             "--exclude-first" => o.exclude_first = value,
             "--batch" => o.batch = value,
+            "--append" => o.append = value,
+            "--appends" => o.appends = value,
+            "--updates" => o.updates = value,
             "--threads" => o.config.threads = value,
             "--rows-per-wave" => o.config.rows_per_wave = value,
             "--load-width" => o.config.load_width = value,
@@ -91,7 +100,10 @@ fn row(i: usize, d: usize) -> Vec<f32> {
 }
 
 fn score(id: usize, d: usize, query: &[f32], quantize: bool) -> f64 {
-    let mut values = row(id, d);
+    score_row(row(id, d), query, quantize)
+}
+
+fn score_row(mut values: Vec<f32>, query: &[f32], quantize: bool) -> f64 {
     let norm = values
         .iter()
         .map(|&v| (v as f64).powi(2))
@@ -203,6 +215,9 @@ struct Report {
 }
 
 fn run(o: Options) -> hrxdb::Result<()> {
+    if o.append > 0 {
+        return run_append(o);
+    }
     if o.batch > 1 {
         return run_batch(o);
     }
@@ -585,4 +600,269 @@ fn run_batch(o: Options) -> hrxdb::Result<()> {
 
 fn main() -> hrxdb::Result<()> {
     run(options().map_err(hrxdb::Error::Message)?)
+}
+
+/// Timed searches over two searchers, alternating which runs first.
+struct Comparison {
+    single: [Vec<f64>; 2],
+    batch: [Vec<f64>; 2],
+}
+
+const APPEND_BATCH: usize = 60;
+
+fn compare(
+    searchers: [&mut Searcher; 2],
+    o: &Options,
+    seed: usize,
+    same_rows: bool,
+) -> hrxdb::Result<Comparison> {
+    let [a, b] = searchers;
+    let mut single = [Vec::new(), Vec::new()];
+    let mut batch = [Vec::new(), Vec::new()];
+    for sample in 0..o.samples + 3 {
+        let base = seed + sample * (APPEND_BATCH + 1);
+        let query = row(base, o.dimensions);
+        let queries: Vec<f32> = (1..=APPEND_BATCH)
+            .flat_map(|q| row(base + q, o.dimensions))
+            .collect();
+        let mut results = [None, None];
+        let order = if sample % 2 == 0 { [0, 1] } else { [1, 0] };
+        for side in order {
+            let searcher = if side == 0 { &mut *a } else { &mut *b };
+            let start = Instant::now();
+            let one = searcher.search(&query, o.k)?;
+            let single_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let start = Instant::now();
+            let many = searcher.search_batch(&queries, o.k)?;
+            let batch_ms = start.elapsed().as_secs_f64() * 1000.0;
+            if sample >= 3 {
+                single[side].push(single_ms);
+                batch[side].push(batch_ms);
+            }
+            results[side] = Some((one, many));
+        }
+        if same_rows && results[0] != results[1] {
+            return Err(hrxdb::Error::Message(
+                "searches over the same rows differ".into(),
+            ));
+        }
+    }
+    Ok(Comparison { single, batch })
+}
+
+fn comparison_json(c: &Comparison, names: [&str; 2]) -> hrxdb::Result<serde_json::Value> {
+    let mut sides = serde_json::Map::new();
+    let mut medians = [[0.0; 2]; 2];
+    for (i, name) in names.into_iter().enumerate() {
+        let single = distribution(c.single[i].iter().copied())?;
+        let batch = distribution(c.batch[i].iter().copied())?;
+        medians[i] = [single.median_ms, batch.median_ms];
+        sides.insert(
+            name.into(),
+            serde_json::json!({
+                "single_median_ms": single.median_ms,
+                "single_p95_ms": single.p95_ms,
+                "batch_median_ms": batch.median_ms,
+                "batch_p95_ms": batch.p95_ms,
+                "single_samples_ms": c.single[i],
+                "batch_samples_ms": c.batch[i],
+            }),
+        );
+    }
+    let [[s0, b0], [s1, b1]] = medians;
+    eprintln!(
+        "  single {s0:.3} vs {s1:.3} ms ({:+.2}%), batch {b0:.2} vs {b1:.2} ms ({:+.2}%) [{} vs {}]",
+        (s0 / s1 - 1.0) * 100.0,
+        (b0 / b1 - 1.0) * 100.0,
+        names[0],
+        names[1],
+    );
+    Ok(serde_json::Value::Object(sides))
+}
+
+fn run_append(o: Options) -> hrxdb::Result<()> {
+    use hrxdb::Corpus;
+    let device = hrx::Device::open(0)?;
+    let d = o.dimensions;
+    let total = o.rows + o.append * o.appends;
+    eprintln!(
+        "Building {} x {d}, then {} appends of {} rows",
+        o.rows, o.appends, o.append
+    );
+    let start = Instant::now();
+    let mut corpus = Corpus::build(&device, d, (0..o.rows).map(|i| row(i, d)))?;
+    let build_seconds = start.elapsed().as_secs_f64();
+    let mut searcher = corpus.searcher_with_config(o.config)?;
+    searcher.reserve_search(o.k)?;
+    searcher.reserve_batch(APPEND_BATCH, o.k)?;
+    let (mut append_ms, mut handover_ms, mut searcher_ms) = (Vec::new(), Vec::new(), Vec::new());
+    let mut max_shards = 0;
+    for step in 0..o.appends {
+        let first = o.rows + step * o.append;
+        let rows: Vec<_> = (first..first + o.append).map(|i| row(i, d)).collect();
+        let start = Instant::now();
+        corpus = corpus.append(&rows)?;
+        append_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+        let start = Instant::now();
+        searcher.set_corpus(corpus.clone())?;
+        handover_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+        if step % 100 == 99 {
+            let start = Instant::now();
+            drop(corpus.searcher_with_config(o.config)?);
+            searcher_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        max_shards = max_shards.max(corpus.shards().len());
+    }
+    let appended_shards = corpus.shards().len();
+    let appended_memory = corpus.memory_usage();
+    let append = distribution(append_ms.iter().copied())?;
+    let handover = distribution(handover_ms.iter().copied())?;
+    let fresh = distribution(searcher_ms.iter().copied())?;
+    eprintln!(
+        "append median {:.3} ms p95 {:.3} ms max {:.3} ms; set_corpus median {:.3} ms; new searcher median {:.3} ms; shards {appended_shards}",
+        append.median_ms,
+        append.p95_ms,
+        append_ms.iter().copied().fold(0.0, f64::max),
+        handover.median_ms,
+        fresh.median_ms,
+    );
+
+    eprintln!("Building the reference: {total} x {d} in one build");
+    let start = Instant::now();
+    let reference = Corpus::build(&device, d, (0..total).map(|i| row(i, d)))?;
+    let reference_seconds = start.elapsed().as_secs_f64();
+    let mut single = reference.searcher_with_config(o.config)?;
+    single.reserve_search(o.k)?;
+    single.reserve_batch(APPEND_BATCH, o.k)?;
+    for q in 0..4 {
+        let query = row(total + 17 + q, d);
+        if searcher.scores(&query)? != single.scores(&query)? {
+            return Err(hrxdb::Error::Message(
+                "appended scores differ from a single build".into(),
+            ));
+        }
+    }
+    eprintln!("Appended corpus vs single build:");
+    let appended = compare([&mut searcher, &mut single], &o, total + 1_000, true)?;
+    let appended_json = comparison_json(&appended, ["appended", "single_build"])?;
+
+    // Consecutive IDs, as when one album's photos are replaced, then scattered
+    // updates; the appended snapshot is still held, so both copy on write.
+    let cluster: Vec<u32> = (0..o.updates as u32)
+        .map(|i| total as u32 / 2 + i)
+        .collect();
+    let rows: Vec<_> = cluster
+        .iter()
+        .map(|&id| row(id as usize + 40_000_000, d))
+        .collect();
+    let start = Instant::now();
+    let clustered = corpus.clone().update(&cluster, &rows)?;
+    let update_clustered_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let clustered_shards = clustered.shards().len();
+    let clustered_bytes = clustered.memory_usage().total() - appended_memory.total();
+    eprintln!(
+        "copy-on-write update of {} consecutive rows: {update_clustered_ms:.2} ms, {clustered_shards} shards, +{} MB",
+        cluster.len(),
+        clustered_bytes / 1_000_000
+    );
+    drop(clustered);
+
+    // Scattered updates while the appended snapshot is still held.
+    let mut ids: Vec<u32> = (0..o.updates)
+        .map(|i| ((i as u64 * 2_654_435_761 + 12_345) % total as u64) as u32)
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let replacement = |id: u32| row(id as usize + 50_000_000, d);
+    let rows: Vec<_> = ids.iter().map(|&id| replacement(id)).collect();
+    let start = Instant::now();
+    let updated = corpus.clone().update(&ids, &rows)?;
+    let update_copy_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let updated_shards = updated.shards().len();
+    let updated_memory = updated.memory_usage();
+    eprintln!(
+        "copy-on-write update of {} rows: {update_copy_ms:.2} ms, {updated_shards} shards, +{} MB",
+        ids.len(),
+        (updated_memory.total() - appended_memory.total()) / 1_000_000
+    );
+    searcher.set_corpus(updated.clone())?;
+    let query = row(total + 5, d);
+    let scores = searcher.scores(&query)?;
+    for &id in &ids {
+        let reference = score_row(replacement(id), &query, true);
+        if (scores[id as usize] as f64 - reference).abs() > 3e-6 {
+            return Err(hrxdb::Error::Message(
+                "updated score differs from CPU reference".into(),
+            ));
+        }
+    }
+    eprintln!("Updated (fragmented) corpus vs single build:");
+    let fragmented = compare([&mut searcher, &mut single], &o, total + 9_000, false)?;
+    let fragmented_json = comparison_json(&fragmented, ["updated", "single_build"])?;
+
+    let start = Instant::now();
+    let compact = updated.compact()?;
+    let compact_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let mut compacted = compact.searcher_with_config(o.config)?;
+    if compacted.scores(&query)? != scores {
+        return Err(hrxdb::Error::Message("compaction changed scores".into()));
+    }
+    eprintln!(
+        "compact: {compact_ms:.1} ms, {} shards",
+        compact.shards().len()
+    );
+
+    // Exclusive handle: drop every other reference, then rewrite in place.
+    drop(compacted);
+    drop(corpus);
+    searcher.set_corpus(compact.clone())?;
+    drop(updated);
+    drop(searcher);
+    let memory = compact.memory_usage();
+    let second: Vec<_> = ids
+        .iter()
+        .map(|&id| row(id as usize + 60_000_000, d))
+        .collect();
+    let start = Instant::now();
+    let compact = compact.update(&ids, &second)?;
+    let update_in_place_ms = start.elapsed().as_secs_f64() * 1000.0;
+    if compact.memory_usage() != memory {
+        return Err(hrxdb::Error::Message("exclusive update allocated".into()));
+    }
+    eprintln!(
+        "in-place update of {} rows: {update_in_place_ms:.2} ms",
+        ids.len()
+    );
+
+    let report = serde_json::json!({
+        "target": device.target().as_str(),
+        "base_rows": o.rows, "dimensions": d, "padded_dimensions": reference.padded_dimensions(),
+        "append_rows": o.append, "appends": o.appends, "final_rows": total, "k": o.k,
+        "batch": APPEND_BATCH, "config": o.config,
+        "build_seconds": build_seconds, "reference_build_seconds": reference_seconds,
+        "append_median_ms": append.median_ms, "append_p95_ms": append.p95_ms,
+        "append_max_ms": append_ms.iter().copied().fold(0.0, f64::max),
+        "set_corpus_median_ms": handover.median_ms, "set_corpus_p95_ms": handover.p95_ms,
+        "new_searcher_median_ms": fresh.median_ms,
+        "appended_shards": appended_shards, "max_shards_during_appends": max_shards,
+        "reference_shards": reference.shards().len(),
+        "appended_memory": appended_memory, "reference_memory": reference.memory_usage(),
+        "search_after_appends": appended_json,
+        "clustered_update_rows": cluster.len(), "clustered_update_copy_on_write_ms": update_clustered_ms,
+        "clustered_update_shards": clustered_shards, "clustered_update_added_bytes": clustered_bytes,
+        "updated_rows": ids.len(), "update_copy_on_write_ms": update_copy_ms,
+        "updated_shards": updated_shards, "updated_memory": updated_memory,
+        "search_after_updates": fragmented_json,
+        "compact_ms": compact_ms, "update_in_place_ms": update_in_place_ms,
+        "append_samples_ms": append_ms, "set_corpus_samples_ms": handover_ms,
+        "timing": "Host wall time with explicit completion. Appends include host conversion, upload and tail moves. set_corpus includes allocation and scan compilation when a tail move changes capacity; new searchers compile kernels the preceding set_corpus already cached in-process. Searches: three warmups, changing queries, alternating which corpus runs first; single queries and 60-query batches, compilation and workspace reserved beforehand.",
+        "validation": "Appended scores bitwise equal to a single build for four queries; every timed search result over the appended corpus equal to the single build's. Updated rows' scores checked against the quantized CPU reference; compaction checked bitwise against the updated snapshot.",
+    });
+    let json = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = o.output {
+        std::fs::write(path, json)?;
+    } else {
+        println!("{json}");
+    }
+    Ok(())
 }

@@ -193,6 +193,57 @@ ROWS=6909092 BATCH=60 SAMPLES=15 OUTPUT=tile-sweep.json \
   cargo test --release --lib compare_batch_tiles -- --ignored --nocapture
 ```
 
+## Appends and updates
+
+Local gfx1151, 2026-09-27, hrx-rs 0.8.7, `rustc 1.95.0-nightly`, default scan
+schedule, k=10. Each run builds a corpus of generated 768-dimensional rows, then
+appends 50 rows 1,000 times, moving one searcher to each new snapshot with
+`set_corpus`. The appended corpus is compared with a separate build of the same
+rows: 30 measured single queries and 60-query batches after three warmups,
+alternating which corpus runs first. Every timed result over the appended corpus
+was identical to the fresh build's, and full score arrays matched bitwise for
+four queries. No other hrxdb workload ran; clocks were not controlled.
+
+| | [7M × 768](7m-768-append.json) | [3M × 768](3m-768-append.json) |
+|---|---:|---:|
+| Base shards; after appends | 2; 3 | 1; 2 |
+| Append 50 rows, median (p95) | 0.540 ms (0.573) | 0.536 ms (0.652) |
+| First append (creates the writer stream) | 11.2 ms | 13.9 ms |
+| `set_corpus` after an append, median | 0.139 ms | 0.110 ms |
+| New searcher, median | 17.8 ms | 15.2 ms |
+| Single query: appended vs fresh build | 47.38 vs 47.33 ms (+0.10%) | 20.92 vs 20.80 ms (+0.58%) |
+| 60-query batch: appended vs fresh build | 144.89 vs 144.78 ms (+0.07%) | 65.95 vs 67.12 ms (−1.75%) |
+| Copy-on-write update, 100 consecutive IDs | 9.1 ms, +25 MB | 9.8 ms, +25 MB |
+| Copy-on-write update, 100 scattered IDs | 994 ms, +10.6 GB, 7 shards | 421 ms, +4.6 GB, 5 shards |
+| Single / batch after the scattered update | +0.26% / +1.79% | +0.64% / +2.25% |
+| In-place update, 100 scattered IDs | 0.885 ms | 0.594 ms |
+| Compaction | 1,097 ms | 407 ms |
+
+The 3M reference is a single shard; at 7M × 768 the 2^32-element shard limit
+gives every layout at least two. Differences after appends are within the
+run-to-run spread of these measurements (about ±2% for batches).
+
+Appends stage rows in GPU-coherent host memory and copy them on one stream kept
+per corpus lineage. On a new stream the first copy loads transfer kernels
+(about 8 ms) and the stream itself costs about 2 ms, which the first append pays.
+An append that fits the tail's reserve leaves the last shard's capacity, and so
+its capacity-specialized scan kernel and score storage, unchanged; `set_corpus`
+then compiles and allocates nothing.
+
+An earlier variant copied only the touched 16,384-row pages on update. For 100
+scattered IDs over 3M rows that produced 175 shards and slowed 60-query batches
+from 66.3 to 111.1 ms (+68%; single queries +6.7%), because each shard adds a
+batch tile's selection and merge. Updates now also copy untouched gaps shorter
+than one 262,144-row tile, trading copy volume for bounded fragmentation.
+
+Reproduce with:
+
+```sh
+HRX_OFFLINE=1 cargo run --locked --release --bin hrxdb-bench -- \
+  --rows 7000000 --dimensions 768 --append 50 --appends 1000 --updates 100 \
+  --samples 30 --output results/7m-768-append.json
+```
+
 ## Generated code
 
 The [resource inventory](codegen.json) records all sweep variants. The default

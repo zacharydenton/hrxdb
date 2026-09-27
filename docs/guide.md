@@ -9,8 +9,8 @@ searches FP16 vectors using FP32 cosine scores and returns the best 1–1,024 ma
 with optional excluded IDs. Large corpora are sharded internally.
 Execution currently targets Linux x86_64 with a gfx1151 GPU (AMD Strix Halo).
 The library exposes resident storage, search, and selection for application-owned
-pipelines. Persistence, updates, metadata filters, and server APIs are outside
-the current scope.
+pipelines. Rows can be appended or replaced without a rebuild. Persistence,
+deletion, metadata filters, and server APIs are outside the current scope.
 
 ## Quick start
 
@@ -155,6 +155,67 @@ selection finds the best k across the entire corpus. `shard_count()` reports
 the number of corpus allocations.
 Available GPU memory and compiler resources may impose tighter limits for large
 shapes. Hardware coverage includes dimensions 1, 3, 127, 129, 384, 512, and 769.
+
+## Appending and updating rows
+
+A `Corpus` is an immutable snapshot. Appends, updates and compaction return
+new snapshots that share unchanged allocations. A handle's logical rows never
+change, so searchers and custom kernels using an older snapshot keep working
+while a newer one is published.
+
+```rust
+let first = corpus.len();
+let next = corpus.append(&fresh_rows)?; // IDs first..first + fresh_rows.len().
+searcher.set_corpus(next.clone())?;     // Same stream, kernels and workspace.
+let next = next.update(&[3, 17], [&row_a, &row_b])?;
+```
+
+`append` and `append_fp16` convert rows exactly as `build` and `build_fp16` do,
+with the same validation. The first append to a built corpus fills the 256-row
+tile slack of its last shard, then starts a tail shard with a 4,096-row reserve.
+Later appends write into that reserve when the snapshot is the reserve's latest
+extension. When it is full, the tail moves to an allocation of twice its
+capacity (a device copy, amortized over the appended rows), so repeated small
+appends leave exactly one tail shard until it reaches the 2^32-element shard
+limit. Appending twice to the same snapshot is safe: an atomic mark on each
+allocation records which rows some snapshot may reference, and the second
+append moves or starts a tail rather than reusing those rows. Measured on
+7M × 768 vectors, 1,000 appends of 50 rows took a median of 0.54 ms each, and
+single and 60-query batch searches afterwards matched a fresh build within 0.1%
+([results](../results/README.md#appends-and-updates)).
+
+`update(ids, rows)` and `update_fp16` replace the vectors and inverse norms at
+existing IDs. They take the handle by value. If nothing else shares its storage
+(no clones, searchers, prepared searches, residency cache entries or other
+snapshots sharing an allocation), rows are rewritten in place by one scatter
+dispatch per shard, under a millisecond for 100 rows. Otherwise the update is
+copy-on-write: each 16,384-row page holding an updated row, and untouched gaps
+shorter than 262,144 rows between such pages, are copied on the device into new
+allocations, and the rows are written there. Clustered updates are cheap (100
+consecutive IDs copied 25 MB in 9 ms at 768 dimensions); scattered updates over
+millions of rows copy nearly all of them (10.6 GB in 1 s at 7M × 768) and hold
+that memory while older snapshots share the original allocations. Gaps are
+merged because every shard adds a batch tile's selection and merge work: 100
+random updates split into 175 pages slowed 60-query batches by 68% at 3M × 768;
+merged, they are within 3%. To update in place, move searchers off the old snapshot
+first and drop other clones.
+
+`compact()` copies every row on the device into the build layout, releasing
+reserves and rows superseded by updates once older snapshots are gone. Values
+and scores are bitwise unchanged; peak memory holds both copies.
+
+Searchers serve one snapshot. `Searcher::set_corpus(next)` waits for queued work
+and keeps its stream, compiled selection and batch kernels, and workspace. The
+last shard's scan kernel is specialized to its capacity, and score storage to
+`capacity_range()`, so moving to a snapshot whose appends fit the reserve
+compiles and allocates nothing (0.14 ms at 7M rows); `corpus.searcher()` costs
+about 16 ms. Side arrays and structures derived from an older snapshot's
+shard layout, such as custom kernel ordinals, must be rebuilt for the new one.
+
+Mutations of snapshots derived from one build share one stream, created on
+first use, and are serialized. Their allocations use the corpus workspace budget.
+A failed append or update changes no snapshot; reserve rows it claimed are not
+reused.
 
 ## Larger result sets and exclusions
 
@@ -307,14 +368,17 @@ the stored values: `build` normalizes before FP16 conversion, whereas
 `build_fp16` preserves its input values.
 
 Rows between `row_range().len()` and `capacity_rows()` are readable slack with
-**unspecified contents**, not indexed vectors. They have no insertion IDs.
+**unspecified contents**, not indexed vectors. They have no insertion IDs. An
+append to a newer snapshot can write the last shard's slack while this view is
+in use; those rows are finite, and a torn read of them is still finite.
 A fixed 256-row kernel can read its final tile in full, but must mask slack by
 local row index before reduction or selection. Do not rely on zero contents:
 a zero score could beat every real negative cosine. Side-array loads must also
 be in bounds; padding the ordinal array with a sentinel is one option. For other
 tile sizes, check `rows.len().div_ceil(tile_rows) * tile_rows <= capacity_rows()`.
-Each shard adds at most 255 rows of vector and norm storage; that capacity still
-respects the 2^32-element limit. Built-in searches process only logical rows.
+Built shards add at most 255 rows of vector and norm storage; an appended tail
+reserves up to its own length again. Capacity always respects the 2^32-element
+limit. Built-in searches select only logical rows.
 
 `shard.capacity_range()` gives the global row-coordinate range covered by its
 readable bindings, including slack. `corpus.capacity_range()` gives `0..end`,
@@ -507,7 +571,9 @@ an event dependency first. Ownership transfers even if validation fails.
 ## Memory accounting
 
 `corpus.memory_usage()` separates logical FP16 vectors, dimension padding,
-vector slack, logical FP32 norms, and norm slack. `db.memory_usage()` reports
+vector slack, logical FP32 norms, and norm slack. Slack includes append reserve
+and rows superseded by copy-on-write updates; allocations shared between
+snapshots are counted in full by each. `db.memory_usage()` reports
 that shared corpus separately from the worker's query, score, selection,
 readback, exclusion, batch, and device-query allocations:
 
@@ -671,6 +737,15 @@ matrix tiles. They verify bounded workspace and repeated output reuse.
 Gather tests cover requested order and duplicates, shard boundaries, normalized
 FP32 output, cached-kernel reuse, stream-owned scratch, output validation, and
 the subset-comparison example.
+
+Append and update tests compare every score, top-k and batch result bitwise
+against a fresh build of the same rows, for both ingestion paths. They cover
+filling tile slack, tail moves, two appends from one snapshot, 400 small appends
+keeping one tail, page edges and gap merging, in-place and copy-on-write
+updates, compaction, moving searchers between snapshots including batch
+workspace, invalid input, and that held snapshots and searchers keep their
+scores. The album example runs over unaligned shards before and after appends
+and updates, including over a snapshot whose slack a later append filled.
 
 The repository's [release guide](../RELEASE.md) covers packaging and publication.
 See [CHANGELOG.md](../CHANGELOG.md) for version history. Contributions should include

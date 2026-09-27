@@ -1,6 +1,24 @@
 # Changelog
 
-## Unreleased — cached native GPU memory and prepared search
+## Unreleased — cached native GPU memory, prepared search, live snapshots
+
+- Add `Corpus::append` and `append_fp16`, returning a snapshot with new rows at
+  the next insertion IDs and sharing every existing allocation. Rows fill a
+  geometric tail reserve guarded by an atomic claim, so repeated appends keep
+  one tail shard. On 7M × 768, appending 50 rows takes 0.54 ms, and after 1,000
+  appends search is within 0.1% of a fresh build.
+- Add `Corpus::update` and `update_fp16`, replacing rows at existing IDs:
+  in place with one scatter dispatch when no other handle shares the storage,
+  otherwise copy-on-write of the touched 16,384-row pages and gaps shorter than
+  one batch tile. Add `Corpus::compact` to restore the build layout on the device.
+- Add `Searcher::set_corpus`, moving a worker to another snapshot and reusing
+  its stream, kernels and workspace; 0.14 ms after an append at 7M rows.
+- The last shard's single-query scan is specialized to its capacity and scores
+  its reserve, whose scores are never selected; score and exclusion workspace
+  and batch tiles are sized by `capacity_range()`. `memory_usage` counts each
+  allocation once and reports append reserve and superseded rows as slack.
+  Residency eviction also requires that no derived snapshot shares storage.
+- Add `hrxdb-bench --append` for append, handover and update measurements.
 
 - Require HRX 0.8.3, restoring GPU caching for corpus and search workspace.
 - Publish direct host writes to query/exclusion buffers and acquire GPU writes
