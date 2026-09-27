@@ -212,8 +212,10 @@ compiles and allocates nothing (0.14 ms at 7M rows); `corpus.searcher()` costs
 about 16 ms. Side arrays and structures derived from an older snapshot's
 shard layout, such as custom kernel ordinals, must be rebuilt for the new one.
 
-Mutations of snapshots derived from one build share one stream, created on
-first use, and are serialized. Their allocations use the corpus workspace budget.
+Mutations of snapshots derived from one build share a serialized writer with a
+cached stream. Each call uses its handle's workspace budget for GPU allocations
+and host row-conversion buffers, reserving conversion memory before reading rows.
+Switching from a budgeted handle to an unbudgeted sibling recreates the stream.
 A failed append or update changes no snapshot; reserve rows it claimed are not
 reused.
 

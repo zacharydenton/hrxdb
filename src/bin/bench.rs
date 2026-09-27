@@ -83,6 +83,9 @@ fn options() -> Result<Options, String> {
     if !(1..=hrxdb::MAX_BATCH).contains(&o.batch) || (o.batch > 1 && o.sweep) {
         return Err("batch must be in 1..=64; batched GEMM does not use --sweep".into());
     }
+    if o.append > 0 && o.appends == 0 {
+        return Err("appends must be positive when --append is enabled".into());
+    }
     Ok(o)
 }
 
@@ -706,7 +709,7 @@ fn run_append(o: Options) -> hrxdb::Result<()> {
         let start = Instant::now();
         searcher.set_corpus(corpus.clone())?;
         handover_ms.push(start.elapsed().as_secs_f64() * 1000.0);
-        if step % 100 == 99 {
+        if step % 100 == 99 || (step + 1 == o.appends && searcher_ms.is_empty()) {
             let start = Instant::now();
             drop(corpus.searcher_with_config(o.config)?);
             searcher_ms.push(start.elapsed().as_secs_f64() * 1000.0);

@@ -1,6 +1,7 @@
 //! Appended and updated snapshots against from-scratch builds of the same rows.
 //! Run explicitly with: cargo test --release --test mutation -- --ignored --test-threads=1
 use half::f16;
+use hrx::residency::ResidencyManager;
 use hrxdb::{Corpus, Device, Neighbor, Result, Searcher};
 
 fn row(i: usize, d: usize) -> Vec<f32> {
@@ -316,5 +317,96 @@ fn invalid_input_changes_nothing() -> Result<()> {
         .searcher()?
         .search(&[1.0, 0.0, 0.0], 3)?;
     assert_eq!(unchanged, searcher.search(&[1.0, 0.0, 0.0], 3)?);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires gfx1151"]
+fn mutations_use_each_handles_budget() -> Result<()> {
+    let device = Device::open(0)?;
+    // Initialize the shared writer without a budget and leave no tile slack.
+    let base = Corpus::build(&device, 3, rows(0..256, 3))?.compact()?;
+    let small = ResidencyManager::new(1024)?;
+    let limited = base.clone().with_workspace_budget(small.budget());
+    assert!(limited.append([[1.0, 0.0, 0.0]]).is_err());
+    assert_eq!(small.budget().reserved_bytes(), 0);
+
+    // A sibling without a budget must not inherit the failed call's ceiling.
+    let unbudgeted = base.append([[1.0, 0.0, 0.0]])?;
+    let tail_bytes = unbudgeted.memory_usage().total() - base.memory_usage().total();
+    assert!(tail_bytes > 1024);
+    let first = ResidencyManager::new(4 * tail_bytes)?;
+    let second = ResidencyManager::new(4 * tail_bytes)?;
+    let a = base
+        .clone()
+        .with_workspace_budget(first.budget())
+        .append([[0.0, 1.0, 0.0]])?;
+    assert_eq!(first.budget().reserved_bytes(), tail_bytes);
+    let b = base
+        .clone()
+        .with_workspace_budget(second.budget())
+        .append([[0.0, 0.0, 1.0]])?;
+    assert_eq!(first.budget().reserved_bytes(), tail_bytes);
+    assert_eq!(second.budget().reserved_bytes(), tail_bytes);
+    let c = base.append([[1.0, 1.0, 0.0]])?;
+    assert_eq!(first.budget().reserved_bytes(), tail_bytes);
+    assert_eq!(second.budget().reserved_bytes(), tail_bytes);
+    drop((a, b, c));
+    assert_eq!(first.budget().reserved_bytes(), 0);
+    assert_eq!(second.budget().reserved_bytes(), 0);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires gfx1151"]
+fn updates_reserve_conversion_before_consuming_rows() -> Result<()> {
+    use std::cell::Cell;
+    let device = Device::open(0)?;
+    let base = Corpus::build(&device, 3, rows(0..256, 3))?;
+    let ids = [0, 1, 2, 3];
+    let conversion_bytes =
+        ids.len() * (base.padded_dimensions() * 2 + 4) + base.padded_dimensions() * 2;
+    let small = ResidencyManager::new(conversion_bytes - 1)?;
+    let consumed = Cell::new(0);
+    let replacements = || {
+        ids.iter().map(|_| {
+            consumed.set(consumed.get() + 1);
+            [1.0, 0.0, 0.0]
+        })
+    };
+    assert!(
+        base.clone()
+            .with_workspace_budget(small.budget())
+            .update(&ids, replacements())
+            .is_err()
+    );
+    assert_eq!(consumed.get(), 0);
+    assert_eq!(small.budget().reserved_bytes(), 0);
+
+    // Conversion fits, but GPU staging does not; the host charge rolls back.
+    let staging_limit = ResidencyManager::new(conversion_bytes)?;
+    assert!(
+        base.clone()
+            .with_workspace_budget(staging_limit.budget())
+            .update(&ids, replacements())
+            .is_err()
+    );
+    assert_eq!(consumed.get(), ids.len());
+    assert_eq!(staging_limit.budget().reserved_bytes(), 0);
+
+    let enough = ResidencyManager::new(1_000_000)?;
+    let budget = enough.budget();
+    let corpus = base.with_workspace_budget(budget.clone());
+    // An invalid row also releases the reservation.
+    assert!(corpus.clone().update(&[0], [[0.0; 3]]).is_err());
+    assert_eq!(budget.reserved_bytes(), 0);
+    let replacements = ids.iter().map(|_| {
+        assert_eq!(budget.reserved_bytes(), conversion_bytes);
+        fp16(&[1.0, 0.0, 0.0])
+    });
+    let updated = corpus.update_fp16(&ids, replacements)?;
+    assert_eq!(budget.reserved_bytes(), 0);
+    let scores = updated.searcher()?.scores(&[1.0, 0.0, 0.0])?;
+    assert_eq!(&scores[..ids.len()], &[1.0; 4]);
     Ok(())
 }

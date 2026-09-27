@@ -165,13 +165,27 @@ impl Corpus {
             .writer
             .lock()
             .map_err(|_| invalid("corpus writer poisoned"))?;
-        if slot.is_none() {
-            *slot = Some(Lineage {
+        let mut lineage = match slot.take() {
+            Some(lineage) => lineage,
+            None => Lineage {
                 stream: self.stream()?,
                 scatter: None,
-            });
+            },
+        };
+        // Budget policy belongs to the calling handle, not the lineage. All
+        // previous work is complete, so a budgeted call can rebind the stream
+        // without losing its cached kernels. HRX has no budget-detach API;
+        // returning to an unbudgeted sibling therefore needs a fresh stream.
+        match &self.workspace_budget {
+            Some(budget) => lineage.stream = lineage.stream.with_memory_budget(budget.clone()),
+            None if lineage.stream.memory_budget().is_some() => {
+                lineage = Lineage {
+                    stream: self.stream()?,
+                    scatter: None,
+                };
+            }
+            None => {}
         }
-        let lineage = slot.as_mut().expect("writer stream");
         let mut writer = Writer {
             stream: &mut lineage.stream,
             scatter: &mut lineage.scatter,
@@ -185,9 +199,9 @@ impl Corpus {
             // and start the next mutation on a new stream.
             std::mem::forget(std::mem::take(&mut writer.allocations));
             std::mem::forget(std::mem::take(&mut writer.staging));
-            *slot = None;
             return Err(error);
         }
+        *slot = Some(lineage);
         result
     }
 
@@ -473,11 +487,6 @@ impl Corpus {
         if n == 0 {
             return Ok(self);
         }
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_unstable_by_key(|&i| ids[i]);
-        if order.windows(2).any(|w| ids[w[0]] == ids[w[1]]) {
-            return Err(invalid("updated IDs must be distinct"));
-        }
         let (dimensions, padded) = (self.dimensions(), self.padded_dimensions());
         if n > MAX_ELEMENTS / padded {
             return Err(invalid(
@@ -485,6 +494,18 @@ impl Corpus {
             ));
         }
         let stride = padded * 2;
+        // Retain the charge while conversion and GPU staging coexist. Reserve
+        // before allocating or consuming rows, as build and append do.
+        let _conversion = self
+            .workspace_budget
+            .as_ref()
+            .map(|budget| budget.reserve(n * (stride + 4) + stride))
+            .transpose()?;
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_unstable_by_key(|&i| ids[i]);
+        if order.windows(2).any(|w| ids[w[0]] == ids[w[1]]) {
+            return Err(invalid("updated IDs must be distinct"));
+        }
         // Stage rows in ascending ID order, so each shard's rows are one run
         // of the staging buffer, routed in a single scatter.
         let mut rank = vec![0; n];
