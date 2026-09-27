@@ -131,7 +131,7 @@ compatibility guarantee. Suggestions propose experiments, not proven speedups.
 Compiler/target identity and specialization must be held fixed or explicitly
 accounted for when comparing reports.
 
-## Qualification and remaining tuning work
+## Qualification and kernel tuning
 
 The 0.8.11 integration passes 49 existing GPU correctness tests and three new
 profiling/report tests. Coverage includes bitwise result parity, k=10/33/1,024,
@@ -146,21 +146,44 @@ Another GPU workload was active during those runs, so the latencies are
 Full compiler documents can be regenerated with the recorded commands; the
 checked-in record omits those large repeated trees.
 
-For the recorded 384-dimensional workload, the single-query scan uses 31 VGPRs
+For that integration's recorded 384-dimensional workload, the single-query scan uses 31 VGPRs
 and no LDS or private storage. The width-64 batch scan uses 29 VGPRs and 12,544
 bytes of LDS. Both report zero spills and 100% modeled occupancy; neither shows
 a resource residency cliff that would by itself justify reducing registers.
 The batch report attributes 64 static LDS waits to value dependencies and one
 to a barrier. Those counts identify code to inspect, not elapsed stall cycles.
 
+The subsequent [batch optimization measurements](../results/README.md#batch-kernel-tuning-with-hrx-0811)
+use those details to replace per-column scheduling fences with groups of eight
+ordered products, and unroll the cooperative staging loops. Inspecting
+`loom/src/loom/target/arch/amdgpu/lower/dot.c` explained the key distinction:
+the incoming accumulator uses a three-operand FMA, while subsequent products
+inside one dot can use tied FMACs, which the scheduler can pair. FP32 accumulation
+still follows increasing component order; no partial-sum reassociation is used.
+
+At width 64, the same 512 arithmetic terms now require 333 FMA/FMAC instructions
+per 32-component loop body, and code shrinks from 8,576 to 6,648 bytes. LDS
+dependency waits fall from 64 to 55 (full drains from 32 to 14). VGPRs rise to
+52 while reported spills, spill stores/reloads and private bytes remain zero;
+modeled occupancy stays 100%. These are static compiler/ISA counts. In
+particular, unrolling raises static staging-load counts without increasing
+runtime corpus traffic. Instrumented replays localize the gain to `batch_scan`;
+selection costs remain similar except when interrupted by the concurrent job.
+
+The comparison harness accepts `BASELINE_SOURCE` and `CANDIDATE_SOURCE`, checks
+IDs and score bits, and retains detailed reports from the actual loaded kernels
+plus three separate interleaved profiled replays. Its default baseline is the
+preserved per-column kernel from `abfcd5c`. All runs used another active GPU job;
+the records support improvements under that load, not isolated latency claims.
+
 Research in HRX-system at `244cd3801b` also covered affine-address fusion,
 loop-carried accumulator reuse, phased scheduling, explicit read-ahead and
 workgroup staging. The updated compiler applies its native optimizations to
-existing kernels automatically. Our batch scan already uses FP16 LDS storage,
-FP32 accumulators and source fences to bound live registers. Explicit pipelining
-is not a drop-in switch: source-order fences restrict read-ahead, and staging
-loops need their memory/recurrence contracts preserved. Any such rewrite needs
-oracle checks and an isolated performance comparison before changing defaults.
+existing kernels automatically. Explicit pipelining remains further work:
+staging loops need their memory/recurrence contracts preserved, with oracle
+checks and controlled comparisons for each candidate. Removing fences alone
+did not improve the measured 1M-row case; instruction counts and latency both
+matter when choosing a rewrite.
 
 Upstream references:
 

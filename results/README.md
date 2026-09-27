@@ -1,5 +1,91 @@
 # Measured results
 
+## Batch kernel tuning with HRX 0.8.11
+
+Local gfx1151, 2026-09-27/28, HRX 0.8.11 and published bundle
+`native-20260927-244cd3801b`, Rust 1.95.0-nightly. The baseline is the per-column
+kernel at `abfcd5c`, preserved in `tests/fixtures/batch_scan_columns.loom`.
+**Another GPU job was active throughout.** Each run alternated baseline and
+candidate on one shared generated corpus, with changing queries, three warmups,
+and k=5. No other hrxdb GPU work ran concurrently. These results demonstrate
+improvement under that load; clocks and competing workload were not controlled.
+
+| Corpus × dimensions | Queries | Samples | Baseline median | Eight-product median | Speedup |
+|---|---:|---:|---:|---:|---:|
+| 6,909,092 × 384, first run | 60 | 15 | 107.899 ms | 96.615 ms | 1.117× |
+| 6,909,092 × 384, repeat | 60 | 31 | 87.680 ms | 76.281 ms | 1.149× |
+| 1,000,000 × 384, first run | 60 | 25 | 13.310 ms | 10.778 ms | 1.235× |
+| 1,000,000 × 384, final source | 60 | 31 | 12.022 ms | 10.186 ms | 1.180× |
+| 1,000,000 × 768 | 60 | 25 | 22.763 ms | 19.002 ms | 1.198× |
+| 1,000,000 × 384 | 8 | 31 | 6.417 ms | 5.558 ms | 1.155× |
+| 1,000,000 × 384 | 16 | 31 | 6.318 ms | 5.912 ms | 1.069× |
+| 1,000,000 × 384 | 32 | 31 | 7.935 ms | 7.134 ms | 1.112× |
+
+The candidate won 15/15 and 30/31 ordinary timing pairs in the two large runs.
+Compare arms within each row: absolute latency changed substantially between
+runs. Complete 4,097-row × 513-dimensional score matrices also matched at
+batches 3/8/16/32/64. Small-shape timing was noisy (repeat speedups 1.01–1.39×),
+so it does not support a precise small-shape performance claim.
+
+Detailed compiler reports and ISA inspection motivated two changes: express
+eight ordered products as one dot so the compiler can reuse and pair
+accumulators, and unroll exact-trip cooperative staging loops. Corpus LDS
+storage remains FP16 and each FP32 accumulator still visits components in the
+same order. The initial explicitly expanded implementation and final shaped
+vector source produce byte-identical executables at width 64/dimension 384.
+
+| Static evidence, width 64 | Baseline | Eight-product |
+|---|---:|---:|
+| Emitted instructions, whole kernel | 1,304 | 1,082 |
+| Code bytes | 8,576 | 6,648 |
+| Three-operand FMA instructions | 512 | 64 |
+| Single / dual FMAC instructions | 0 / 0 | 90 / 179 |
+| Arithmetic instructions for the same 512 terms | 512 | 333 |
+| ALU delay instructions | 122 | 81 |
+| LDS value-dependency waits (full / partial) | 64 (32 / 32) | 55 (14 / 41) |
+| VGPRs / SGPRs | 29 / 26 | 52 / 26 |
+| Spill plans / spills / materialized reloads | 0 / 0 / 0 | 0 / 0 / 0 |
+| Private bytes / LDS bytes | 0 / 12,544 | 0 / 12,544 |
+| Modeled occupancy | 100% | 100% |
+
+Arithmetic counts describe the unrolled 32-component loop body. A dual FMAC
+performs two terms; the mathematical work is unchanged. These are static
+counts, not runtime counters or measured stall cycles. Unrolling staging
+increases its static load count without increasing dynamic corpus traffic.
+The width-8/16/32 variants use 104/68/49 VGPRs and zero spills; modeled occupancy
+remains at the baseline's 37%/62%/93%. Reducing register count alone was therefore
+not the right objective.
+
+Three separate profiled replays followed every ordinary timing window. In the
+large repeat, median summed `batch_scan` intervals fell from 69.217 to 54.229 ms,
+while selection stayed at 13.367 versus 13.117 ms. Contention produced outliers
+in both arms, including a candidate scan of 100.175 ms in the first large run;
+all samples are retained. Instrumented intervals include marker/barrier overhead
+and must not be subtracted from ordinary host latency.
+
+Removing fences alone was neutral at 1M rows (0.999×); adding staging unrolling
+gave 1.161× in its comparison. Two- and four-product grouping regressed in their
+runs. Groups of 16 and 32 improved only 1.017× and 1.020× over eight in single
+comparisons, with more registers; that was insufficient evidence to replace
+eight. The [tuning record](hrx-0.8.11-batch-tuning.json) retains these experiments,
+all raw host samples, stage samples, source/artifact hashes, absolute ISA counts,
+and complete representative detailed compiler reports. Reproduce full reports
+and raw per-command timestamps with:
+
+```sh
+HRX_OFFLINE=1 ROWS=6909092 DIM=384 BATCH=60 SAMPLES=31 OUTPUT=batch-tuning.json \
+  cargo test --locked --release --lib compare_batch_scan -- --ignored --nocapture
+```
+
+`BASELINE_SOURCE` and `CANDIDATE_SOURCE` accept alternative Loom files. By default
+the harness compares the preserved `abfcd5c` kernel with production. Both arms
+load the detailed artifacts they report. Every neighbor ID and score bit must
+agree, as must all materialized scores in the final tile (5,974,272 values for
+the large shape). The optimized kernel passes all 52 GPU correctness tests,
+including tails, FP16 extremes, ties, exclusions, sharding, device queries and
+snapshot updates. CPU tests, doctests, Clippy, rustdoc, Rust 1.91 checking,
+formatting and package verification also pass.
+
 ## HRX 0.8.11 profiling qualification
 
 The [profiler qualification record](hrx-0.8.11-profiling.json) contains single and
@@ -153,7 +239,7 @@ accepts this small-shape tradeoff for the measured large-corpus improvement;
 there is no shape-dependent fallback. Both runs retained bitwise-equal scores
 and identical result IDs. Their commands and samples are included in the record.
 
-The production kernel keeps the already-quantized corpus values in FP16 in
+That kernel kept the already-quantized corpus values in FP16 in
 workgroup memory, expands them in registers, and bounds operand lifetimes with
 `scf.schedule.fence` after each column. This compiler hint emits no instruction
 or hardware barrier. Queries remain FP32, and the FP32 multiply-accumulate order
@@ -172,7 +258,9 @@ exclusions, running top-k, and the 8,942,135 × 512 two-shard case pass as well.
 Reproduce the comparison against the preserved test fixture:
 
 ```sh
-ROWS=6909092 BATCH=60 SAMPLES=15 OUTPUT=batch-scan.json \
+BASELINE_SOURCE=tests/fixtures/batch_scan_baseline.loom \
+  CANDIDATE_SOURCE=tests/fixtures/batch_scan_columns.loom \
+  ROWS=6909092 BATCH=60 SAMPLES=15 OUTPUT=batch-scan.json \
   cargo test --release --lib compare_batch_scan -- --ignored --nocapture
 ```
 

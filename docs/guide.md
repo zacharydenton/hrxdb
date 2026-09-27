@@ -285,8 +285,9 @@ valid query. A one-query batch uses the single-query scan.
 
 The [matrix kernel](../kernels/batch_scan.loom) loads a tile of 64 corpus rows into workgroup memory and
 reuses it across the queries. Corpus values stay FP16 in workgroup memory and
-expand to FP32 in registers; normalized queries and accumulation stay FP32. A
-compiler scheduling fence bounds operand lifetimes to one column at a time.
+expand to FP32 in registers; normalized queries and accumulation stay FP32.
+Groups of eight ordered products let the compiler reuse accumulators and pair
+multiply-add instructions. Cooperative staging loops have unrolled trip counts.
 The increasing-component accumulation order differs from the single-query scan,
 so very close scores can change rank.
 Equal computed scores still prefer the lower insertion ID.

@@ -41,30 +41,39 @@ fn compare_batch_scan() -> Result<()> {
         db.reserve_batch(batch, k)?;
     }
     let width = batch.next_power_of_two().max(8);
-    let mut candidate_report = candidate
-        .compilation_reports()
-        .iter()
-        .find(|report| report.symbol == "batch_scan")
-        .unwrap()
-        .clone();
-    let mut spec = kernels::named_spec("batch_scan");
-    spec.set_config("db.batch", width.to_string());
-    spec.set_config("db.scan.dimensions", candidate.padded.to_string());
-    let (original, mut baseline_report) = compile(
-        &baseline.compiler,
-        &baseline.stream,
-        include_str!("../tests/fixtures/batch_scan_baseline.loom"),
-        spec,
+    let source = |name: &str, default: &str| -> Result<String> {
+        match std::env::var(name) {
+            Ok(path) => Ok(std::fs::read_to_string(path)?),
+            Err(_) => Ok(default.to_owned()),
+        }
+    };
+    let candidate_source = source("CANDIDATE_SOURCE", kernels::BATCH_SCAN)?;
+    let baseline_source = source(
+        "BASELINE_SOURCE",
+        include_str!("../tests/fixtures/batch_scan_columns.loom"),
     )?;
-    baseline
-        .batch
-        .as_mut()
-        .unwrap()
-        .plans
-        .iter_mut()
-        .find(|p| p.width == width)
-        .unwrap()
-        .scan = original;
+    let mut reports = Vec::new();
+    for (db, source) in [
+        (&mut baseline, &baseline_source),
+        (&mut candidate, &candidate_source),
+    ] {
+        let mut spec = kernels::named_spec("batch_scan");
+        spec.set_report(hrx::loom::ReportMode::Details);
+        spec.set_config("db.batch", width.to_string());
+        spec.set_config("db.scan.dimensions", db.padded.to_string());
+        let (kernel, report) = compile(&db.compiler, &db.stream, source, spec)?;
+        db.batch
+            .as_mut()
+            .unwrap()
+            .plans
+            .iter_mut()
+            .find(|p| p.width == width)
+            .unwrap()
+            .scan = kernel;
+        reports.push(report);
+    }
+    let mut candidate_report = reports.pop().unwrap();
+    let mut baseline_report = reports.pop().unwrap();
     let mut times = [Vec::new(), Vec::new()];
     let mut compared_neighbors = 0;
     for iteration in 0..samples + 3 {
@@ -124,6 +133,23 @@ fn compare_batch_scan() -> Result<()> {
     {
         assert_eq!(actual, expected, "final tile score mismatch at {at}");
     }
+    let query: Vec<_> = (0..batch)
+        .flat_map(|q| row((rows + 999 + q) as u32, dim))
+        .collect();
+    let mut profiles = [Vec::new(), Vec::new()];
+    for iteration in 0..3 {
+        for index in if iteration % 2 == 0 { [0, 1] } else { [1, 0] } {
+            let db = if index == 0 {
+                &mut baseline
+            } else {
+                &mut candidate
+            };
+            let expected = db.search_batch(&query, k)?;
+            let actual = db.profile_search(&query, k, &[])?;
+            assert_eq!(actual.neighbors, expected);
+            profiles[index].push(actual.execution.unwrap());
+        }
+    }
     let baseline_ms = median(&times[0]);
     let candidate_ms = median(&times[1]);
     // Preserve artifact hashes without exporting machine-specific cache paths.
@@ -149,6 +175,10 @@ fn compare_batch_scan() -> Result<()> {
         "scores_bitwise_equal": true, "ids_equal": true,
         "baseline_samples_ms": times[0], "candidate_samples_ms": times[1],
         "baseline_compiler": baseline_report, "candidate_compiler": candidate_report,
+        "baseline_source_digest": hrx::bundle::digest(baseline_source.as_bytes()),
+        "candidate_source_digest": hrx::bundle::digest(candidate_source.as_bytes()),
+        "baseline_profiles": profiles[0], "candidate_profiles": profiles[1],
+        "timing": "Ordinary completed searches, alternating order on one corpus; three warmups. Separate profiled replays after all timed windows; instrumentation is not part of ordinary latency.",
     });
     println!(
         "baseline {baseline_ms:.3} ms, candidate {candidate_ms:.3} ms, speedup {:.3}x; {score_count} final-tile scores bitwise equal",

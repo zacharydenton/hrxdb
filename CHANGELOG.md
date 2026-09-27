@@ -2,6 +2,12 @@
 
 ## Unreleased — cached native GPU memory, prepared search, live snapshots
 
+- Group batch-scan products into ordered eight-component dots and unroll
+  cooperative staging. At width 64, emitted arithmetic instructions fall from
+  512 to 333, code from 8,576 to 6,648 bytes, and LDS dependency waits from 64 to
+  55; spills remain zero. Interleaved 6.9M-row comparisons under GPU contention
+  measure 1.12–1.15× speedups with bitwise-identical scores. Retain the previous
+  kernel and detailed comparison harness for reproducible qualification.
 - Upgrade to HRX 0.8.11 and the published `native-20260927-244cd3801b` bundle.
   Move protobuf to 3.7.2 and remove the obsolete onnx-protobuf dependency.
 - Add `Searcher::profile_search` for explicit single/batch GPU timestamp

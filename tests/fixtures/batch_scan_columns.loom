@@ -58,12 +58,7 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
   %initial = vector.splat %f0 : vector<16xf32>
   %query_vectors = index.mul %i8, %batch : index
   %accumulated = scf.for %base = [%i0 to %d step %c32](%acc = %initial : vector<16xf32>) -> (vector<16xf32>) {
-    // Exact trip counts let the compiler unroll cooperative staging. Both
-    // widths divide the number of four-component corpus/query loads.
-    %x_iterations = index.div %c512, %threads : index
-    scf.for %xi = [%i0 to %x_iterations step %i1] unroll {
-      %xstep = index.mul %xi, %threads : index
-      %v = index.add %tid, %xstep : index
+    scf.for %v = [%tid to %c512 step %threads] {
       %r = index.div %v, %i8 : index
       %column_group = index.rem %v, %i8 : index
       %column = index.mul %column_group, %i4 : index
@@ -79,10 +74,7 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
         view.store %value, %xs[%col, %r] : f16, view<32x68xf16>
       }
     }
-    %q_iterations = index.div %query_vectors, %threads : index
-    scf.for %qi = [%i0 to %q_iterations step %i1] unroll {
-      %qstep = index.mul %qi, %threads : index
-      %v = index.add %tid, %qstep : index
+    scf.for %v = [%tid to %query_vectors step %threads] {
       %col = index.div %v, %query_groups : index
       %qgroup = index.rem %v, %query_groups : index
       %q = index.mul %qgroup, %i4 : index
@@ -91,41 +83,29 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
       vector.store %values, %qs[%col, %q] : vector<4xf32>, view<32x[%batch]xf32>
     }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-    // Eight ordered products share each incoming accumulator. After the first
-    // FMA, dot-local accumulators permit compact and paired FMAC instructions.
-    %empty_tile = vector.splat %f0 : vector<8x4xf32>
-    %empty_dot = vector.splat %f0 : vector<8xf32>
-    %next = scf.for %col = [%i0 to %c32 step %i8](%values = %acc : vector<16xf32>) -> (vector<16xf32>) unroll {
-      %xt, %qt = scf.for %j = [%i0 to %i8 step %i1](%xts = %empty_tile : vector<8x4xf32>, %qts = %empty_tile : vector<8x4xf32>) -> (vector<8x4xf32>, vector<8x4xf32>) unroll {
-        %column = index.add %col, %j : index
-        %halves = vector.load %xs[%column, %local_row_base] : view<32x68xf16> -> vector<4xf16>
-        %xvalues = vector.extf %halves : vector<4xf16> to vector<4xf32>
-        %qvalues = vector.load %qs[%column, %local_query_base] : view<32x[%batch]xf32> -> vector<4xf32>
-        %new_x = vector.insert %xvalues into %xts[%j] : vector<4xf32>, vector<8x4xf32>
-        %new_q = vector.insert %qvalues into %qts[%j] : vector<4xf32>, vector<8x4xf32>
-        scf.yield %new_x, %new_q : vector<8x4xf32>, vector<8x4xf32>
-      }
+    %next = scf.for %col = [%i0 to %c32 step %i1](%values = %acc : vector<16xf32>) -> (vector<16xf32>) unroll {
+      %xh = vector.load %xs[%col, %local_row_base] : view<32x68xf16> -> vector<4xf16>
+      %xvalues = vector.extf %xh : vector<4xf16> to vector<4xf32>
+      %qvalues = vector.load %qs[%col, %local_query_base] : view<32x[%batch]xf32> -> vector<4xf32>
       %updated = scf.for %r = [%i0 to %i4 step %i1](%rs = %values : vector<16xf32>) -> (vector<16xf32>) unroll {
+        %row = index.add %local_row_base, %r : index
+        %x = vector.extract %xvalues[%r] : vector<4xf32> -> f32
         %rbase = index.mul %r, %i4 : index
-        %vx = scf.for %j = [%i0 to %i8 step %i1](%xv = %empty_dot : vector<8xf32>) -> (vector<8xf32>) unroll {
-          %x = vector.extract %xt[%j, %r] : vector<8x4xf32> -> f32
-          %new_x = vector.insert %x into %xv[%j] : f32, vector<8xf32>
-          scf.yield %new_x : vector<8xf32>
-        }
         %new_row = scf.for %q = [%i0 to %i4 step %i1](%sums = %rs : vector<16xf32>) -> (vector<16xf32>) unroll {
-          %vy = scf.for %j = [%i0 to %i8 step %i1](%qvec = %empty_dot : vector<8xf32>) -> (vector<8xf32>) unroll {
-            %y = vector.extract %qt[%j, %q] : vector<8x4xf32> -> f32
-            %new_y = vector.insert %y into %qvec[%j] : f32, vector<8xf32>
-            scf.yield %new_y : vector<8xf32>
-          }
           %slot = index.add %rbase, %q : index
           %old = vector.extract %sums[%slot] : vector<16xf32> -> f32
-          %sum = vector.dotf %vx, %vy, %old : vector<8xf32>, vector<8xf32>, f32
+          %y = vector.extract %qvalues[%q] : vector<4xf32> -> f32
+          %vx = vector.splat %x : vector<1xf32>
+          %vy = vector.splat %y : vector<1xf32>
+          %sum = vector.dotf %vx, %vy, %old : vector<1xf32>, vector<1xf32>, f32
           %inserted = vector.insert %sum into %sums[%slot] : f32, vector<16xf32>
           scf.yield %inserted : vector<16xf32>
         }
         scf.yield %new_row : vector<16xf32>
       }
+      // Bound operand lifetimes to one column instead of hoisting loads from
+      // all 32 unrolled columns. This is a compiler hint, not a GPU barrier.
+      scf.schedule.fence
       scf.yield %updated : vector<16xf32>
     }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
