@@ -15,6 +15,10 @@ The library exposes a Rust API through
 **AMD Strix Halo (`gfx1151`) on Linux x86_64**. Rust 1.91+ is required; other GPUs
 and operating systems are not supported for execution in this release.
 
+An opt-in [NPU-only search prototype](docs/npu.md) runs FP16 scoring and top-k
+on Strix Halo NPU5. It is an exploration tool, with measured performance and
+native-context limits; the public corpus/search APIs still use the GPU.
+
 Unified memory makes large resident collections possible without a separate
 discrete GPU memory pool. hrxdb builds around that model: ingest once, reuse
 the corpus across searches and custom scoring, and read back only what the

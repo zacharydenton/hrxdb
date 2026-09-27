@@ -1,5 +1,22 @@
 # Measured results
 
+## HRX 0.8.11 and NPU exploration
+
+The [2026-09-27 upgrade comparison](hrx-0.8.11-upgrade.json) checks HRX 0.8.7
+against 0.8.11 on gfx1151, with fresh processes and ten samples per arm. Run order
+alternates by shape. Shapes cover 100K × 384 and 1M × 768, each with one and
+sixty queries, k=10. No measured median regression exceeded 5%; the largest was
+1.49%. Clock variation limits interpretation, particularly on small shapes.
+All 49 GPU correctness tests also passed on the published 0.8.11 bundle.
+
+The [NPU report](../docs/npu.md) documents exact FP16 primitives, NPU-only
+scoring/selection, GPU-denied execution, and small-shape timings. Its
+[qualification matrix](npu-qualification.json) retains all eight failed
+100K/1M-row attempts: native context creation failed before execution. These
+are scaling blockers, not latency measurements or production NPU support.
+
+## Original scan measurements
+
 Local gfx1151, 2026-09-11. One query at a time, 10M × 384 FP16 corpus, cosine,
 k=10, three warmups and 30 measured queries per configuration. No other hrxdb
 GPU test or benchmark ran concurrently. Other system activity and clocks were

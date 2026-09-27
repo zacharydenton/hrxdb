@@ -2,6 +2,15 @@
 
 ## Unreleased — cached native GPU memory, prepared search, live snapshots
 
+- Upgrade to HRX 0.8.11 and its published `native-20260927-244cd3801b` bundle;
+  qualify all 49 GPU correctness tests and retain Rust 1.91 compatibility.
+  The lockfile also moves protobuf to 3.7.2 and removes onnx-protobuf.
+- Add the opt-in `npu` feature, experimental `npu_search_probe` example,
+  hardware tests, and a reproducible qualification matrix. The prototype keeps
+  FP16 values and performs scoring, selection, and merging on the NPU with no
+  GPU requirement. Document its scalar performance and native-context scaling
+  limits in `docs/npu.md`; public search APIs remain GPU-backed.
+
 - Add `Corpus::append` and `append_fp16`, returning a snapshot with new rows at
   the next insertion IDs and sharing every existing allocation. Rows fill a
   geometric tail reserve guarded by an atomic claim, so repeated appends keep

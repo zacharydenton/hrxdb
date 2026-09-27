@@ -1,0 +1,608 @@
+{
+  "hrx_version": "0.8.11",
+  "bundle": "native-20260927-244cd3801b",
+  "scope": "Published bundle; sequential cases; 3 warmups and 10 samples; CPU validation precedes timings; failures are not performance measurements.",
+  "cases": [
+    {
+      "rows": 1033,
+      "dimensions": 129,
+      "batch": 1,
+      "command": [
+        "target/release/examples/npu_search_probe",
+        "--rows",
+        "1033",
+        "--dimensions",
+        "129",
+        "--batch",
+        "1",
+        "--k",
+        "10",
+        "--samples",
+        "10",
+        "--warmups",
+        "3",
+        "--max-seconds",
+        "75",
+        "--compare-gpu"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.8483796709915623,
+      "stderr": "Prepared NPU-only 1033 x 129, batch 1, k 10: 255.4 ms\nValidation passed: max score error 1.1920929e-7; diagnostic search 34.6 ms\nsample 0: NPU 34.07 ms\nsample 1: NPU 33.99 ms\nsample 2: NPU 34.04 ms\nsample 3: NPU 34.13 ms\nsample 4: NPU 34.20 ms\nsample 5: NPU 34.21 ms\nsample 6: NPU 34.10 ms\nsample 7: NPU 34.01 ms\nsample 8: NPU 34.11 ms\nsample 9: NPU 34.18 ms\nsample 10: NPU 34.06 ms\nsample 11: NPU 33.95 ms\nsample 12: NPU 33.95 ms\n",
+      "status": "passed",
+      "result": {
+        "batch": 1,
+        "dimensions": 129,
+        "direct_fp16": false,
+        "gpu_samples_ms": [
+          0.034279000000000004,
+          0.035589,
+          0.034739,
+          0.034949,
+          0.046049,
+          0.043828,
+          0.034359,
+          0.034789,
+          0.025369,
+          0.025809
+        ],
+        "gpu_top_k_overlap": {
+          "common_ids": 10,
+          "total_ids": 10
+        },
+        "host_encoding_ms": 0.8567870000000001,
+        "hrx_version": "0.8.11",
+        "k": 10,
+        "max_score_error": 1.1920928955078125e-07,
+        "median_ms": 34.096412,
+        "npu_only_trace": true,
+        "p95_ms": 34.205597999999995,
+        "prepare_ms": 255.40405199999998,
+        "rows": 1033,
+        "samples": [
+          {
+            "scan_ms": 32.850475,
+            "selection_ms": 1.265706,
+            "total_ms": 34.130361
+          },
+          {
+            "scan_ms": 32.916464000000005,
+            "selection_ms": 1.271545,
+            "total_ms": 34.201979
+          },
+          {
+            "scan_ms": 32.860594,
+            "selection_ms": 1.330465,
+            "total_ms": 34.205597999999995
+          },
+          {
+            "scan_ms": 32.867104,
+            "selection_ms": 1.215638,
+            "total_ms": 34.096412
+          },
+          {
+            "scan_ms": 32.820606,
+            "selection_ms": 1.169539,
+            "total_ms": 34.004554
+          },
+          {
+            "scan_ms": 32.836146,
+            "selection_ms": 1.253366,
+            "total_ms": 34.104292
+          },
+          {
+            "scan_ms": 32.821385,
+            "selection_ms": 1.3386149999999999,
+            "total_ms": 34.17494
+          },
+          {
+            "scan_ms": 32.857856,
+            "selection_ms": 1.184887,
+            "total_ms": 34.056833000000005
+          },
+          {
+            "scan_ms": 32.761487,
+            "selection_ms": 1.177319,
+            "total_ms": 33.946025
+          },
+          {
+            "scan_ms": 32.76475799999999,
+            "selection_ms": 1.180188,
+            "total_ms": 33.951665999999996
+          }
+        ],
+        "scope": "Host wall time with completion: sequential per-query NPU scan, select, merge, final readback; no compilation or ingestion. Scan/selection timings include submission and waits. Diagnostic scores read only during validation. CPU performs ingestion, query normalization and validation.",
+        "statistics": {
+          "allocations": 10,
+          "cache_maintenance_bytes": 582016,
+          "completions": 56,
+          "copied_bytes": 0,
+          "copy_streams_created": 0,
+          "device_copied_bytes": 0,
+          "downloaded_bytes": 0,
+          "imports": 0,
+          "live_bytes": 550528,
+          "native_graphs_prepared": 0,
+          "peak_bytes": 550528,
+          "submissions": 56,
+          "uploaded_bytes": 0
+        },
+        "top_k_matches_sort_of_npu_scores": true,
+        "trace_regions": 6
+      }
+    },
+    {
+      "rows": 4096,
+      "dimensions": 768,
+      "batch": 1,
+      "command": [
+        "target/release/examples/npu_search_probe",
+        "--rows",
+        "4096",
+        "--dimensions",
+        "768",
+        "--batch",
+        "1",
+        "--k",
+        "10",
+        "--samples",
+        "10",
+        "--warmups",
+        "3",
+        "--max-seconds",
+        "75",
+        "--compare-gpu"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 5.793800243001897,
+      "stderr": "Prepared NPU-only 4096 x 768, batch 1, k 10: 140.7 ms\nValidation passed: max score error 1.4901161e-7; diagnostic search 393.3 ms\nsample 0: NPU 391.39 ms\nsample 1: NPU 391.18 ms\nsample 2: NPU 391.34 ms\nsample 3: NPU 391.64 ms\nsample 4: NPU 391.10 ms\nsample 5: NPU 390.82 ms\nsample 6: NPU 391.67 ms\nsample 7: NPU 389.52 ms\nsample 8: NPU 391.44 ms\nsample 9: NPU 390.68 ms\nsample 10: NPU 391.14 ms\nsample 11: NPU 390.51 ms\nsample 12: NPU 391.93 ms\n",
+      "status": "passed",
+      "result": {
+        "batch": 1,
+        "dimensions": 768,
+        "direct_fp16": false,
+        "gpu_samples_ms": [
+          0.049688,
+          0.045499,
+          0.08291799999999999,
+          0.038769,
+          0.039569,
+          0.049719000000000006,
+          0.049059,
+          0.039508999999999996,
+          0.053358,
+          0.051479
+        ],
+        "gpu_top_k_overlap": {
+          "common_ids": 10,
+          "total_ids": 10
+        },
+        "host_encoding_ms": 15.97291,
+        "hrx_version": "0.8.11",
+        "k": 10,
+        "max_score_error": 1.4901161193847656e-07,
+        "median_ms": 391.095707,
+        "npu_only_trace": true,
+        "p95_ms": 391.92409499999997,
+        "prepare_ms": 140.70686099999998,
+        "rows": 4096,
+        "samples": [
+          {
+            "scan_ms": 386.548099,
+            "selection_ms": 5.063724000000001,
+            "total_ms": 391.63381200000003
+          },
+          {
+            "scan_ms": 386.474433,
+            "selection_ms": 4.604555,
+            "total_ms": 391.095707
+          },
+          {
+            "scan_ms": 386.25647699999996,
+            "selection_ms": 4.536758,
+            "total_ms": 390.813735
+          },
+          {
+            "scan_ms": 387.268541,
+            "selection_ms": 4.385551,
+            "total_ms": 391.671722
+          },
+          {
+            "scan_ms": 385.49682899999993,
+            "selection_ms": 4.008022,
+            "total_ms": 389.51667000000003
+          },
+          {
+            "scan_ms": 386.385883,
+            "selection_ms": 5.030646,
+            "total_ms": 391.433749
+          },
+          {
+            "scan_ms": 386.433133,
+            "selection_ms": 4.221786,
+            "total_ms": 390.676879
+          },
+          {
+            "scan_ms": 386.32047500000004,
+            "selection_ms": 4.804520999999999,
+            "total_ms": 391.140776
+          },
+          {
+            "scan_ms": 385.786161,
+            "selection_ms": 4.701442999999999,
+            "total_ms": 390.50406300000003
+          },
+          {
+            "scan_ms": 386.91261000000003,
+            "selection_ms": 4.991595,
+            "total_ms": 391.92409499999997
+          }
+        ],
+        "scope": "Host wall time with completion: sequential per-query NPU scan, select, merge, final readback; no compilation or ingestion. Scan/selection timings include submission and waits. Diagnostic scores read only during validation. CPU performs ingestion, query normalization and validation.",
+        "statistics": {
+          "allocations": 14,
+          "cache_maintenance_bytes": 6410496,
+          "completions": 112,
+          "copied_bytes": 0,
+          "copy_streams_created": 0,
+          "device_copied_bytes": 0,
+          "downloaded_bytes": 0,
+          "imports": 0,
+          "live_bytes": 6336000,
+          "native_graphs_prepared": 0,
+          "peak_bytes": 6336000,
+          "submissions": 112,
+          "uploaded_bytes": 0
+        },
+        "top_k_matches_sort_of_npu_scores": true,
+        "trace_regions": 12
+      }
+    },
+    {
+      "rows": 256,
+      "dimensions": 384,
+      "batch": 60,
+      "command": [
+        "target/release/examples/npu_search_probe",
+        "--rows",
+        "256",
+        "--dimensions",
+        "384",
+        "--batch",
+        "60",
+        "--k",
+        "10",
+        "--samples",
+        "10",
+        "--warmups",
+        "3",
+        "--max-seconds",
+        "75",
+        "--compare-gpu"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 10.978038910005125,
+      "stderr": "Prepared NPU-only 256 x 384, batch 60, k 10: 135.2 ms\nValidation passed: max score error 1.4901161e-7; diagnostic search 763.7 ms\nsample 0: NPU 762.16 ms\nsample 1: NPU 760.55 ms\nsample 2: NPU 764.90 ms\nsample 3: NPU 757.61 ms\nsample 4: NPU 759.22 ms\nsample 5: NPU 780.02 ms\nsample 6: NPU 764.29 ms\nsample 7: NPU 761.61 ms\nsample 8: NPU 760.63 ms\nsample 9: NPU 762.70 ms\nsample 10: NPU 762.63 ms\nsample 11: NPU 757.68 ms\nsample 12: NPU 765.93 ms\n",
+      "status": "passed",
+      "result": {
+        "batch": 60,
+        "dimensions": 384,
+        "direct_fp16": false,
+        "gpu_samples_ms": [
+          0.692121,
+          0.410719,
+          0.550115,
+          0.862387,
+          0.625383,
+          0.511436,
+          0.6246729999999999,
+          0.444438,
+          0.6232329999999999,
+          0.456958
+        ],
+        "gpu_top_k_overlap": {
+          "common_ids": 600,
+          "total_ids": 600
+        },
+        "host_encoding_ms": 0.8400070000000001,
+        "hrx_version": "0.8.11",
+        "k": 10,
+        "max_score_error": 1.4901161193847656e-07,
+        "median_ms": 761.55529,
+        "npu_only_trace": true,
+        "p95_ms": 780.004423,
+        "prepare_ms": 135.18602900000002,
+        "rows": 256,
+        "samples": [
+          {
+            "scan_ms": 732.3904049999998,
+            "selection_ms": 24.927819999999993,
+            "total_ms": 757.557018
+          },
+          {
+            "scan_ms": 732.5521540000002,
+            "selection_ms": 26.33397099999999,
+            "total_ms": 759.167525
+          },
+          {
+            "scan_ms": 743.6307840000001,
+            "selection_ms": 35.755586,
+            "total_ms": 780.004423
+          },
+          {
+            "scan_ms": 735.373816,
+            "selection_ms": 28.546022000000004,
+            "total_ms": 764.2762170000001
+          },
+          {
+            "scan_ms": 733.4348439999999,
+            "selection_ms": 27.795176000000005,
+            "total_ms": 761.55529
+          },
+          {
+            "scan_ms": 733.6150999999998,
+            "selection_ms": 26.647672999999998,
+            "total_ms": 760.576057
+          },
+          {
+            "scan_ms": 734.4074929999998,
+            "selection_ms": 27.955356000000002,
+            "total_ms": 762.68662
+          },
+          {
+            "scan_ms": 734.4256130000002,
+            "selection_ms": 27.749529999999996,
+            "total_ms": 762.585793
+          },
+          {
+            "scan_ms": 731.8444490000002,
+            "selection_ms": 25.588321000000004,
+            "total_ms": 757.662475
+          },
+          {
+            "scan_ms": 736.2498639999999,
+            "selection_ms": 29.235305,
+            "total_ms": 765.915493
+          }
+        ],
+        "scope": "Host wall time with completion: sequential per-query NPU scan, select, merge, final readback; no compilation or ingestion. Scan/selection timings include submission and waits. Diagnostic scores read only during validation. CPU performs ingestion, query normalization and validation.",
+        "statistics": {
+          "allocations": 8,
+          "cache_maintenance_bytes": 2096512,
+          "completions": 1680,
+          "copied_bytes": 0,
+          "copy_streams_created": 0,
+          "device_copied_bytes": 0,
+          "downloaded_bytes": 0,
+          "imports": 0,
+          "live_bytes": 208896,
+          "native_graphs_prepared": 0,
+          "peak_bytes": 208896,
+          "submissions": 1680,
+          "uploaded_bytes": 0
+        },
+        "top_k_matches_sort_of_npu_scores": true,
+        "trace_regions": 180
+      }
+    },
+    {
+      "rows": 100000,
+      "dimensions": 384,
+      "batch": 1,
+      "command": [
+        "target/release/examples/npu_search_probe",
+        "--rows",
+        "100000",
+        "--dimensions",
+        "384",
+        "--batch",
+        "1",
+        "--k",
+        "10",
+        "--samples",
+        "10",
+        "--warmups",
+        "3",
+        "--max-seconds",
+        "75",
+        "--compare-gpu"
+      ],
+      "exit_code": 1,
+      "wall_seconds": 0.36046414299926255,
+      "stderr": "Error: Message(\"NPU selection preparation at row 5120, after 5 prepared chunks: native executable executable failed (1): /repo/native/amdf/xdna.c:272: INVALID_ARGUMENT; [context create] libamdf ERRNO status 0x00000016\")\n",
+      "status": "failed"
+    },
+    {
+      "rows": 100000,
+      "dimensions": 384,
+      "batch": 60,
+      "command": [
+        "target/release/examples/npu_search_probe",
+        "--rows",
+        "100000",
+        "--dimensions",
+        "384",
+        "--batch",
+        "60",
+        "--k",
+        "10",
+        "--samples",
+        "10",
+        "--warmups",
+        "3",
+        "--max-seconds",
+        "75",
+        "--compare-gpu"
+      ],
+      "exit_code": 1,
+      "wall_seconds": 0.3906670690048486,
+      "stderr": "Error: Message(\"NPU selection preparation at row 5120, after 5 prepared chunks: native executable executable failed (1): /repo/native/amdf/xdna.c:272: INVALID_ARGUMENT; [context create] libamdf ERRNO status 0x00000016\")\n",
+      "status": "failed"
+    },
+    {
+      "rows": 100000,
+      "dimensions": 768,
+      "batch": 1,
+      "command": [
+        "target/release/examples/npu_search_probe",
+        "--rows",
+        "100000",
+        "--dimensions",
+        "768",
+        "--batch",
+        "1",
+        "--k",
+        "10",
+        "--samples",
+        "10",
+        "--warmups",
+        "3",
+        "--max-seconds",
+        "75",
+        "--compare-gpu"
+      ],
+      "exit_code": 1,
+      "wall_seconds": 0.5443991490028566,
+      "stderr": "Error: Message(\"NPU selection preparation at row 5120, after 5 prepared chunks: native executable executable failed (1): /repo/native/amdf/xdna.c:272: INVALID_ARGUMENT; [context create] libamdf ERRNO status 0x00000016\")\n",
+      "status": "failed"
+    },
+    {
+      "rows": 100000,
+      "dimensions": 768,
+      "batch": 60,
+      "command": [
+        "target/release/examples/npu_search_probe",
+        "--rows",
+        "100000",
+        "--dimensions",
+        "768",
+        "--batch",
+        "60",
+        "--k",
+        "10",
+        "--samples",
+        "10",
+        "--warmups",
+        "3",
+        "--max-seconds",
+        "75",
+        "--compare-gpu"
+      ],
+      "exit_code": 1,
+      "wall_seconds": 0.5422218080057064,
+      "stderr": "Error: Message(\"NPU selection preparation at row 5120, after 5 prepared chunks: native executable executable failed (1): /repo/native/amdf/xdna.c:272: INVALID_ARGUMENT; [context create] libamdf ERRNO status 0x00000016\")\n",
+      "status": "failed"
+    },
+    {
+      "rows": 1000000,
+      "dimensions": 384,
+      "batch": 1,
+      "command": [
+        "target/release/examples/npu_search_probe",
+        "--rows",
+        "1000000",
+        "--dimensions",
+        "384",
+        "--batch",
+        "1",
+        "--k",
+        "10",
+        "--samples",
+        "10",
+        "--warmups",
+        "3",
+        "--max-seconds",
+        "75",
+        "--compare-gpu"
+      ],
+      "exit_code": 1,
+      "wall_seconds": 1.9865577609889442,
+      "stderr": "Error: Message(\"NPU selection preparation at row 5120, after 5 prepared chunks: native executable executable failed (1): /repo/native/amdf/xdna.c:272: INVALID_ARGUMENT; [context create] libamdf ERRNO status 0x00000016\")\n",
+      "status": "failed"
+    },
+    {
+      "rows": 1000000,
+      "dimensions": 384,
+      "batch": 60,
+      "command": [
+        "target/release/examples/npu_search_probe",
+        "--rows",
+        "1000000",
+        "--dimensions",
+        "384",
+        "--batch",
+        "60",
+        "--k",
+        "10",
+        "--samples",
+        "10",
+        "--warmups",
+        "3",
+        "--max-seconds",
+        "75",
+        "--compare-gpu"
+      ],
+      "exit_code": 1,
+      "wall_seconds": 2.0014008919970365,
+      "stderr": "Error: Message(\"NPU selection preparation at row 5120, after 5 prepared chunks: native executable executable failed (1): /repo/native/amdf/xdna.c:272: INVALID_ARGUMENT; [context create] libamdf ERRNO status 0x00000016\")\n",
+      "status": "failed"
+    },
+    {
+      "rows": 1000000,
+      "dimensions": 768,
+      "batch": 1,
+      "command": [
+        "target/release/examples/npu_search_probe",
+        "--rows",
+        "1000000",
+        "--dimensions",
+        "768",
+        "--batch",
+        "1",
+        "--k",
+        "10",
+        "--samples",
+        "10",
+        "--warmups",
+        "3",
+        "--max-seconds",
+        "75",
+        "--compare-gpu"
+      ],
+      "exit_code": 1,
+      "wall_seconds": 3.7936563870025566,
+      "stderr": "Error: Message(\"NPU selection preparation at row 5120, after 5 prepared chunks: native executable executable failed (1): /repo/native/amdf/xdna.c:272: INVALID_ARGUMENT; [context create] libamdf ERRNO status 0x00000016\")\n",
+      "status": "failed"
+    },
+    {
+      "rows": 1000000,
+      "dimensions": 768,
+      "batch": 60,
+      "command": [
+        "target/release/examples/npu_search_probe",
+        "--rows",
+        "1000000",
+        "--dimensions",
+        "768",
+        "--batch",
+        "60",
+        "--k",
+        "10",
+        "--samples",
+        "10",
+        "--warmups",
+        "3",
+        "--max-seconds",
+        "75",
+        "--compare-gpu"
+      ],
+      "exit_code": 1,
+      "wall_seconds": 3.867579786994611,
+      "stderr": "Error: Message(\"NPU selection preparation at row 5120, after 5 prepared chunks: native executable executable failed (1): /repo/native/amdf/xdna.c:272: INVALID_ARGUMENT; [context create] libamdf ERRNO status 0x00000016\")\n",
+      "status": "failed"
+    }
+  ],
+  "date": "2026-09-27",
+  "target": "Strix Halo NPU5",
+  "kernel": "7.2.7-arch1-1",
+  "rustc": "rustc 1.95.0-nightly (5fb2ff861 2026-02-21)"
+}

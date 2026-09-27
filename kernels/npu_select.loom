@@ -1,0 +1,57 @@
+// Experimental NPU top-k over interleaved FP32 score bits and u32 IDs.
+aie2p.target<array> @array_target
+aie2p.target<core> @core_target
+config.decl @select.items : %value: index where [range(%value, 8, 4096), mul(%value, 8)]
+config.decl @select.k : %value: index where [range(%value, 1, 1024)]
+pipeline.def<kernel> public retain target(@array_target) @select() launch(%input: buffer, %output: buffer) {
+  %n = config.get @select.items : index
+  %k = config.get @select.k : index
+  %one = index.constant 1 : index
+  %base = index.constant 0 : offset
+  %workers = group.create %one : index -> group
+  %iv = buffer.view %input[%base] : buffer -> view<[%n]x2xi32>
+  %ov = buffer.view %output[%base] : buffer -> view<[%k]x2xi32>
+  %xs = pipeline.read %iv on %workers : view<[%n]x2xi32>, group -> pipeline.flow<tile<[%n]x2xi32>>
+  %ys = pipeline.stage @top_k on %workers(%xs) : (group, pipeline.flow<tile<[%n]x2xi32>>) -> (pipeline.flow<tile<[%k]x2xi32>>)
+  pipeline.write %ys to %ov : pipeline.flow<tile<[%k]x2xi32>>, view<[%k]x2xi32>
+  pipeline.return
+}
+func.def target(@core_target) @top_k(%input: buffer, %output: buffer) {
+  %x, %y = buffer.assume.alignment %input, %output {minimum_alignment = 64} : buffer, buffer
+  %n = config.get @select.items : index
+  %k = config.get @select.k : index
+  %base = index.constant 0 : offset
+  %iv = buffer.view %x[%base] : buffer -> view<[%n]x2xi32>
+  %ov = buffer.view %y[%base] : buffer -> view<[%k]x2xi32>
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %negbits = scalar.constant -8388608 : i32
+  %missing = scalar.constant -1 : i32
+  scf.for %r = [%zero to %k step %one] {
+    view.store %negbits, %ov[%r, %zero] : i32, view<[%k]x2xi32>
+    view.store %missing, %ov[%r, %one] : i32, view<[%k]x2xi32>
+  }
+  scf.for %i = [%zero to %n step %one] {
+    %score = view.load %iv[%i, %zero] : view<[%n]x2xi32> -> i32
+    %id = view.load %iv[%i, %one] : view<[%n]x2xi32> -> i32
+    %discard_score, %discard_id = scf.for %r = [%zero to %k step %one](%s = %score : i32, %candidate = %id : i32) -> (i32, i32) {
+      %old_score = view.load %ov[%r, %zero] : view<[%k]x2xi32> -> i32
+      %old_id = view.load %ov[%r, %one] : view<[%k]x2xi32> -> i32
+      %f = scalar.bitcast %s : i32 to f32
+      %old = scalar.bitcast %old_score : i32 to f32
+      %greater = scalar.cmpf ogt, %f, %old : f32
+      %equal = scalar.cmpf oeq, %f, %old : f32
+      %earlier = scalar.cmpi ult, %candidate, %old_id : i32
+      %tie = scalar.andi %equal, %earlier : i1
+      %better = scalar.ori %greater, %tie : i1
+      %keep_s = scf.select %better, %s, %old_score : i32
+      %keep_id = scf.select %better, %candidate, %old_id : i32
+      %next_s = scf.select %better, %old_score, %s : i32
+      %next_id = scf.select %better, %old_id, %candidate : i32
+      view.store %keep_s, %ov[%r, %zero] : i32, view<[%k]x2xi32>
+      view.store %keep_id, %ov[%r, %one] : i32, view<[%k]x2xi32>
+      scf.yield %next_s, %next_id : i32, i32
+    }
+  }
+  func.return
+}

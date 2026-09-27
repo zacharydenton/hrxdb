@@ -1,0 +1,81 @@
+{
+  "date": "2026-09-27",
+  "hrx_version": "0.8.11",
+  "bundle": "native-20260927-244cd3801b",
+  "primitives": {
+    "bitwise_conversion_arithmetic_and_comparison": true,
+    "elapsed_ms": 23.085497,
+    "finite_half_encodings": 63488,
+    "replays": 2,
+    "statistics": {
+      "allocations": 3,
+      "cache_maintenance_bytes": 3682304,
+      "completions": 2,
+      "copied_bytes": 0,
+      "copy_streams_created": 0,
+      "device_copied_bytes": 0,
+      "downloaded_bytes": 0,
+      "imports": 0,
+      "live_bytes": 1396736,
+      "native_graphs_prepared": 0,
+      "peak_bytes": 1396736,
+      "submissions": 2,
+      "uploaded_bytes": 0
+    },
+    "target": "amd.xdna.strix_halo.17f0_11"
+  },
+  "gpu_denied": {
+    "command": "bwrap --bind / / --dev /dev --dev-bind /dev/accel /dev/accel -- /bin/sh -c 'test ! -e /dev/kfd && test ! -e /dev/dri && exec target/release/examples/npu_search_probe --rows 1033 --dimensions 129 --samples 1 --warmups 0'",
+    "result": {
+      "batch": 1,
+      "dimensions": 129,
+      "direct_fp16": false,
+      "gpu_samples_ms": [],
+      "gpu_top_k_overlap": null,
+      "host_encoding_ms": 0.779459,
+      "hrx_version": "0.8.11",
+      "k": 10,
+      "max_score_error": 1.1920928955078125e-07,
+      "median_ms": 34.630266999999996,
+      "npu_only_trace": true,
+      "p95_ms": 34.630266999999996,
+      "prepare_ms": 256.194995,
+      "rows": 1033,
+      "samples": [
+        {
+          "scan_ms": 33.09017800000001,
+          "selection_ms": 1.525019,
+          "total_ms": 34.630266999999996
+        }
+      ],
+      "scope": "Host wall time with completion: sequential per-query NPU scan, select, merge, final readback; no compilation or ingestion. Scan/selection timings include submission and waits. Diagnostic scores read only during validation. CPU performs ingestion, query normalization and validation.",
+      "statistics": {
+        "allocations": 10,
+        "cache_maintenance_bytes": 568192,
+        "completions": 8,
+        "copied_bytes": 0,
+        "copy_streams_created": 0,
+        "device_copied_bytes": 0,
+        "downloaded_bytes": 0,
+        "imports": 0,
+        "live_bytes": 550528,
+        "native_graphs_prepared": 0,
+        "peak_bytes": 550528,
+        "submissions": 8,
+        "uploaded_bytes": 0
+      },
+      "top_k_matches_sort_of_npu_scores": true,
+      "trace_regions": 6
+    }
+  },
+  "offset_reproducer": {
+    "command": [
+      "target/release/examples/npu_search_probe",
+      "--primitives",
+      "--binding-offset",
+      "64"
+    ],
+    "exit_code": 1,
+    "stderr": "Error: Backend { backend: \"native executable\", operation: \"executable\", code: 1, message: \"hrx-source/experimental/xdna/executable.c:92: OUT_OF_RANGE; XDNA binding 0 offset 64 is outside [0, 0]\" }\n"
+  }
+}

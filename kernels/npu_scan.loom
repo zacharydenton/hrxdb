@@ -1,0 +1,66 @@
+// Eight FP16 rows per record. Query DMA repeats the same FP32 query;
+// metadata holds eight inverse norms and eight global IDs as i32 words.
+// Negative inverse norms mask exclusions and padded rows.
+aie2p.target<array> @array_target
+aie2p.target<core> @core_target
+config.decl @scan.records : %value: index where [range(%value, 1, 512)]
+config.decl @scan.dimensions : %value: index where [range(%value, 128, 1024), mul(%value, 128)]
+pipeline.def<kernel> public retain target(@array_target) @scan() launch(%input: buffer, %query: buffer, %metadata: buffer, %output: buffer) {
+  %records = config.get @scan.records : index
+  %d = config.get @scan.dimensions : index
+  %one = index.constant 1 : index
+  %base = index.constant 0 : offset
+  %workers = group.create %one : index -> group
+  %iv = buffer.view %input[%base] : buffer -> view<[%records]x8x[%d]xf16>
+  %qv = buffer.view %query[%base] : buffer -> view<[%records]x[%d]xf32, #encoding.layout.strided<strides=[0, 1]>>
+  %mv = buffer.view %metadata[%base] : buffer -> view<[%records]x16xi32>
+  %ov = buffer.view %output[%base] : buffer -> view<[%records]x8x2xi32>
+  %xs = pipeline.read %iv on %workers : view<[%records]x8x[%d]xf16>, group -> pipeline.flow<tile<8x[%d]xf16>>
+  %qs = pipeline.read %qv on %workers : view<[%records]x[%d]xf32, #encoding.layout.strided<strides=[0, 1]>>, group -> pipeline.flow<tile<[%d]xf32>>
+  %ms = pipeline.read %mv on %workers : view<[%records]x16xi32>, group -> pipeline.flow<tile<16xi32>>
+  %ys = pipeline.stage @score_rows on %workers(%xs, %qs, %ms) : (group, pipeline.flow<tile<8x[%d]xf16>>, pipeline.flow<tile<[%d]xf32>>, pipeline.flow<tile<16xi32>>) -> (pipeline.flow<tile<8x2xi32>>)
+  pipeline.write %ys to %ov : pipeline.flow<tile<8x2xi32>>, view<[%records]x8x2xi32>
+  pipeline.return
+}
+func.def target(@core_target) @score_rows(%input: buffer, %query: buffer, %metadata: buffer, %output: buffer) {
+  %x, %q, %meta, %y = buffer.assume.alignment %input, %query, %metadata, %output {minimum_alignment = 64} : buffer, buffer, buffer, buffer
+  %d = config.get @scan.dimensions : index
+  %base = index.constant 0 : offset
+  %iv = buffer.view %x[%base] : buffer -> view<8x[%d]xf16>
+  %qv = buffer.view %q[%base] : buffer -> view<[%d]xf32>
+  %mv = buffer.view %meta[%base] : buffer -> view<16xi32>
+  %ov = buffer.view %y[%base] : buffer -> view<8x2xi32>
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %eight = index.constant 8 : index
+  %fzero = scalar.constant 0.0 : f32
+  %negbits = scalar.constant -8388608 : i32
+  %neg = scalar.bitcast %negbits : i32 to f32
+  %missing = scalar.constant -1 : i32
+  scf.for %row = [%zero to %eight step %one] {
+    %norm_bits = view.load %mv[%row] : view<16xi32> -> i32
+    %inverse = scalar.bitcast %norm_bits : i32 to f32
+    %id_at = index.add %row, %eight : index
+    %id = view.load %mv[%id_at] : view<16xi32> -> i32
+    %valid = scalar.cmpf ogt, %inverse, %fzero : f32
+    %score = scf.if %valid -> (f32) {
+      %sum = scf.for %col = [%zero to %d step %one](%acc = %fzero : f32) -> (f32) {
+        %half = view.load %iv[%row, %col] : view<8x[%d]xf16> -> f16
+        %value = scalar.extf %half : f16 to f32
+        %query_value = view.load %qv[%col] : view<[%d]xf32> -> f32
+        %product = scalar.mulf %value, %query_value : f32
+        %next = scalar.addf %acc, %product : f32
+        scf.yield %next : f32
+      }
+      %cosine = scalar.mulf %sum, %inverse : f32
+      scf.yield %cosine : f32
+    } else {
+      scf.yield %neg : f32
+    }
+    %score_bits = scalar.bitcast %score : f32 to i32
+    %out_id = scf.select %valid, %id, %missing : i32
+    view.store %score_bits, %ov[%row, %zero] : i32, view<8x2xi32>
+    view.store %out_id, %ov[%row, %one] : i32, view<8x2xi32>
+  }
+  func.return
+}

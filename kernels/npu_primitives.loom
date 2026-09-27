@@ -1,0 +1,44 @@
+// Exact FP16 widening, FP32 arithmetic and comparison on an XDNA core.
+aie2p.target<array> @array_target
+aie2p.target<core> @core_target
+config.decl @probe.records : %value: index where [range(%value, 1, 512)]
+pipeline.def<kernel> public retain target(@array_target) @primitives() launch(%input: buffer, %query: buffer, %output: buffer) {
+  %records = config.get @probe.records : index
+  %one = index.constant 1 : index
+  %base = index.constant 0 : offset
+  %workers = group.create %one : index -> group
+  %iv = buffer.view %input[%base] : buffer -> view<[%records]x128xf16>
+  %qv = buffer.view %query[%base] : buffer -> view<[%records]x128xf32>
+  %ov = buffer.view %output[%base] : buffer -> view<[%records]x4x128xf32>
+  %xs = pipeline.read %iv on %workers : view<[%records]x128xf16>, group -> pipeline.flow<tile<128xf16>>
+  %qs = pipeline.read %qv on %workers : view<[%records]x128xf32>, group -> pipeline.flow<tile<128xf32>>
+  %ys = pipeline.stage @evaluate on %workers(%xs, %qs) : (group, pipeline.flow<tile<128xf16>>, pipeline.flow<tile<128xf32>>) -> (pipeline.flow<tile<4x128xf32>>)
+  pipeline.write %ys to %ov : pipeline.flow<tile<4x128xf32>>, view<[%records]x4x128xf32>
+  pipeline.return
+}
+func.def target(@core_target) @evaluate(%input: buffer, %query: buffer, %output: buffer) {
+  %x, %q, %y = buffer.assume.alignment %input, %query, %output {minimum_alignment = 64} : buffer, buffer, buffer
+  %base = index.constant 0 : offset
+  %iv = buffer.view %x[%base] : buffer -> view<128xf16>
+  %qv = buffer.view %q[%base] : buffer -> view<128xf32>
+  %ov = buffer.view %y[%base] : buffer -> view<4x128xf32>
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %two = index.constant 2 : index
+  %three = index.constant 3 : index
+  %end = index.constant 128 : index
+  scf.for %i = [%zero to %end step %one] {
+    %half = view.load %iv[%i] : view<128xf16> -> f16
+    %value = scalar.extf %half : f16 to f32
+    %query_value = view.load %qv[%i] : view<128xf32> -> f32
+    %sum = scalar.addf %value, %query_value : f32
+    %product = scalar.mulf %value, %query_value : f32
+    %greater = scalar.cmpf ogt, %value, %query_value : f32
+    %maximum = scf.select %greater, %value, %query_value : f32
+    view.store %value, %ov[%zero, %i] : f32, view<4x128xf32>
+    view.store %sum, %ov[%one, %i] : f32, view<4x128xf32>
+    view.store %product, %ov[%two, %i] : f32, view<4x128xf32>
+    view.store %maximum, %ov[%three, %i] : f32, view<4x128xf32>
+  }
+  func.return
+}

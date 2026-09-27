@@ -1,0 +1,62 @@
+// Merge two sorted candidate lists entirely on the NPU.
+aie2p.target<array> @array_target
+aie2p.target<core> @core_target
+config.decl @merge.k : %value: index where [range(%value, 1, 1024)]
+pipeline.def<kernel> public retain target(@array_target) @merge() launch(%left: buffer, %right: buffer, %output: buffer) {
+  %k = config.get @merge.k : index
+  %one = index.constant 1 : index
+  %base = index.constant 0 : offset
+  %workers = group.create %one : index -> group
+  %lv = buffer.view %left[%base] : buffer -> view<[%k]x2xi32>
+  %rv = buffer.view %right[%base] : buffer -> view<[%k]x2xi32>
+  %ov = buffer.view %output[%base] : buffer -> view<[%k]x2xi32>
+  %ls = pipeline.read %lv on %workers : view<[%k]x2xi32>, group -> pipeline.flow<tile<[%k]x2xi32>>
+  %rs = pipeline.read %rv on %workers : view<[%k]x2xi32>, group -> pipeline.flow<tile<[%k]x2xi32>>
+  %ys = pipeline.stage @merge_rows on %workers(%ls, %rs) : (group, pipeline.flow<tile<[%k]x2xi32>>, pipeline.flow<tile<[%k]x2xi32>>) -> (pipeline.flow<tile<[%k]x2xi32>>)
+  pipeline.write %ys to %ov : pipeline.flow<tile<[%k]x2xi32>>, view<[%k]x2xi32>
+  pipeline.return
+}
+func.def target(@core_target) @merge_rows(%left: buffer, %right: buffer, %output: buffer) {
+  %l, %r, %y = buffer.assume.alignment %left, %right, %output {minimum_alignment = 64} : buffer, buffer, buffer
+  %k = config.get @merge.k : index
+  %base = index.constant 0 : offset
+  %lv = buffer.view %l[%base] : buffer -> view<[%k]x2xi32>
+  %rv = buffer.view %r[%base] : buffer -> view<[%k]x2xi32>
+  %ov = buffer.view %y[%base] : buffer -> view<[%k]x2xi32>
+  %zero = index.constant 0 : index
+  %one = index.constant 1 : index
+  %last = index.sub %k, %one : index
+  %negbits = scalar.constant -8388608 : i32
+  %missing = scalar.constant -1 : i32
+  %li, %ri = scf.for %i = [%zero to %k step %one](%a = %zero : index, %b = %zero : index) -> (index, index) {
+    %a_valid = index.cmp ult, %a, %k : index
+    %b_valid = index.cmp ult, %b, %k : index
+    %a_safe = scf.select %a_valid, %a, %last : index
+    %b_safe = scf.select %b_valid, %b, %last : index
+    %a_bits = view.load %lv[%a_safe, %zero] : view<[%k]x2xi32> -> i32
+    %b_bits = view.load %rv[%b_safe, %zero] : view<[%k]x2xi32> -> i32
+    %a_id_raw = view.load %lv[%a_safe, %one] : view<[%k]x2xi32> -> i32
+    %b_id_raw = view.load %rv[%b_safe, %one] : view<[%k]x2xi32> -> i32
+    %a_score = scf.select %a_valid, %a_bits, %negbits : i32
+    %b_score = scf.select %b_valid, %b_bits, %negbits : i32
+    %a_id = scf.select %a_valid, %a_id_raw, %missing : i32
+    %b_id = scf.select %b_valid, %b_id_raw, %missing : i32
+    %af = scalar.bitcast %a_score : i32 to f32
+    %bf = scalar.bitcast %b_score : i32 to f32
+    %greater = scalar.cmpf ogt, %af, %bf : f32
+    %equal = scalar.cmpf oeq, %af, %bf : f32
+    %earlier = scalar.cmpi ule, %a_id, %b_id : i32
+    %tie = scalar.andi %equal, %earlier : i1
+    %left_wins = scalar.ori %greater, %tie : i1
+    %score = scf.select %left_wins, %a_score, %b_score : i32
+    %id = scf.select %left_wins, %a_id, %b_id : i32
+    view.store %score, %ov[%i, %zero] : i32, view<[%k]x2xi32>
+    view.store %id, %ov[%i, %one] : i32, view<[%k]x2xi32>
+    %a_next = index.add %a, %one : index
+    %b_next = index.add %b, %one : index
+    %next_a = scf.select %left_wins, %a_next, %a : index
+    %next_b = scf.select %left_wins, %b, %b_next : index
+    scf.yield %next_a, %next_b : index, index
+  }
+  func.return
+}

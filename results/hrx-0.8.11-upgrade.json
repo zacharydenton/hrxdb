@@ -1,0 +1,2180 @@
+{
+  "date": "2026-09-27",
+  "target": "gfx1151",
+  "kernel": "7.2.7-arch1-1",
+  "rustc": "rustc 1.95.0-nightly (5fb2ff861 2026-02-21)",
+  "baseline": "0.8.7",
+  "candidate": "0.8.11",
+  "candidate_bundle": "native-20260927-244cd3801b",
+  "method": "Fresh processes, alternating arm order by shape; 10 measured samples per process using hrxdb-bench warmups. Compilation and ingestion excluded. No concurrent qualification workloads. This is a regression check, not a general speedup claim.",
+  "cases": [
+    {
+      "rows": 100000,
+      "dimensions": 384,
+      "batch": 1,
+      "k": 10,
+      "0.8.7": {
+        "median_ms": 0.470118,
+        "samples": [
+          {
+            "scan_ms": 0.490366,
+            "search_ms": 0.37511,
+            "read_control_ms": 0.337731,
+            "neighbors": [
+              {
+                "id": 60841,
+                "similarity": 0.22324741
+              },
+              {
+                "id": 4475,
+                "similarity": 0.21487094
+              },
+              {
+                "id": 85227,
+                "similarity": 0.21024527
+              },
+              {
+                "id": 7223,
+                "similarity": 0.20559019
+              },
+              {
+                "id": 41367,
+                "similarity": 0.20397668
+              },
+              {
+                "id": 60648,
+                "similarity": 0.1964552
+              },
+              {
+                "id": 38252,
+                "similarity": 0.19626732
+              },
+              {
+                "id": 27298,
+                "similarity": 0.19117685
+              },
+              {
+                "id": 66903,
+                "similarity": 0.19102083
+              },
+              {
+                "id": 53581,
+                "similarity": 0.1896005
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.494896,
+            "search_ms": 0.440988,
+            "read_control_ms": 0.338291,
+            "neighbors": [
+              {
+                "id": 55452,
+                "similarity": 0.20041038
+              },
+              {
+                "id": 27119,
+                "similarity": 0.19688529
+              },
+              {
+                "id": 17743,
+                "similarity": 0.19613805
+              },
+              {
+                "id": 46544,
+                "similarity": 0.18776338
+              },
+              {
+                "id": 37410,
+                "similarity": 0.18594891
+              },
+              {
+                "id": 43108,
+                "similarity": 0.18556908
+              },
+              {
+                "id": 77000,
+                "similarity": 0.18556653
+              },
+              {
+                "id": 54998,
+                "similarity": 0.18484485
+              },
+              {
+                "id": 38854,
+                "similarity": 0.18463121
+              },
+              {
+                "id": 77699,
+                "similarity": 0.18373953
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.5326649999999999,
+            "search_ms": 0.48302700000000004,
+            "read_control_ms": 0.337171,
+            "neighbors": [
+              {
+                "id": 15813,
+                "similarity": 0.21698985
+              },
+              {
+                "id": 12515,
+                "similarity": 0.20511399
+              },
+              {
+                "id": 7437,
+                "similarity": 0.20316303
+              },
+              {
+                "id": 92442,
+                "similarity": 0.20077519
+              },
+              {
+                "id": 73475,
+                "similarity": 0.19819885
+              },
+              {
+                "id": 81078,
+                "similarity": 0.19714242
+              },
+              {
+                "id": 27265,
+                "similarity": 0.19352543
+              },
+              {
+                "id": 99792,
+                "similarity": 0.19033888
+              },
+              {
+                "id": 97419,
+                "similarity": 0.1899267
+              },
+              {
+                "id": 99422,
+                "similarity": 0.18823004
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.5102960000000001,
+            "search_ms": 0.477517,
+            "read_control_ms": 0.33783100000000005,
+            "neighbors": [
+              {
+                "id": 53924,
+                "similarity": 0.21643043
+              },
+              {
+                "id": 5392,
+                "similarity": 0.2104007
+              },
+              {
+                "id": 30175,
+                "similarity": 0.20306797
+              },
+              {
+                "id": 88544,
+                "similarity": 0.19838682
+              },
+              {
+                "id": 93312,
+                "similarity": 0.19559854
+              },
+              {
+                "id": 19322,
+                "similarity": 0.19100948
+              },
+              {
+                "id": 16281,
+                "similarity": 0.1901729
+              },
+              {
+                "id": 20254,
+                "similarity": 0.18883364
+              },
+              {
+                "id": 45280,
+                "similarity": 0.18553391
+              },
+              {
+                "id": 25104,
+                "similarity": 0.1854951
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.5178360000000001,
+            "search_ms": 0.45415700000000003,
+            "read_control_ms": 0.336471,
+            "neighbors": [
+              {
+                "id": 56718,
+                "similarity": 0.2071638
+              },
+              {
+                "id": 25151,
+                "similarity": 0.20279251
+              },
+              {
+                "id": 28436,
+                "similarity": 0.20131972
+              },
+              {
+                "id": 35832,
+                "similarity": 0.19457616
+              },
+              {
+                "id": 18552,
+                "similarity": 0.19310352
+              },
+              {
+                "id": 83845,
+                "similarity": 0.19302258
+              },
+              {
+                "id": 2391,
+                "similarity": 0.19095433
+              },
+              {
+                "id": 11710,
+                "similarity": 0.18882635
+              },
+              {
+                "id": 12779,
+                "similarity": 0.18785806
+              },
+              {
+                "id": 37943,
+                "similarity": 0.18476358
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.507606,
+            "search_ms": 0.488337,
+            "read_control_ms": 0.340491,
+            "neighbors": [
+              {
+                "id": 52759,
+                "similarity": 0.23724017
+              },
+              {
+                "id": 26091,
+                "similarity": 0.20962998
+              },
+              {
+                "id": 82059,
+                "similarity": 0.20013326
+              },
+              {
+                "id": 57171,
+                "similarity": 0.20002837
+              },
+              {
+                "id": 2373,
+                "similarity": 0.19969136
+              },
+              {
+                "id": 75488,
+                "similarity": 0.19636548
+              },
+              {
+                "id": 16268,
+                "similarity": 0.19596176
+              },
+              {
+                "id": 34684,
+                "similarity": 0.19541378
+              },
+              {
+                "id": 10262,
+                "similarity": 0.19221336
+              },
+              {
+                "id": 725,
+                "similarity": 0.19163947
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.513266,
+            "search_ms": 0.485927,
+            "read_control_ms": 0.34052099999999996,
+            "neighbors": [
+              {
+                "id": 46948,
+                "similarity": 0.23961963
+              },
+              {
+                "id": 77645,
+                "similarity": 0.21239121
+              },
+              {
+                "id": 88667,
+                "similarity": 0.20536591
+              },
+              {
+                "id": 95980,
+                "similarity": 0.20372716
+              },
+              {
+                "id": 13961,
+                "similarity": 0.20287599
+              },
+              {
+                "id": 16983,
+                "similarity": 0.19983111
+              },
+              {
+                "id": 49502,
+                "similarity": 0.19981828
+              },
+              {
+                "id": 61434,
+                "similarity": 0.19924718
+              },
+              {
+                "id": 32932,
+                "similarity": 0.19911492
+              },
+              {
+                "id": 60554,
+                "similarity": 0.19692463
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.485546,
+            "search_ms": 0.497787,
+            "read_control_ms": 0.339161,
+            "neighbors": [
+              {
+                "id": 46391,
+                "similarity": 0.23376876
+              },
+              {
+                "id": 85731,
+                "similarity": 0.21423286
+              },
+              {
+                "id": 73681,
+                "similarity": 0.21142183
+              },
+              {
+                "id": 7102,
+                "similarity": 0.2035121
+              },
+              {
+                "id": 60300,
+                "similarity": 0.20138949
+              },
+              {
+                "id": 20097,
+                "similarity": 0.1985967
+              },
+              {
+                "id": 89602,
+                "similarity": 0.1985114
+              },
+              {
+                "id": 86199,
+                "similarity": 0.19785883
+              },
+              {
+                "id": 37445,
+                "similarity": 0.1949068
+              },
+              {
+                "id": 69982,
+                "similarity": 0.1948647
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.520806,
+            "search_ms": 0.470118,
+            "read_control_ms": 0.33808,
+            "neighbors": [
+              {
+                "id": 86518,
+                "similarity": 0.19933306
+              },
+              {
+                "id": 70124,
+                "similarity": 0.19653182
+              },
+              {
+                "id": 74963,
+                "similarity": 0.19372797
+              },
+              {
+                "id": 27238,
+                "similarity": 0.19251223
+              },
+              {
+                "id": 39923,
+                "similarity": 0.19176812
+              },
+              {
+                "id": 65388,
+                "similarity": 0.18769921
+              },
+              {
+                "id": 3337,
+                "similarity": 0.18671076
+              },
+              {
+                "id": 5744,
+                "similarity": 0.18610704
+              },
+              {
+                "id": 38935,
+                "similarity": 0.1841701
+              },
+              {
+                "id": 452,
+                "similarity": 0.1816874
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.457928,
+            "search_ms": 0.396119,
+            "read_control_ms": 0.337971,
+            "neighbors": [
+              {
+                "id": 2125,
+                "similarity": 0.24116345
+              },
+              {
+                "id": 87296,
+                "similarity": 0.24010551
+              },
+              {
+                "id": 81620,
+                "similarity": 0.22216567
+              },
+              {
+                "id": 17042,
+                "similarity": 0.22177674
+              },
+              {
+                "id": 74179,
+                "similarity": 0.20944373
+              },
+              {
+                "id": 28888,
+                "similarity": 0.20575236
+              },
+              {
+                "id": 79650,
+                "similarity": 0.19436581
+              },
+              {
+                "id": 52135,
+                "similarity": 0.19402692
+              },
+              {
+                "id": 11542,
+                "similarity": 0.1933966
+              },
+              {
+                "id": 36220,
+                "similarity": 0.18835191
+              }
+            ]
+          }
+        ]
+      },
+      "0.8.11": {
+        "median_ms": 0.354021,
+        "samples": [
+          {
+            "scan_ms": 0.34698,
+            "search_ms": 0.351341,
+            "read_control_ms": 0.33769099999999996,
+            "neighbors": [
+              {
+                "id": 60841,
+                "similarity": 0.22324741
+              },
+              {
+                "id": 4475,
+                "similarity": 0.21487094
+              },
+              {
+                "id": 85227,
+                "similarity": 0.21024527
+              },
+              {
+                "id": 7223,
+                "similarity": 0.20559019
+              },
+              {
+                "id": 41367,
+                "similarity": 0.20397668
+              },
+              {
+                "id": 60648,
+                "similarity": 0.1964552
+              },
+              {
+                "id": 38252,
+                "similarity": 0.19626732
+              },
+              {
+                "id": 27298,
+                "similarity": 0.19117685
+              },
+              {
+                "id": 66903,
+                "similarity": 0.19102083
+              },
+              {
+                "id": 53581,
+                "similarity": 0.1896005
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.382349,
+            "search_ms": 0.353921,
+            "read_control_ms": 0.349551,
+            "neighbors": [
+              {
+                "id": 55452,
+                "similarity": 0.20041038
+              },
+              {
+                "id": 27119,
+                "similarity": 0.19688529
+              },
+              {
+                "id": 17743,
+                "similarity": 0.19613805
+              },
+              {
+                "id": 46544,
+                "similarity": 0.18776338
+              },
+              {
+                "id": 37410,
+                "similarity": 0.18594891
+              },
+              {
+                "id": 43108,
+                "similarity": 0.18556908
+              },
+              {
+                "id": 77000,
+                "similarity": 0.18556653
+              },
+              {
+                "id": 54998,
+                "similarity": 0.18484485
+              },
+              {
+                "id": 38854,
+                "similarity": 0.18463121
+              },
+              {
+                "id": 77699,
+                "similarity": 0.18373953
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.345451,
+            "search_ms": 0.354021,
+            "read_control_ms": 0.33837100000000003,
+            "neighbors": [
+              {
+                "id": 15813,
+                "similarity": 0.21698985
+              },
+              {
+                "id": 12515,
+                "similarity": 0.20511399
+              },
+              {
+                "id": 7437,
+                "similarity": 0.20316303
+              },
+              {
+                "id": 92442,
+                "similarity": 0.20077519
+              },
+              {
+                "id": 73475,
+                "similarity": 0.19819885
+              },
+              {
+                "id": 81078,
+                "similarity": 0.19714242
+              },
+              {
+                "id": 27265,
+                "similarity": 0.19352543
+              },
+              {
+                "id": 99792,
+                "similarity": 0.19033888
+              },
+              {
+                "id": 97419,
+                "similarity": 0.1899267
+              },
+              {
+                "id": 99422,
+                "similarity": 0.18823004
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.388219,
+            "search_ms": 0.356391,
+            "read_control_ms": 0.340291,
+            "neighbors": [
+              {
+                "id": 53924,
+                "similarity": 0.21643043
+              },
+              {
+                "id": 5392,
+                "similarity": 0.2104007
+              },
+              {
+                "id": 30175,
+                "similarity": 0.20306797
+              },
+              {
+                "id": 88544,
+                "similarity": 0.19838682
+              },
+              {
+                "id": 93312,
+                "similarity": 0.19559854
+              },
+              {
+                "id": 19322,
+                "similarity": 0.19100948
+              },
+              {
+                "id": 16281,
+                "similarity": 0.1901729
+              },
+              {
+                "id": 20254,
+                "similarity": 0.18883364
+              },
+              {
+                "id": 45280,
+                "similarity": 0.18553391
+              },
+              {
+                "id": 25104,
+                "similarity": 0.1854951
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.348301,
+            "search_ms": 0.36323,
+            "read_control_ms": 0.339451,
+            "neighbors": [
+              {
+                "id": 56718,
+                "similarity": 0.2071638
+              },
+              {
+                "id": 25151,
+                "similarity": 0.20279251
+              },
+              {
+                "id": 28436,
+                "similarity": 0.20131972
+              },
+              {
+                "id": 35832,
+                "similarity": 0.19457616
+              },
+              {
+                "id": 18552,
+                "similarity": 0.19310352
+              },
+              {
+                "id": 83845,
+                "similarity": 0.19302258
+              },
+              {
+                "id": 2391,
+                "similarity": 0.19095433
+              },
+              {
+                "id": 11710,
+                "similarity": 0.18882635
+              },
+              {
+                "id": 12779,
+                "similarity": 0.18785806
+              },
+              {
+                "id": 37943,
+                "similarity": 0.18476358
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.349621,
+            "search_ms": 0.3544,
+            "read_control_ms": 0.34048100000000003,
+            "neighbors": [
+              {
+                "id": 52759,
+                "similarity": 0.23724017
+              },
+              {
+                "id": 26091,
+                "similarity": 0.20962998
+              },
+              {
+                "id": 82059,
+                "similarity": 0.20013326
+              },
+              {
+                "id": 57171,
+                "similarity": 0.20002837
+              },
+              {
+                "id": 2373,
+                "similarity": 0.19969136
+              },
+              {
+                "id": 75488,
+                "similarity": 0.19636548
+              },
+              {
+                "id": 16268,
+                "similarity": 0.19596176
+              },
+              {
+                "id": 34684,
+                "similarity": 0.19541378
+              },
+              {
+                "id": 10262,
+                "similarity": 0.19221336
+              },
+              {
+                "id": 725,
+                "similarity": 0.19163947
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.347331,
+            "search_ms": 0.36947,
+            "read_control_ms": 0.33784000000000003,
+            "neighbors": [
+              {
+                "id": 46948,
+                "similarity": 0.23961963
+              },
+              {
+                "id": 77645,
+                "similarity": 0.21239121
+              },
+              {
+                "id": 88667,
+                "similarity": 0.20536591
+              },
+              {
+                "id": 95980,
+                "similarity": 0.20372716
+              },
+              {
+                "id": 13961,
+                "similarity": 0.20287599
+              },
+              {
+                "id": 16983,
+                "similarity": 0.19983111
+              },
+              {
+                "id": 49502,
+                "similarity": 0.19981828
+              },
+              {
+                "id": 61434,
+                "similarity": 0.19924718
+              },
+              {
+                "id": 32932,
+                "similarity": 0.19911492
+              },
+              {
+                "id": 60554,
+                "similarity": 0.19692463
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.34693,
+            "search_ms": 0.351791,
+            "read_control_ms": 0.337981,
+            "neighbors": [
+              {
+                "id": 46391,
+                "similarity": 0.23376876
+              },
+              {
+                "id": 85731,
+                "similarity": 0.21423286
+              },
+              {
+                "id": 73681,
+                "similarity": 0.21142183
+              },
+              {
+                "id": 7102,
+                "similarity": 0.2035121
+              },
+              {
+                "id": 60300,
+                "similarity": 0.20138949
+              },
+              {
+                "id": 20097,
+                "similarity": 0.1985967
+              },
+              {
+                "id": 89602,
+                "similarity": 0.1985114
+              },
+              {
+                "id": 86199,
+                "similarity": 0.19785883
+              },
+              {
+                "id": 37445,
+                "similarity": 0.1949068
+              },
+              {
+                "id": 69982,
+                "similarity": 0.1948647
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.346721,
+            "search_ms": 0.35708,
+            "read_control_ms": 0.336681,
+            "neighbors": [
+              {
+                "id": 86518,
+                "similarity": 0.19933306
+              },
+              {
+                "id": 70124,
+                "similarity": 0.19653182
+              },
+              {
+                "id": 74963,
+                "similarity": 0.19372797
+              },
+              {
+                "id": 27238,
+                "similarity": 0.19251223
+              },
+              {
+                "id": 39923,
+                "similarity": 0.19176812
+              },
+              {
+                "id": 65388,
+                "similarity": 0.18769921
+              },
+              {
+                "id": 3337,
+                "similarity": 0.18671076
+              },
+              {
+                "id": 5744,
+                "similarity": 0.18610704
+              },
+              {
+                "id": 38935,
+                "similarity": 0.1841701
+              },
+              {
+                "id": 452,
+                "similarity": 0.1816874
+              }
+            ]
+          },
+          {
+            "scan_ms": 0.34063099999999996,
+            "search_ms": 0.35198100000000004,
+            "read_control_ms": 0.33796,
+            "neighbors": [
+              {
+                "id": 2125,
+                "similarity": 0.24116345
+              },
+              {
+                "id": 87296,
+                "similarity": 0.24010551
+              },
+              {
+                "id": 81620,
+                "similarity": 0.22216567
+              },
+              {
+                "id": 17042,
+                "similarity": 0.22177674
+              },
+              {
+                "id": 74179,
+                "similarity": 0.20944373
+              },
+              {
+                "id": 28888,
+                "similarity": 0.20575236
+              },
+              {
+                "id": 79650,
+                "similarity": 0.19436581
+              },
+              {
+                "id": 52135,
+                "similarity": 0.19402692
+              },
+              {
+                "id": 11542,
+                "similarity": 0.1933966
+              },
+              {
+                "id": 36220,
+                "similarity": 0.18835191
+              }
+            ]
+          }
+        ]
+      },
+      "change_percent": -24.695289267800856,
+      "arguments": [
+        "--rows",
+        "100000",
+        "--dimensions",
+        "384",
+        "--batch",
+        "1",
+        "--k",
+        "10",
+        "--samples",
+        "10"
+      ],
+      "timing": "Host wall time with explicit completion; three warmups; serialized changing queries; scratch reserved before timing; scan/control exclude query preparation; search includes normalization, query publication, optional exclusion bitmap preparation and masking, selection and readback. GB/s uses unpadded FP16 vector bytes and decimal GB."
+    },
+    {
+      "rows": 100000,
+      "dimensions": 384,
+      "batch": 60,
+      "k": 10,
+      "0.8.11": {
+        "median_ms": 1.49074,
+        "samples": [
+          {
+            "batch_ms": 1.473901,
+            "sequential_ms": 20.503248000000003
+          },
+          {
+            "batch_ms": 1.532778,
+            "sequential_ms": 20.494279000000002
+          },
+          {
+            "batch_ms": 1.523449,
+            "sequential_ms": 20.483889
+          },
+          {
+            "batch_ms": 1.498409,
+            "sequential_ms": 20.438390000000002
+          },
+          {
+            "batch_ms": 1.447881,
+            "sequential_ms": 20.499718
+          },
+          {
+            "batch_ms": 1.49074,
+            "sequential_ms": 20.602945000000002
+          },
+          {
+            "batch_ms": 1.6898440000000001,
+            "sequential_ms": 20.530257
+          },
+          {
+            "batch_ms": 1.4957289999999999,
+            "sequential_ms": 20.485579
+          },
+          {
+            "batch_ms": 1.464871,
+            "sequential_ms": 20.641894
+          },
+          {
+            "batch_ms": 1.418682,
+            "sequential_ms": 20.478628
+          }
+        ]
+      },
+      "0.8.7": {
+        "median_ms": 1.4688800000000002,
+        "samples": [
+          {
+            "batch_ms": 1.46378,
+            "sequential_ms": 20.743762
+          },
+          {
+            "batch_ms": 1.49921,
+            "sequential_ms": 20.679913000000003
+          },
+          {
+            "batch_ms": 1.4771,
+            "sequential_ms": 20.765001
+          },
+          {
+            "batch_ms": 1.4688800000000002,
+            "sequential_ms": 20.683143
+          },
+          {
+            "batch_ms": 1.4876500000000001,
+            "sequential_ms": 20.749232
+          },
+          {
+            "batch_ms": 1.428491,
+            "sequential_ms": 20.711562999999998
+          },
+          {
+            "batch_ms": 1.537418,
+            "sequential_ms": 20.762932000000003
+          },
+          {
+            "batch_ms": 1.49779,
+            "sequential_ms": 20.698902
+          },
+          {
+            "batch_ms": 1.459571,
+            "sequential_ms": 20.748580999999998
+          },
+          {
+            "batch_ms": 1.417202,
+            "sequential_ms": 20.682983
+          }
+        ]
+      },
+      "change_percent": 1.4882087032296543,
+      "arguments": [
+        "--rows",
+        "100000",
+        "--dimensions",
+        "384",
+        "--batch",
+        "60",
+        "--k",
+        "10",
+        "--samples",
+        "10"
+      ],
+      "timing": "Host completion. Three warmups, changing queries, alternating sequential/batch timing order. Compilation and workspace reservation excluded; query preparation, selection, masking and readback included. No concurrent hrxdb benchmark or GPU tests."
+    },
+    {
+      "rows": 1000000,
+      "dimensions": 768,
+      "batch": 1,
+      "k": 10,
+      "0.8.7": {
+        "median_ms": 6.718319,
+        "samples": [
+          {
+            "scan_ms": 6.66624,
+            "search_ms": 6.754898,
+            "read_control_ms": 6.613232999999999,
+            "neighbors": [
+              {
+                "id": 928572,
+                "similarity": 0.16570185
+              },
+              {
+                "id": 454378,
+                "similarity": 0.16564946
+              },
+              {
+                "id": 15474,
+                "similarity": 0.16411364
+              },
+              {
+                "id": 476070,
+                "similarity": 0.16382499
+              },
+              {
+                "id": 753676,
+                "similarity": 0.15966998
+              },
+              {
+                "id": 542744,
+                "similarity": 0.15615311
+              },
+              {
+                "id": 729239,
+                "similarity": 0.1548081
+              },
+              {
+                "id": 442929,
+                "similarity": 0.15442157
+              },
+              {
+                "id": 321492,
+                "similarity": 0.15429156
+              },
+              {
+                "id": 912504,
+                "similarity": 0.1533941
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.637712,
+            "search_ms": 6.69454,
+            "read_control_ms": 6.522544,
+            "neighbors": [
+              {
+                "id": 238351,
+                "similarity": 0.17797549
+              },
+              {
+                "id": 951582,
+                "similarity": 0.17267053
+              },
+              {
+                "id": 140261,
+                "similarity": 0.1724195
+              },
+              {
+                "id": 24633,
+                "similarity": 0.17131625
+              },
+              {
+                "id": 89128,
+                "similarity": 0.16871446
+              },
+              {
+                "id": 798769,
+                "similarity": 0.16097414
+              },
+              {
+                "id": 181959,
+                "similarity": 0.1571817
+              },
+              {
+                "id": 307991,
+                "similarity": 0.15430844
+              },
+              {
+                "id": 485330,
+                "similarity": 0.15214372
+              },
+              {
+                "id": 978115,
+                "similarity": 0.15142792
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.661271,
+            "search_ms": 6.738049,
+            "read_control_ms": 6.505265,
+            "neighbors": [
+              {
+                "id": 152738,
+                "similarity": 0.18194048
+              },
+              {
+                "id": 742259,
+                "similarity": 0.1640197
+              },
+              {
+                "id": 892170,
+                "similarity": 0.159088
+              },
+              {
+                "id": 150739,
+                "similarity": 0.15894926
+              },
+              {
+                "id": 16184,
+                "similarity": 0.15882356
+              },
+              {
+                "id": 19755,
+                "similarity": 0.15739185
+              },
+              {
+                "id": 184023,
+                "similarity": 0.15526523
+              },
+              {
+                "id": 617095,
+                "similarity": 0.15274718
+              },
+              {
+                "id": 697338,
+                "similarity": 0.15273108
+              },
+              {
+                "id": 658346,
+                "similarity": 0.15236676
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.663050999999999,
+            "search_ms": 6.784267,
+            "read_control_ms": 6.507454999999999,
+            "neighbors": [
+              {
+                "id": 956289,
+                "similarity": 0.16500998
+              },
+              {
+                "id": 895003,
+                "similarity": 0.1638998
+              },
+              {
+                "id": 802888,
+                "similarity": 0.16332346
+              },
+              {
+                "id": 161533,
+                "similarity": 0.1581746
+              },
+              {
+                "id": 664997,
+                "similarity": 0.15771654
+              },
+              {
+                "id": 80069,
+                "similarity": 0.15765089
+              },
+              {
+                "id": 292629,
+                "similarity": 0.15611368
+              },
+              {
+                "id": 684417,
+                "similarity": 0.15492842
+              },
+              {
+                "id": 578632,
+                "similarity": 0.15372148
+              },
+              {
+                "id": 414207,
+                "similarity": 0.15342969
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.6946699999999995,
+            "search_ms": 6.718319,
+            "read_control_ms": 6.537404,
+            "neighbors": [
+              {
+                "id": 956094,
+                "similarity": 0.16259392
+              },
+              {
+                "id": 145560,
+                "similarity": 0.15826285
+              },
+              {
+                "id": 203310,
+                "similarity": 0.15575802
+              },
+              {
+                "id": 164023,
+                "similarity": 0.15530786
+              },
+              {
+                "id": 793759,
+                "similarity": 0.15360186
+              },
+              {
+                "id": 164176,
+                "similarity": 0.1535702
+              },
+              {
+                "id": 28482,
+                "similarity": 0.15122698
+              },
+              {
+                "id": 542411,
+                "similarity": 0.15071079
+              },
+              {
+                "id": 788020,
+                "similarity": 0.15060137
+              },
+              {
+                "id": 109053,
+                "similarity": 0.15044232
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.656581,
+            "search_ms": 6.697089,
+            "read_control_ms": 6.524094,
+            "neighbors": [
+              {
+                "id": 539073,
+                "similarity": 0.16913076
+              },
+              {
+                "id": 507563,
+                "similarity": 0.16041975
+              },
+              {
+                "id": 410267,
+                "similarity": 0.15759295
+              },
+              {
+                "id": 284571,
+                "similarity": 0.15541016
+              },
+              {
+                "id": 785212,
+                "similarity": 0.15471427
+              },
+              {
+                "id": 977851,
+                "similarity": 0.15388887
+              },
+              {
+                "id": 929718,
+                "similarity": 0.153334
+              },
+              {
+                "id": 715919,
+                "similarity": 0.15224053
+              },
+              {
+                "id": 792544,
+                "similarity": 0.15168783
+              },
+              {
+                "id": 632003,
+                "similarity": 0.15132575
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.658251,
+            "search_ms": 6.69359,
+            "read_control_ms": 6.544014,
+            "neighbors": [
+              {
+                "id": 849764,
+                "similarity": 0.18209913
+              },
+              {
+                "id": 821023,
+                "similarity": 0.17774245
+              },
+              {
+                "id": 360564,
+                "similarity": 0.17560439
+              },
+              {
+                "id": 867208,
+                "similarity": 0.16470663
+              },
+              {
+                "id": 272151,
+                "similarity": 0.16345397
+              },
+              {
+                "id": 73815,
+                "similarity": 0.16279425
+              },
+              {
+                "id": 234876,
+                "similarity": 0.16243063
+              },
+              {
+                "id": 707516,
+                "similarity": 0.16045387
+              },
+              {
+                "id": 691780,
+                "similarity": 0.15973443
+              },
+              {
+                "id": 437542,
+                "similarity": 0.1572154
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.661471000000001,
+            "search_ms": 6.721769,
+            "read_control_ms": 6.506533999999999,
+            "neighbors": [
+              {
+                "id": 712934,
+                "similarity": 0.17910604
+              },
+              {
+                "id": 662946,
+                "similarity": 0.1763443
+              },
+              {
+                "id": 29502,
+                "similarity": 0.16582374
+              },
+              {
+                "id": 572520,
+                "similarity": 0.16395186
+              },
+              {
+                "id": 222618,
+                "similarity": 0.16224205
+              },
+              {
+                "id": 460325,
+                "similarity": 0.16055995
+              },
+              {
+                "id": 211663,
+                "similarity": 0.15626435
+              },
+              {
+                "id": 803589,
+                "similarity": 0.15609188
+              },
+              {
+                "id": 186551,
+                "similarity": 0.15558605
+              },
+              {
+                "id": 335639,
+                "similarity": 0.15553597
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.639961,
+            "search_ms": 6.718069,
+            "read_control_ms": 6.506025,
+            "neighbors": [
+              {
+                "id": 142133,
+                "similarity": 0.17616001
+              },
+              {
+                "id": 892125,
+                "similarity": 0.1722494
+              },
+              {
+                "id": 976278,
+                "similarity": 0.16713026
+              },
+              {
+                "id": 490727,
+                "similarity": 0.16258515
+              },
+              {
+                "id": 760574,
+                "similarity": 0.1574561
+              },
+              {
+                "id": 486959,
+                "similarity": 0.1554279
+              },
+              {
+                "id": 791608,
+                "similarity": 0.15343642
+              },
+              {
+                "id": 537077,
+                "similarity": 0.15262562
+              },
+              {
+                "id": 711642,
+                "similarity": 0.1525126
+              },
+              {
+                "id": 78076,
+                "similarity": 0.15207675
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.645881,
+            "search_ms": 6.732018999999999,
+            "read_control_ms": 6.510515,
+            "neighbors": [
+              {
+                "id": 677612,
+                "similarity": 0.16691148
+              },
+              {
+                "id": 130661,
+                "similarity": 0.16536833
+              },
+              {
+                "id": 697878,
+                "similarity": 0.1628625
+              },
+              {
+                "id": 257399,
+                "similarity": 0.16182435
+              },
+              {
+                "id": 46795,
+                "similarity": 0.16029307
+              },
+              {
+                "id": 741966,
+                "similarity": 0.15979289
+              },
+              {
+                "id": 413618,
+                "similarity": 0.15715538
+              },
+              {
+                "id": 422862,
+                "similarity": 0.15534483
+              },
+              {
+                "id": 318617,
+                "similarity": 0.15484147
+              },
+              {
+                "id": 844305,
+                "similarity": 0.1541415
+              }
+            ]
+          }
+        ]
+      },
+      "0.8.11": {
+        "median_ms": 6.657019999999999,
+        "samples": [
+          {
+            "scan_ms": 6.646221,
+            "search_ms": 6.68252,
+            "read_control_ms": 6.6230020000000005,
+            "neighbors": [
+              {
+                "id": 928572,
+                "similarity": 0.16570185
+              },
+              {
+                "id": 454378,
+                "similarity": 0.16564946
+              },
+              {
+                "id": 15474,
+                "similarity": 0.16411364
+              },
+              {
+                "id": 476070,
+                "similarity": 0.16382499
+              },
+              {
+                "id": 753676,
+                "similarity": 0.15966998
+              },
+              {
+                "id": 542744,
+                "similarity": 0.15615311
+              },
+              {
+                "id": 729239,
+                "similarity": 0.1548081
+              },
+              {
+                "id": 442929,
+                "similarity": 0.15442157
+              },
+              {
+                "id": 321492,
+                "similarity": 0.15429156
+              },
+              {
+                "id": 912504,
+                "similarity": 0.1533941
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.67409,
+            "search_ms": 6.69052,
+            "read_control_ms": 6.606102,
+            "neighbors": [
+              {
+                "id": 238351,
+                "similarity": 0.17797549
+              },
+              {
+                "id": 951582,
+                "similarity": 0.17267053
+              },
+              {
+                "id": 140261,
+                "similarity": 0.1724195
+              },
+              {
+                "id": 24633,
+                "similarity": 0.17131625
+              },
+              {
+                "id": 89128,
+                "similarity": 0.16871446
+              },
+              {
+                "id": 798769,
+                "similarity": 0.16097414
+              },
+              {
+                "id": 181959,
+                "similarity": 0.1571817
+              },
+              {
+                "id": 307991,
+                "similarity": 0.15430844
+              },
+              {
+                "id": 485330,
+                "similarity": 0.15214372
+              },
+              {
+                "id": 978115,
+                "similarity": 0.15142792
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.669401000000001,
+            "search_ms": 6.726119,
+            "read_control_ms": 6.5627130000000005,
+            "neighbors": [
+              {
+                "id": 152738,
+                "similarity": 0.18194048
+              },
+              {
+                "id": 742259,
+                "similarity": 0.1640197
+              },
+              {
+                "id": 892170,
+                "similarity": 0.159088
+              },
+              {
+                "id": 150739,
+                "similarity": 0.15894926
+              },
+              {
+                "id": 16184,
+                "similarity": 0.15882356
+              },
+              {
+                "id": 19755,
+                "similarity": 0.15739185
+              },
+              {
+                "id": 184023,
+                "similarity": 0.15526523
+              },
+              {
+                "id": 617095,
+                "similarity": 0.15274718
+              },
+              {
+                "id": 697338,
+                "similarity": 0.15273108
+              },
+              {
+                "id": 658346,
+                "similarity": 0.15236676
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.790237,
+            "search_ms": 6.66528,
+            "read_control_ms": 6.5625539999999996,
+            "neighbors": [
+              {
+                "id": 956289,
+                "similarity": 0.16500998
+              },
+              {
+                "id": 895003,
+                "similarity": 0.1638998
+              },
+              {
+                "id": 802888,
+                "similarity": 0.16332346
+              },
+              {
+                "id": 161533,
+                "similarity": 0.1581746
+              },
+              {
+                "id": 664997,
+                "similarity": 0.15771654
+              },
+              {
+                "id": 80069,
+                "similarity": 0.15765089
+              },
+              {
+                "id": 292629,
+                "similarity": 0.15611368
+              },
+              {
+                "id": 684417,
+                "similarity": 0.15492842
+              },
+              {
+                "id": 578632,
+                "similarity": 0.15372148
+              },
+              {
+                "id": 414207,
+                "similarity": 0.15342969
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.604362,
+            "search_ms": 6.657019999999999,
+            "read_control_ms": 6.530855000000001,
+            "neighbors": [
+              {
+                "id": 956094,
+                "similarity": 0.16259392
+              },
+              {
+                "id": 145560,
+                "similarity": 0.15826285
+              },
+              {
+                "id": 203310,
+                "similarity": 0.15575802
+              },
+              {
+                "id": 164023,
+                "similarity": 0.15530786
+              },
+              {
+                "id": 793759,
+                "similarity": 0.15360186
+              },
+              {
+                "id": 164176,
+                "similarity": 0.1535702
+              },
+              {
+                "id": 28482,
+                "similarity": 0.15122698
+              },
+              {
+                "id": 542411,
+                "similarity": 0.15071079
+              },
+              {
+                "id": 788020,
+                "similarity": 0.15060137
+              },
+              {
+                "id": 109053,
+                "similarity": 0.15044232
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.615512,
+            "search_ms": 6.65111,
+            "read_control_ms": 6.522735,
+            "neighbors": [
+              {
+                "id": 539073,
+                "similarity": 0.16913076
+              },
+              {
+                "id": 507563,
+                "similarity": 0.16041975
+              },
+              {
+                "id": 410267,
+                "similarity": 0.15759295
+              },
+              {
+                "id": 284571,
+                "similarity": 0.15541016
+              },
+              {
+                "id": 785212,
+                "similarity": 0.15471427
+              },
+              {
+                "id": 977851,
+                "similarity": 0.15388887
+              },
+              {
+                "id": 929718,
+                "similarity": 0.153334
+              },
+              {
+                "id": 715919,
+                "similarity": 0.15224053
+              },
+              {
+                "id": 792544,
+                "similarity": 0.15168783
+              },
+              {
+                "id": 632003,
+                "similarity": 0.15132575
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.666831,
+            "search_ms": 6.622452,
+            "read_control_ms": 6.576713,
+            "neighbors": [
+              {
+                "id": 849764,
+                "similarity": 0.18209913
+              },
+              {
+                "id": 821023,
+                "similarity": 0.17774245
+              },
+              {
+                "id": 360564,
+                "similarity": 0.17560439
+              },
+              {
+                "id": 867208,
+                "similarity": 0.16470663
+              },
+              {
+                "id": 272151,
+                "similarity": 0.16345397
+              },
+              {
+                "id": 73815,
+                "similarity": 0.16279425
+              },
+              {
+                "id": 234876,
+                "similarity": 0.16243063
+              },
+              {
+                "id": 707516,
+                "similarity": 0.16045387
+              },
+              {
+                "id": 691780,
+                "similarity": 0.15973443
+              },
+              {
+                "id": 437542,
+                "similarity": 0.1572154
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.591381999999999,
+            "search_ms": 6.653211,
+            "read_control_ms": 6.527375,
+            "neighbors": [
+              {
+                "id": 712934,
+                "similarity": 0.17910604
+              },
+              {
+                "id": 662946,
+                "similarity": 0.1763443
+              },
+              {
+                "id": 29502,
+                "similarity": 0.16582374
+              },
+              {
+                "id": 572520,
+                "similarity": 0.16395186
+              },
+              {
+                "id": 222618,
+                "similarity": 0.16224205
+              },
+              {
+                "id": 460325,
+                "similarity": 0.16055995
+              },
+              {
+                "id": 211663,
+                "similarity": 0.15626435
+              },
+              {
+                "id": 803589,
+                "similarity": 0.15609188
+              },
+              {
+                "id": 186551,
+                "similarity": 0.15558605
+              },
+              {
+                "id": 335639,
+                "similarity": 0.15553597
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.579192,
+            "search_ms": 6.657191,
+            "read_control_ms": 6.5109449999999995,
+            "neighbors": [
+              {
+                "id": 142133,
+                "similarity": 0.17616001
+              },
+              {
+                "id": 892125,
+                "similarity": 0.1722494
+              },
+              {
+                "id": 976278,
+                "similarity": 0.16713026
+              },
+              {
+                "id": 490727,
+                "similarity": 0.16258515
+              },
+              {
+                "id": 760574,
+                "similarity": 0.1574561
+              },
+              {
+                "id": 486959,
+                "similarity": 0.1554279
+              },
+              {
+                "id": 791608,
+                "similarity": 0.15343642
+              },
+              {
+                "id": 537077,
+                "similarity": 0.15262562
+              },
+              {
+                "id": 711642,
+                "similarity": 0.1525126
+              },
+              {
+                "id": 78076,
+                "similarity": 0.15207675
+              }
+            ]
+          },
+          {
+            "scan_ms": 6.590242,
+            "search_ms": 6.651851000000001,
+            "read_control_ms": 6.507575,
+            "neighbors": [
+              {
+                "id": 677612,
+                "similarity": 0.16691148
+              },
+              {
+                "id": 130661,
+                "similarity": 0.16536833
+              },
+              {
+                "id": 697878,
+                "similarity": 0.1628625
+              },
+              {
+                "id": 257399,
+                "similarity": 0.16182435
+              },
+              {
+                "id": 46795,
+                "similarity": 0.16029307
+              },
+              {
+                "id": 741966,
+                "similarity": 0.15979289
+              },
+              {
+                "id": 413618,
+                "similarity": 0.15715538
+              },
+              {
+                "id": 422862,
+                "similarity": 0.15534483
+              },
+              {
+                "id": 318617,
+                "similarity": 0.15484147
+              },
+              {
+                "id": 844305,
+                "similarity": 0.1541415
+              }
+            ]
+          }
+        ]
+      },
+      "change_percent": -0.9124157397110921,
+      "arguments": [
+        "--rows",
+        "1000000",
+        "--dimensions",
+        "768",
+        "--batch",
+        "1",
+        "--k",
+        "10",
+        "--samples",
+        "10"
+      ],
+      "timing": "Host wall time with explicit completion; three warmups; serialized changing queries; scratch reserved before timing; scan/control exclude query preparation; search includes normalization, query publication, optional exclusion bitmap preparation and masking, selection and readback. GB/s uses unpadded FP16 vector bytes and decimal GB."
+    },
+    {
+      "rows": 1000000,
+      "dimensions": 768,
+      "batch": 60,
+      "k": 10,
+      "0.8.11": {
+        "median_ms": 20.345602,
+        "samples": [
+          {
+            "batch_ms": 20.406081,
+            "sequential_ms": 399.29671
+          },
+          {
+            "batch_ms": 20.213095,
+            "sequential_ms": 399.074167
+          },
+          {
+            "batch_ms": 20.553957,
+            "sequential_ms": 401.272887
+          },
+          {
+            "batch_ms": 20.345602,
+            "sequential_ms": 400.01191200000005
+          },
+          {
+            "batch_ms": 20.249765,
+            "sequential_ms": 398.424414
+          },
+          {
+            "batch_ms": 20.375071000000002,
+            "sequential_ms": 399.29810100000003
+          },
+          {
+            "batch_ms": 20.150767,
+            "sequential_ms": 399.180204
+          },
+          {
+            "batch_ms": 19.992002,
+            "sequential_ms": 398.709966
+          },
+          {
+            "batch_ms": 20.790551,
+            "sequential_ms": 399.379598
+          },
+          {
+            "batch_ms": 20.407041,
+            "sequential_ms": 398.518631
+          }
+        ]
+      },
+      "0.8.7": {
+        "median_ms": 20.365212,
+        "samples": [
+          {
+            "batch_ms": 20.365212,
+            "sequential_ms": 403.796019
+          },
+          {
+            "batch_ms": 20.370942,
+            "sequential_ms": 402.441886
+          },
+          {
+            "batch_ms": 20.343522,
+            "sequential_ms": 403.088569
+          },
+          {
+            "batch_ms": 20.274385,
+            "sequential_ms": 402.328908
+          },
+          {
+            "batch_ms": 20.377841,
+            "sequential_ms": 402.981531
+          },
+          {
+            "batch_ms": 20.241925000000002,
+            "sequential_ms": 403.093439
+          },
+          {
+            "batch_ms": 20.752042,
+            "sequential_ms": 403.676462
+          },
+          {
+            "batch_ms": 20.288684,
+            "sequential_ms": 405.446035
+          },
+          {
+            "batch_ms": 20.387061000000003,
+            "sequential_ms": 404.322945
+          },
+          {
+            "batch_ms": 21.072343,
+            "sequential_ms": 403.270063
+          }
+        ]
+      },
+      "change_percent": -0.09629165657593086,
+      "arguments": [
+        "--rows",
+        "1000000",
+        "--dimensions",
+        "768",
+        "--batch",
+        "60",
+        "--k",
+        "10",
+        "--samples",
+        "10"
+      ],
+      "timing": "Host completion. Three warmups, changing queries, alternating sequential/batch timing order. Compilation and workspace reservation excluded; query preparation, selection, masking and readback included. No concurrent hrxdb benchmark or GPU tests."
+    }
+  ],
+  "source_commit": "9ff7011",
+  "warmups": 3,
+  "schedule": {
+    "threads": 128,
+    "rows_per_wave": 2,
+    "load_width": 4
+  },
+  "reproduction": "Build hrxdb-bench --locked --release from source_commit for 0.8.7; update the HRX dependency and lockfile to 0.8.11 and rebuild for the candidate. Execute the per-case arguments using each binary in separate processes with HRX runtime/compiler overrides unset. Output paths are omitted below."
+}

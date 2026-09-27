@@ -14,7 +14,9 @@ version and stable:
 ```sh
 cargo fmt --all -- --check
 HRX_OFFLINE=1 cargo clippy --locked --all-targets -- -D warnings
+HRX_OFFLINE=1 cargo clippy --locked --all-targets --all-features -- -D warnings
 HRX_OFFLINE=1 cargo test --locked --all-targets
+HRX_OFFLINE=1 cargo test --locked --all-targets --all-features
 HRX_OFFLINE=1 cargo test --locked --doc
 HRX_OFFLINE=1 RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
 cargo package --locked
@@ -23,7 +25,7 @@ cargo package --locked
 Use `cargo +1.91.0` to check the minimum supported version explicitly. Cargo
 packaging requires a clean working tree unless you add `--allow-dirty` while
 iterating. The lockfile records the qualified runtime/compiler release;
-the manifest accepts compatible HRX 0.6 updates.
+the manifest accepts compatible HRX 0.8 updates.
 
 ## Hardware validation
 
@@ -43,6 +45,11 @@ The largest correctness test allocates about 9.4 GB. Run hardware checks
 sequentially, separately from benchmarks and other GPU workloads. Ordinary CI
 cannot validate GPU execution. If you cannot run hardware checks, say so in
 the pull request so a maintainer can qualify the change.
+
+The opt-in NPU prototype has separate [qualification instructions](docs/npu.md).
+Run its hardware tests sequentially with `cargo test --locked --release
+--features npu --test npu -- --ignored --test-threads=1` on Strix Halo NPU5.
+CPU checks with `--all-features` do not open either device.
 
 Kernel changes need relevant hardware coverage, including applicable tails,
 padding, invalid inputs, ties, shard boundaries, and stream ordering. Compare
