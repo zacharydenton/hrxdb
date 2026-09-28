@@ -2,6 +2,13 @@
 
 ## Unreleased — cached native GPU memory, prepared search, live snapshots
 
+- Select top-k up to 32 using wave winners and eight-lane reductions. Alternate
+  shared-memory slots to halve workgroup barriers per rank, with unchanged
+  score/ID ordering, register counts and zero spills.
+- Cache the latest host batch command graph by exact query count, effective k
+  and exclusion mode. Invalidate it when workspace or the corpus snapshot
+  changes. Queries and mask contents can change between replays. Add separate
+  interleaved comparisons for selection, graph reuse and their combined effect.
 - Group batch-scan products into ordered eight-component dots and unroll
   cooperative staging. At width 64, emitted arithmetic instructions fall from
   512 to 333, code from 8,576 to 6,648 bytes, and LDS dependency waits from 64 to

@@ -22,6 +22,10 @@ pub(crate) struct BatchScratch {
     pub(crate) running: (Buffer, Buffer),
     joined: (Buffer, Buffer),
     plans: Vec<BatchPlan>,
+    // Only the most recent exact query count, effective k, and mask mode.
+    search_graph: Option<(usize, usize, bool, hrx::GraphExec)>,
+    #[cfg(test)]
+    immediate: bool,
 }
 
 struct BatchPlan {
@@ -52,6 +56,9 @@ impl BatchScratch {
             running: pair(width * k * 4)?,
             joined: pair(width * k * 8)?,
             plans: Vec::new(),
+            search_graph: None,
+            #[cfg(test)]
+            immediate: false,
         })
     }
 
@@ -59,6 +66,9 @@ impl BatchScratch {
     /// keeping compiled plans. Scratch of any tile size serves any corpus, so
     /// failure leaves it valid.
     pub(crate) fn retile(&mut self, stream: &Stream, rows: usize, padded: usize) -> Result<()> {
+        // set_corpus also calls this when capacity is unchanged. Recorded
+        // bindings and tile counts still belong to the previous snapshot.
+        self.search_graph = None;
         let tile_rows = rows.min(TILE_ROWS);
         if tile_rows == self.tile_rows {
             return Ok(());
@@ -235,6 +245,10 @@ impl Searcher {
     ///
     /// An empty batch returns an empty vector. First use of a query width may
     /// allocate and compile; [`Self::reserve_batch`] can prepare it in advance.
+    /// The latest query count, effective k and exclusion mode reuse a recorded
+    /// command graph. The first search for a shape records it; workspace growth
+    /// and [`Self::set_corpus`] invalidate it. Query and exclusion contents can
+    /// change between replays without rebuilding the graph.
     ///
     /// ```no_run
     /// # use hrxdb::{Device, Searcher};
@@ -380,14 +394,7 @@ impl Searcher {
                 start.elapsed().as_secs_f64() * 1000.0,
             )?);
         } else {
-            scratch.search_commands(
-                &self.corpus,
-                exclusions,
-                count,
-                k,
-                &mut Commands::immediate(&self.stream),
-            )?;
-            self.stream.synchronize()?;
+            scratch.replay(&mut self.stream, &self.corpus, exclusions, count, k)?;
         }
         // SAFETY: the stream completed both copies to this owned readback buffer.
         let readback = unsafe { scratch.readback.bytes()? };
@@ -431,6 +438,43 @@ fn select_tile<'a>(
 }
 
 impl BatchScratch {
+    fn replay(
+        &mut self,
+        stream: &mut Stream,
+        corpus: &Corpus,
+        exclusions: Option<hrx::View<'_>>,
+        count: usize,
+        k: usize,
+    ) -> Result<()> {
+        #[cfg(test)]
+        if self.immediate {
+            self.search_commands(
+                corpus,
+                exclusions,
+                count,
+                k,
+                &mut Commands::immediate(stream),
+            )?;
+            return stream.synchronize();
+        }
+        let masked = exclusions.is_some();
+        if !self
+            .search_graph
+            .as_ref()
+            .is_some_and(|(queries, cached_k, mask, _)| {
+                (*queries, *cached_k, *mask) == (count, k, masked)
+            })
+        {
+            self.search_graph = None;
+            let mut commands = Commands::record(stream)?;
+            self.search_commands(corpus, exclusions, count, k, &mut commands)?;
+            self.search_graph = Some((count, k, masked, commands.finish()?));
+        }
+        stream.launch(&mut self.search_graph.as_mut().unwrap().3)?;
+        stream.synchronize()?;
+        Ok(())
+    }
+
     fn search_commands<'a>(
         &'a self,
         corpus: &'a Corpus,
@@ -569,6 +613,115 @@ impl BatchScratch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires gfx1151"]
+    fn cached_batch_replays_follow_queries_shapes_masks_and_snapshots() -> Result<()> {
+        let device = Device::open(0)?;
+        let mut corpus = Corpus::build(
+            &device,
+            3,
+            (0..2057).map(|i| [1.0, (i % 17) as f32 - 8.0, (i % 11) as f32 - 5.0]),
+        )?;
+        let mut cached = corpus.searcher()?;
+        let mut immediate = corpus.searcher()?;
+        for snapshot in 0..3 {
+            if snapshot == 1 {
+                // Same dimensions, count, and capacity; bindings still change.
+                corpus = corpus.update(&[0, 1024, 2056], [[0.0, 1.0, 0.0]; 3])?;
+            } else if snapshot == 2 {
+                corpus = corpus.append([[0.0, 0.0, 1.0]; 31])?;
+            }
+            cached.set_corpus(corpus.clone())?;
+            immediate.set_corpus(corpus.clone())?;
+            assert!(
+                cached
+                    .batch
+                    .as_ref()
+                    .is_none_or(|b| b.search_graph.is_none())
+            );
+            for (iteration, (count, k, masked)) in [
+                (3, 5, false),
+                (3, 5, false),
+                (4, 5, false),
+                (4, 5, true),
+                (4, 5, true),
+                (60, 33, true),
+                (3, 1024, false),
+                (3, 10, true),
+                (3, 10, false),
+                (1, 5, false),
+                (0, 5, false),
+                (3, 5, false),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let queries: Vec<_> = (0..count)
+                    .flat_map(|q| {
+                        [
+                            1.0,
+                            ((q + iteration) % 7) as f32 - 3.0,
+                            (iteration % 5) as f32 - 2.0,
+                        ]
+                    })
+                    .collect();
+                let exclusions = if masked {
+                    vec![iteration as u32, 1024, 2056, iteration as u32]
+                } else {
+                    Vec::new()
+                };
+                if count > 1 {
+                    immediate.reserve_batch(count, k)?;
+                    immediate.batch.as_mut().unwrap().immediate = true;
+                }
+                let expected = immediate.search_batch_excluding(&queries, k, &exclusions)?;
+                let actual = cached.search_batch_excluding(&queries, k, &exclusions)?;
+                assert_eq!(
+                    actual, expected,
+                    "snapshot={snapshot} iteration={iteration}"
+                );
+                for (a, b) in actual.iter().flatten().zip(expected.iter().flatten()) {
+                    assert_eq!(a.similarity.to_bits(), b.similarity.to_bits());
+                }
+                if count > 1 {
+                    let graph = cached
+                        .batch
+                        .as_ref()
+                        .unwrap()
+                        .search_graph
+                        .as_ref()
+                        .unwrap();
+                    assert_eq!((graph.0, graph.1, graph.2), (count, k, masked));
+                }
+            }
+            let excluded: Vec<_> = (0..corpus.len() as u32).collect();
+            assert!(
+                cached
+                    .search_batch_excluding(&[1.0; 9], 10, &excluded)?
+                    .iter()
+                    .all(Vec::is_empty)
+            );
+            // The same masked shape can have a different effective k.
+            let excluded: Vec<_> = (2..corpus.len() as u32).collect();
+            assert_eq!(
+                cached.search_batch_excluding(&[1.0; 9], 10, &excluded)?,
+                immediate.search_batch_excluding(&[1.0; 9], 10, &excluded)?
+            );
+            assert_eq!(
+                cached
+                    .batch
+                    .as_ref()
+                    .unwrap()
+                    .search_graph
+                    .as_ref()
+                    .unwrap()
+                    .1,
+                2
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     #[ignore = "requires gfx1151"]

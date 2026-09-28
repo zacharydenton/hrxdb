@@ -307,6 +307,14 @@ can allocate and compile, so use `reserve_batch(query_count, k)` during setup
 when first-request latency matters. `ScanConfig` tunes the single-query scan;
 the matrix kernel has its own schedule.
 
+Host batch searches cache one uninstrumented command graph for the latest exact
+query count, effective k and exclusion mode. Query values and excluded IDs can
+change without rebuilding it. Workspace growth and `set_corpus` invalidate the
+graph, including snapshot changes that keep the same dimensions and capacity.
+`reserve_batch` prepares buffers and kernels; the first search for a shape still
+records its graph. Device-query submissions remain directly queued on the
+worker's stream.
+
 On 6,909,092 × 384 generated rows, sixty top-5 queries took **80.7 ms** with
 the optimized batch scan versus **114.7 ms** with its predecessor (1.42×),
 with identical returned IDs and scores. Workspace remains 66.11 MiB. See the

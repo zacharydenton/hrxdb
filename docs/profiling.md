@@ -29,7 +29,7 @@ the configured manifest alone is not proof of their identity.
 windows**, including when using `--sweep`. Each replay must return exactly the
 same neighbors as ordinary search on the same queries and exclusions. Batch
 profiling records the same tile/selection/merge commands in a serial graph;
-ordinary batches continue using their existing submission path. Results retain
+ordinary host batches reuse a separate graph without timestamp markers. Results retain
 query order and the same precision and tie rules.
 
 Each replay contains:
@@ -184,6 +184,16 @@ staging loops need their memory/recurrence contracts preserved, with oracle
 checks and controlled comparisons for each candidate. Removing fences alone
 did not improve the measured 1M-row case; instruction counts and latency both
 matter when choosing a rewrite.
+
+The next [selection and graph-reuse comparison](../results/README.md#selection-and-cached-batch-graphs)
+cuts selection barriers from two to one per rank using wave winners,
+double-buffered LDS and eight-lane clustered reductions. First-pass selection
+shrinks from 234 to 210 emitted instructions with the same 16 VGPRs and no
+spills. LDS grows from 64 to 128 bytes without changing modeled occupancy.
+The separate replay-only comparison holds kernels fixed and measures ordinary
+immediate submission against cached uninstrumented graphs. Its instrumented
+replays use fresh graphs in both arms, so their stage intervals cannot quantify
+that submission saving. The combined change passes 54 GPU correctness tests.
 
 Upstream references:
 

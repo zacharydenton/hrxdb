@@ -1,6 +1,5 @@
-// Each group owns 1024 candidates. Each wave selects a score/ID pair, then
-// eight-lane clusters combine the eight wave winners. Scores and IDs are
-// invalidated together; equal scores always prefer the lower insertion ID.
+// Each group owns 1024 candidates. Repeated max-score/min-ID reductions give
+// exact, deterministic top-k. Both score and ID are invalidated together.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
 config.decl @db.select.limit : %value: index where [range(%value, 1, 1073741824)]
 config.decl @db.batch : %value: index where [range(%value, 1, 64)]
@@ -89,47 +88,14 @@ kernel.def target(@target) export("select") @select(%count_arg: i32) {
     %next_i = vector.insert %id into %ii[%j] : i32, vector<4xi32>
     scf.yield %next_s, %next_i : vector<4xf32>, vector<4xi32>
   }
-  %lane0 = kernel.subgroup.lane.id : index
-  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
-  %wave0 = kernel.subgroup.id : index
-  %wave = index.assume %wave0 [range(%wave0, 0, 7)] : index
-  %wave_leader = index.cmp eq, %lane, %i0 : index
-  // Alternate two sets of wave winners. The barrier for rank r+1 ensures
-  // every wave has finished reading rank r before rank r+2 overwrites it.
-  // This needs one workgroup barrier per rank, including repeated ties.
-  %scratch_bytes = index.constant 64 : offset
-  %score_scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
-  %id_scratch = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
-  %ws = buffer.view %score_scratch[%zero] : buffer -> view<16xf32>
-  %wi = buffer.view %id_scratch[%zero] : buffer -> view<16xi32>
   %end_scores, %end_ids = scf.for %rank = [%i0 to %k step %i1](%ss = %initial_scores : vector<4xf32>, %ii = %initial_ids : vector<4xi32>) -> (vector<4xf32>, vector<4xi32>) {
     %local = vector.reduce<maxnumf> %ss, %neg : vector<4xf32>, f32
-    %wave_score = kernel.subgroup.reduce<maxnumf> %local : f32
-    %wave_scores = vector.splat %wave_score : vector<4xf32>
-    %equal = vector.cmpf oeq, %ss, %wave_scores : vector<4xf32> -> vector<4xi1>
+    %best = kernel.workgroup.reduce<maxnumf> %local : f32
+    %bests = vector.splat %best : vector<4xf32>
+    %equal = vector.cmpf oeq, %ss, %bests : vector<4xf32> -> vector<4xi1>
     %candidates = vector.select %equal, %ii, %sentinels : vector<4xi32>
     %local_id = vector.reduce<minui> %candidates, %sentinel : vector<4xi32>, i32
-    %wave_id = kernel.subgroup.reduce<minui> %local_id : i32
-    %i2 = index.constant 2 : index
-    %i8 = index.constant 8 : index
-    %parity = index.rem %rank, %i2 : index
-    %scratch_base = index.mul %parity, %i8 : index
-    %scratch_at = index.add %scratch_base, %wave : index
-    scf.if %wave_leader {
-      view.store %wave_score, %ws[%scratch_at] : f32, view<16xf32>
-      view.store %wave_id, %wi[%scratch_at] : i32, view<16xi32>
-    }
-    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-    // Every eight-lane cluster reads the same eight pairs, so all threads
-    // recover the same winner without another workgroup-wide reduction.
-    %read_wave = index.rem %lane, %i8 : index
-    %read_at = index.add %scratch_base, %read_wave : index
-    %peer_score = view.load %ws[%read_at] : view<16xf32> -> f32
-    %peer_id = view.load %wi[%read_at] : view<16xi32> -> i32
-    %best = kernel.subgroup.reduce<maxnumf> %peer_score {cluster_size = 8} : f32
-    %tied = scalar.cmpf oeq, %peer_score, %best : f32
-    %tied_id = scf.select %tied, %peer_id, %sentinel : i32
-    %best_id = kernel.subgroup.reduce<minui> %tied_id {cluster_size = 8} : i32
+    %best_id = kernel.workgroup.reduce<minui> %local_id : i32
     scf.if %leader {
       %out0 = index.add %outbase, %rank : index
       %out = index.assume %out0 [range(%out0, 0, 33554431), lt(%out0, %out_count)] : index

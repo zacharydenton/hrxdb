@@ -1,5 +1,96 @@
 # Measured results
 
+## Selection and cached batch graphs
+
+Local gfx1151, 2026-09-28, HRX 0.8.11, bundle
+`native-20260927-244cd3801b`, Rust 1.95.0-nightly. The baseline is `c0f18ef`,
+including the eight-product scan and previous selection implementation.
+Another `krea2` GPU job remained active. Comparisons alternate arms on one
+shared generated corpus, change queries each iteration, and retain all samples.
+Three warmups exclude graph recording, compilation and allocation from ordinary
+latency. Our GPU benchmarks and correctness tests ran sequentially.
+
+Two changes are measured independently and together:
+
+- Selection for k≤32 first finds each wave's score/ID winner, then reduces the
+  eight winners in eight-lane clusters. Alternating shared-memory slots needs
+  one barrier per rank: the next rank's barrier completes reads before the
+  following rank reuses a slot. Ties still choose the lowest insertion ID.
+- Host batch search caches one uninstrumented graph for its latest exact query
+  count, effective k and exclusion mode. All 241 commands in the large top-5
+  batch remain; graph reuse reduces repeated recording/submission work. Corpus
+  replacement and workspace growth invalidate recorded bindings. First use of
+  a shape records a graph even after `reserve_batch` has prepared its kernels.
+
+| Combined comparison | Queries / k | Samples | Shipped median | New median | Speedup |
+|---|---:|---:|---:|---:|---:|
+| 6,909,092 × 384, first run | 60 / 5 | 31 | 73.271 ms | 64.858 ms | 1.130× |
+| 6,909,092 × 384, repeat | 60 / 5 | 31 | 79.252 ms | 70.079 ms | 1.131× |
+| 1,000,000 × 384 | 60 / 5 | 31 | 11.560 ms | 10.114 ms | 1.143× |
+| 1,000,000 × 384 | 60 / 32 | 31 | 16.177 ms | 13.983 ms | 1.157× |
+| 1,000,000 × 768 | 60 / 5 | 31 | 17.003 ms | 15.799 ms | 1.076× |
+| 4,097 × 513 | 60 / 5 | 51 | 0.631 ms | 0.159 ms | 3.961× |
+
+The candidate won all 62 pairs across the two large runs. These are gains under
+concurrent load, not isolated latency claims. Compare within each row; absolute
+latencies changed between runs. Every result ID and score bit matched, along
+with all 5,974,272 final-tile scores in each large run.
+
+Selection alone measured 1.020× end-to-end at 6.9M rows, top-5, and 1.077× at
+1M rows, top-32. Separate instrumented selection intervals fell from a median
+12.406 to 11.592 ms and 7.467 to 6.272 ms respectively. Top-1 was neutral at
+1.001×. With both arms using the new selector, graph reuse alone measured
+71.097 → 64.458 ms at 6.9M rows (1.103×). The k>32 sorted selector is unchanged;
+graph reuse alone measured 0.559 → 0.100 ms for 4,097 × 513, three queries,
+k=1,024. All these runs have their own samples in the record; their speedups
+must not be multiplied as if collected under identical load.
+
+| Static selector evidence | First pass, before → after | Merge pass, before → after |
+|---|---:|---:|
+| Emitted instructions | 234 → 210 | 244 → 221 |
+| Code bytes | 1,352 → 1,256 | 1,404 → 1,312 |
+| Workgroup barriers per rank | 2 → 1 | 2 → 1 |
+| VGPRs / SGPRs | 16 / 28 → 16 / 28 | 17 / 26 → 17 / 26 |
+| LDS bytes | 64 → 128 | 64 → 128 |
+| Spills / private bytes | 0 / 0 → 0 / 0 | 0 / 0 → 0 / 0 |
+| Modeled occupancy | 100% → 100% | 100% → 100% |
+
+Disassembly confirms the barrier counts. They and the compiler's wait reasons
+are static evidence, not measured stall cycles. A first attempt that loaded all
+eight winners into each thread's vector registers was neutral; double-buffering
+that version halved barriers but regressed at top-32. Distributing the final
+reduction over eight-lane clusters avoids that extra register/ALU work.
+
+The [selection/replay record](hrx-0.8.11-selection-replay.json) retains raw host
+samples, all per-stage replay samples, complete representative first/merge
+compiler reports, instruction counts, source/artifact hashes, rejected sources,
+and representative raw timestamp/command samples. Both arms' diagnostic replays
+use newly recorded instrumented graphs; they isolate kernel differences but do
+not measure the ordinary submission-path difference. Do not subtract their
+intervals from ordinary host time.
+
+```sh
+# Combined change against c0f18ef's selection + immediate submission:
+HRX_OFFLINE=1 ROWS=6909092 DIM=384 BATCH=60 K=5 SAMPLES=31 OUTPUT=combined.json \
+  cargo test --locked --release --lib compare_batch_optimized -- --ignored --nocapture
+# Selection only (both immediate), or replay only (identical current kernels):
+HRX_OFFLINE=1 ROWS=1000000 K=32 SAMPLES=31 OUTPUT=selection.json \
+  cargo test --locked --release --lib compare_batch_selection -- --ignored --nocapture
+HRX_OFFLINE=1 ROWS=1000000 K=5 SAMPLES=31 OUTPUT=replay.json \
+  cargo test --locked --release --lib compare_batch_replay -- --ignored --nocapture
+```
+
+Kernel comparisons accept `BASELINE_SOURCE` and `CANDIDATE_SOURCE`; selection
+defaults to `tests/fixtures/select_two_reductions.loom` versus production.
+The existing scan/tile comparisons keep immediate submission to isolate kernels.
+All 54 GPU correctness tests pass. Added coverage compares raw selector output
+against its predecessor and CPU ID ordering for signed zeros, NaNs, infinities,
+subnormals, ties, short tails, multiple merge levels and large insertion-ID
+offsets. Cached/uncached parity covers changed queries and exclusions, query
+counts within one compiled width, k=5/10/33/1,024, workspace growth, all-excluded
+queries, clamped k, and changed snapshots. CPU tests, doctests, Clippy, rustdoc,
+Rust 1.91 checking, formatting and package verification also pass.
+
 ## Batch kernel tuning with HRX 0.8.11
 
 Local gfx1151, 2026-09-27/28, HRX 0.8.11 and published bundle

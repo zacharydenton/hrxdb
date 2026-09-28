@@ -1,6 +1,10 @@
 //! Shared selection dispatch for built-in scans and application score matrices.
 use crate::*;
 use hrx::View;
+
+#[cfg(test)]
+#[path = "selection_tests.rs"]
+mod tests;
 pub(crate) struct SelectionPlan {
     pub first: Kernel,
     pub merge: Kernel,

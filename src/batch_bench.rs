@@ -1,4 +1,4 @@
-//! Opt-in interleaved benchmark of the production scan against its predecessor.
+//! Opt-in interleaved comparisons of kernels and batch submission.
 //! Both searchers share one corpus; run alone to measure GPU performance.
 use super::*;
 use std::time::Instant;
@@ -28,6 +28,38 @@ fn median(values: &[f64]) -> f64 {
 #[test]
 #[ignore = "requires gfx1151; run alone to measure performance"]
 fn compare_batch_scan() -> Result<()> {
+    compare_batch_kernels(Comparison::Scan)
+}
+
+#[test]
+#[ignore = "requires gfx1151; run alone to measure performance"]
+fn compare_batch_selection() -> Result<()> {
+    compare_batch_kernels(Comparison::Selection)
+}
+
+#[test]
+#[ignore = "requires gfx1151; run alone to measure performance"]
+fn compare_batch_replay() -> Result<()> {
+    compare_batch_kernels(Comparison::Replay)
+}
+
+#[test]
+#[ignore = "requires gfx1151; run alone to measure performance"]
+fn compare_batch_optimized() -> Result<()> {
+    compare_batch_kernels(Comparison::Combined)
+}
+
+#[derive(PartialEq)]
+enum Comparison {
+    Scan,
+    Selection,
+    Replay,
+    Combined,
+}
+
+fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
+    let selection = matches!(comparison, Comparison::Selection | Comparison::Combined);
+    let replay = matches!(comparison, Comparison::Replay | Comparison::Combined);
     let rows = var("ROWS", 6_909_092);
     let dim = var("DIM", 384);
     let batch = var("BATCH", 60);
@@ -40,6 +72,8 @@ fn compare_batch_scan() -> Result<()> {
     for db in [&mut candidate, &mut baseline] {
         db.reserve_batch(batch, k)?;
     }
+    baseline.batch.as_mut().unwrap().immediate = true;
+    candidate.batch.as_mut().unwrap().immediate = !replay;
     let width = batch.next_power_of_two().max(8);
     let source = |name: &str, default: &str| -> Result<String> {
         match std::env::var(name) {
@@ -47,30 +81,72 @@ fn compare_batch_scan() -> Result<()> {
             Err(_) => Ok(default.to_owned()),
         }
     };
-    let candidate_source = source("CANDIDATE_SOURCE", kernels::BATCH_SCAN)?;
+    assert!(
+        !selection || k <= 32,
+        "selection comparison requires k <= 32"
+    );
+    let candidate_source = source(
+        "CANDIDATE_SOURCE",
+        if selection {
+            kernels::SELECT
+        } else {
+            kernels::BATCH_SCAN
+        },
+    )?;
     let baseline_source = source(
         "BASELINE_SOURCE",
-        include_str!("../tests/fixtures/batch_scan_columns.loom"),
+        if selection {
+            include_str!("../tests/fixtures/select_two_reductions.loom")
+        } else if replay {
+            kernels::BATCH_SCAN
+        } else {
+            include_str!("../tests/fixtures/batch_scan_columns.loom")
+        },
     )?;
     let mut reports = Vec::new();
     for (db, source) in [
         (&mut baseline, &baseline_source),
         (&mut candidate, &candidate_source),
     ] {
-        let mut spec = kernels::named_spec("batch_scan");
-        spec.set_report(hrx::loom::ReportMode::Details);
-        spec.set_config("db.batch", width.to_string());
-        spec.set_config("db.scan.dimensions", db.padded.to_string());
-        let (kernel, report) = compile(&db.compiler, &db.stream, source, spec)?;
-        db.batch
-            .as_mut()
-            .unwrap()
-            .plans
-            .iter_mut()
-            .find(|p| p.width == width)
-            .unwrap()
-            .scan = kernel;
-        reports.push(report);
+        let mut arm = Vec::new();
+        for first in [true, false]
+            .into_iter()
+            .take(if selection { 2 } else { 1 })
+        {
+            let mut spec = if selection {
+                kernels::select_spec(first)
+            } else {
+                kernels::named_spec("batch_scan")
+            };
+            spec.set_report(hrx::loom::ReportMode::Details);
+            spec.set_config("db.batch", width.to_string());
+            if selection {
+                spec.set_config("db.select.limit", TILE_ROWS.to_string());
+            } else {
+                spec.set_config("db.scan.dimensions", db.padded.to_string());
+            }
+            let (kernel, report) = compile(&db.compiler, &db.stream, source, spec)?;
+            let plan = db
+                .batch
+                .as_mut()
+                .unwrap()
+                .plans
+                .iter_mut()
+                .find(|p| p.width == width)
+                .unwrap();
+            if selection {
+                let plan = plan.selections.get_mut(&width).unwrap();
+                if first {
+                    plan.first = kernel;
+                } else {
+                    plan.merge = kernel;
+                }
+            } else {
+                plan.scan = kernel;
+            }
+            arm.push(report);
+        }
+        reports.push(arm);
     }
     let mut candidate_report = reports.pop().unwrap();
     let mut baseline_report = reports.pop().unwrap();
@@ -153,7 +229,7 @@ fn compare_batch_scan() -> Result<()> {
     let baseline_ms = median(&times[0]);
     let candidate_ms = median(&times[1]);
     // Preserve artifact hashes without exporting machine-specific cache paths.
-    for compilation in [&mut baseline_report, &mut candidate_report] {
+    for compilation in baseline_report.iter_mut().chain(&mut candidate_report) {
         let path = std::path::Path::new(&compilation.artifact);
         if let (Some(key), Some(file)) = (
             path.parent().and_then(std::path::Path::file_name),
@@ -174,7 +250,11 @@ fn compare_batch_scan() -> Result<()> {
         "compared_neighbors": compared_neighbors, "final_tile_scores_compared": score_count,
         "scores_bitwise_equal": true, "ids_equal": true,
         "baseline_samples_ms": times[0], "candidate_samples_ms": times[1],
-        "baseline_compiler": baseline_report, "candidate_compiler": candidate_report,
+        "kernel_family": if selection { "select" } else { "batch_scan" },
+        "baseline_submission": "immediate",
+        "candidate_submission": if replay { "cached_graph" } else { "immediate" },
+        "baseline_compiler": baseline_report[0], "candidate_compiler": candidate_report[0],
+        "baseline_compilers": baseline_report, "candidate_compilers": candidate_report,
         "baseline_source_digest": hrx::bundle::digest(baseline_source.as_bytes()),
         "candidate_source_digest": hrx::bundle::digest(candidate_source.as_bytes()),
         "baseline_profiles": profiles[0], "candidate_profiles": profiles[1],
@@ -203,6 +283,7 @@ fn compare_batch_tiles() -> Result<()> {
     let device = Device::open(0)?;
     let mut db = Searcher::build(&device, dim, (0..rows).map(|i| row(i as u32, dim)))?;
     db.reserve_batch(batch, k)?;
+    db.batch.as_mut().unwrap().immediate = true;
     let tiles = [16_384, 32_768, 65_536, 131_072, 262_144];
     let mut times = vec![Vec::new(); tiles.len()];
     for iteration in 0..samples + 3 {
