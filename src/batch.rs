@@ -3,7 +3,9 @@ use super::*;
 
 const TILE_ROWS: usize = 262_144;
 
-fn selection_width(queries: usize, k: usize) -> usize {
+fn selection_plan_width(queries: usize, k: usize) -> usize {
+    // Small-k kernels are shared by all query counts within a scan width.
+    // Dispatch only the real query prefix of this compiled grid.
     if k > 32 {
         queries
     } else {
@@ -26,6 +28,8 @@ pub(crate) struct BatchScratch {
     search_graph: Option<(usize, usize, bool, hrx::GraphExec)>,
     #[cfg(test)]
     immediate: bool,
+    #[cfg(test)]
+    padded_selection: bool,
     #[cfg(test)]
     staged_merge: Option<bench::StagedMerge>,
 }
@@ -61,6 +65,8 @@ impl BatchScratch {
             search_graph: None,
             #[cfg(test)]
             immediate: false,
+            #[cfg(test)]
+            padded_selection: false,
             #[cfg(test)]
             staged_merge: None,
         })
@@ -134,7 +140,7 @@ impl Searcher {
     ///
     /// `search_batch` calls this automatically. Call it during setup to exclude
     /// allocation and compilation from the first batch. Scan widths are rounded
-    /// to 8, 16, 32, or 64; large-k selection omits padded query rows.
+    /// to 8, 16, 32, or 64; selection omits padded query rows for every k.
     /// Both are cached and workspace is retained.
     /// Score storage covers at most 262,144 corpus rows, independent of index size.
     /// At width 64 this uses about 66 MiB for k=5 or 322 MiB for k=1,024, plus
@@ -154,7 +160,7 @@ impl Searcher {
             return self.reserve_search(k);
         }
         let width = query_count.next_power_of_two().max(8);
-        let query_count = selection_width(query_count, k.min(self.count));
+        let query_count = selection_plan_width(query_count, k.min(self.count));
         let capacity = k.min(self.count).next_power_of_two();
         // Sized by capacity, so appends within the reserve keep this scratch.
         let tile_rows = self.corpus.capacity_range().end.min(TILE_ROWS);
@@ -433,7 +439,7 @@ fn select_tile<'a>(
     crate::selection::select_score_commands(
         commands,
         &scratch.candidates,
-        &plan.selections[&queries],
+        &plan.selections[&selection_plan_width(queries, k)],
         crate::selection::SelectionInput {
             scores: scratch.scores.binding(),
             rows,
@@ -539,7 +545,15 @@ impl BatchScratch {
         commands: &mut Commands<'a>,
     ) -> Result<()> {
         let width = queries.next_power_of_two().max(8);
-        let queries = selection_width(queries, k);
+        // Selection strides depend on corpus rows and k, not the query count.
+        // A prefix of the compiled query grid skips unused padded queries while
+        // retaining the same kernels when the real count changes within a width.
+        #[cfg(test)]
+        let queries = if self.padded_selection {
+            selection_plan_width(queries, k)
+        } else {
+            queries
+        };
         let plan = self.plans.iter().find(|p| p.width == width).unwrap();
         let tiles: usize = corpus
             .inner
@@ -672,6 +686,9 @@ mod tests {
                 (4, 5, false),
                 (4, 5, true),
                 (4, 5, true),
+                (33, 5, false),
+                (34, 5, false),
+                (60, 32, true),
                 (60, 33, true),
                 (3, 1024, false),
                 (3, 10, true),
@@ -700,6 +717,7 @@ mod tests {
                 if count > 1 {
                     immediate.reserve_batch(count, k)?;
                     immediate.batch.as_mut().unwrap().immediate = true;
+                    immediate.batch.as_mut().unwrap().padded_selection = true;
                 }
                 let expected = immediate.search_batch_excluding(&queries, k, &exclusions)?;
                 let actual = cached.search_batch_excluding(&queries, k, &exclusions)?;
@@ -753,7 +771,7 @@ mod tests {
     #[ignore = "requires gfx1151"]
     fn shorter_final_dispatch_has_correct_scores_and_ids() -> Result<()> {
         let device = Device::open(0)?;
-        for tail in [1usize, 31, 65] {
+        for tail in [1usize, 2, 3, 4, 31, 65, 66, 67] {
             let count = TILE_ROWS + tail;
             let row = |r: usize| -> [f32; 3] {
                 if r < TILE_ROWS {
@@ -915,6 +933,11 @@ mod tests {
         assert_eq!(db.search_batch(&valid, 5)?, first);
         assert_eq!(db.compilation_reports().len(), reports);
         assert_eq!(db.batch_workspace_bytes(), bytes);
+        db.reserve_batch(33, 5)?;
+        let reports = db.compilation_reports().len();
+        db.reserve_batch(34, 5)?;
+        db.reserve_batch(60, 32)?;
+        assert_eq!(db.compilation_reports().len(), reports);
         assert!(first[0].iter().all(|n| n.similarity == 1.0));
         assert!(first[1].iter().all(|n| n.similarity == 0.0));
         let mut empty = Searcher::build(&device, 3, std::iter::empty::<[f32; 3]>())?;

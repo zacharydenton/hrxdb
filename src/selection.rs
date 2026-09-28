@@ -85,6 +85,8 @@ pub(crate) fn select_score_commands<'a>(
         // SAFETY: per-query selection uses packed count/ceil(count/1024)*k
         // strides, all within the reserved width * tile capacity. Input and
         // output never alias. Only the first pass assigns global insertion IDs.
+        // A batch smaller than the compiled grid is a valid query prefix:
+        // each query is independent and its strides use only count and k.
         unsafe {
             if k > 32 {
                 commands.dispatch(

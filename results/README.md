@@ -1,5 +1,100 @@
 # Measured results
 
+## Batch score stores and real-query selection
+
+Local gfx1151, 2026-09-28, HRX 0.8.11, bundle
+`native-20260927-244cd3801b`, Rust 1.95.0-nightly, baseline `aa4e828`.
+External GPU load changed throughout, including `krea2`'s `bench_runtime` and
+`bench-before`. Our GPU work ran sequentially. Comparisons alternate arms on
+one shared generated corpus with changing queries and three warmups. The final
+comparisons use cached graphs in both arms. Absolute times are not comparable
+between runs and these are not isolated latency claims.
+
+Two changes are retained:
+
+- At compiled widths 16/32/64, gather each query's four adjacent row scores
+  into one vector store. Accumulation and normalization retain their arithmetic
+  order. Scalar stores handle partial row groups without crossing query strides.
+  Width 8 retains the baseline scan's executable code.
+- Select and merge only real queries. A 33-query batch still scans at width 64
+  but selects 33 query rows. Small-k kernels remain shared across counts within
+  the compiled width; the change needs no extra compilation for those counts.
+
+| Combined comparison | Queries / k | Samples | Baseline median | Candidate median | Ratio |
+|---|---:|---:|---:|---:|---:|
+| 6,909,092 × 384, run 1 | 60 / 5 | 31 | 139.339 ms | 133.252 ms | 1.046× |
+| 6,909,092 × 384, run 2 | 60 / 5 | 31 | 69.769 ms | 62.348 ms | 1.119× |
+| 6,909,092 × 384, run 3 | 60 / 5 | 31 | 70.273 ms | 61.534 ms | 1.142× |
+| 6,909,092 × 384, run 4 | 60 / 5 | 31 | 149.745 ms | 152.750 ms | 0.980× |
+| 1,000,000 × 384 | 33 / 5 | 31 | 9.206 ms | 7.895 ms | 1.166× |
+| 1,000,000 × 384 | 16 / 5 | 31 | 5.219 ms | 5.140 ms | 1.015× |
+| 1,000,000 × 768 | 60 / 5 | 31 | 16.903 ms | 16.786 ms | 1.007× |
+
+The candidate won 100/124 pairs across the four large runs and all 31 pairs in
+the final 33-query comparison, but the fourth large run's ratio of medians is
+negative. The first two large runs preceded the width-8 fallback; their width-64
+machine code is byte-identical to the final source. The record checks both that
+identity and the final width-8 scan's identity with the baseline.
+
+Controls quantify the uncertainty: identical kernels at 6.9M rows measured
+140.281 versus 141.872 ms (0.989×). At 262,145 × 129, three queries, k=1,024,
+the final width-8 baseline and candidate have identical code and work, yet
+measured 4.203 versus 4.488 ms (0.937×). These controls do not correct other runs;
+they limit what small differences under this load can establish. The changes
+have useful wins, especially near padding boundaries, rather than a guaranteed
+speedup across workloads or contention levels.
+
+| Absolute evidence, 6.9M × 384 / 60 queries / k=5 | Baseline | Candidate |
+|---|---:|---:|
+| Selection workgroups | 436,928 | 409,620 |
+| Running-merge workgroups | 1,664 | 1,560 |
+| Scan workgroups | 107,955 | 107,955 |
+| Commands / copies | 137 / 4 | 137 / 4 |
+| Stores per thread on the full-row path | 16 × 32-bit | 4 × 128-bit |
+| Bytes written per thread on that path | 64 | 64 |
+| Width-64 VGPRs | 52 | 54 |
+| Whole-kernel instructions / code bytes | 1,082 / 6,648 | 1,267 / 7,372 |
+| Spill plans / spills / materialized reloads | 0 / 0 / 0 | 0 / 0 / 0 |
+| Private bytes / LDS bytes | 0 / 12,544 | 0 / 12,544 |
+| Modeled occupancy | 100% | 100% |
+
+The static store count remains sixteen because the new code contains four
+vector stores and twelve scalar tail stores. It does not measure dynamically
+executed stores or memory traffic. Width-16/32 candidates use 72/54 VGPRs with
+zero spills and unchanged 62%/93% modeled occupancy. Separate diagnostic
+replays in large run 3 showed median scan intervals 54.770 → 48.592 ms and
+selection 14.308 → 11.068 ms. Those instrumented intervals include marker/barrier
+perturbation and cannot be subtracted from ordinary latency.
+
+Selection-prefix dispatch alone measured 1.091× for 33 queries and 1.015× for
+60 queries with unchanged scan code. Rejected experiments include dot groups
+of 4/16/32, a higher-register vector-store epilogue, hoisting the full-row
+branch, and batching norm loads. Universal vector stores produced adverse
+narrow-batch measurements; subsequent controls exposed substantial noise, and
+neither norm-load changes nor repeated timings established a reliable reason
+to change the width-8 scan. Its scalar implementation is retained.
+
+The [44-run record](hrx-0.8.11-batch-output.json) retains every host sample,
+all stage intervals, workgroup/copy counts, actual compiler allocation/emission/
+wait/resource summaries, artifact identities, executable-section hashes and
+exploratory sources. Large repeated per-operation report trees and raw timestamp
+arrays are omitted. LLVM 22.1.8 disassembly confirms the store widths.
+
+```sh
+HRX_OFFLINE=1 ROWS=6909092 DIM=384 BATCH=60 K=5 SAMPLES=31 \
+  CACHED_GRAPHS=1 PADDED_SELECTION_BASELINE=1 \
+  BASELINE_SOURCE=tests/fixtures/batch_scan_scalar_stores.loom OUTPUT=output.json \
+  cargo test --locked --release --lib compare_batch_scan -- --ignored --nocapture
+```
+
+For selection alone, also set `CANDIDATE_SOURCE` to that baseline fixture. For
+an identical-kernel control, use the same fixture in both arms and omit
+`PADDED_SELECTION_BASELINE`. All result IDs and score bits matched. All 55 GPU
+tests pass, with expanded tails 1/2/3/4/31/65/66/67, masks, shard boundaries,
+FP16 extremes, real/padded query parity and cached snapshot changes. Profiling
+tests assert actual selection/merge grid sizes, and kernel reuse is checked
+across 33/34/60-query small-k batches.
+
 ## Prefetch and direct batch merge
 
 Local gfx1151, 2026-09-28, HRX 0.8.11, bundle

@@ -294,6 +294,8 @@ Equal computed scores still prefer the lower insertion ID.
 
 Scores are materialized for at most 262,144 corpus rows at a time. GPU selection
 keeps each query's tile top-k, then merges it with that query's running top-k.
+The scan pads query widths to 8, 16, 32 or 64 for corpus reuse; selection and
+running merges process only the real queries, including for small k.
 The running merge reads the two lists directly and alternates output buffers;
 it does not concatenate them through staging copies. Host batches use four
 copies in total: two to initialize the running lists and two for final readback.

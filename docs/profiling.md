@@ -204,6 +204,22 @@ zero private/LDS bytes and 100% modeled occupancy show no residency penalty.
 Final ordinary timing is neutral under variable external load. Instrumented
 copy intervals shrink, but cannot establish an ordinary latency saving.
 
+The subsequent [batch-output measurements](../results/README.md#batch-score-stores-and-real-query-selection)
+keep the ordered accumulation and change score output at widths 16–64. The full
+row-group path uses four 128-bit stores per thread instead of sixteen 32-bit
+stores. Both write 64 bytes. Partial row groups use scalar stores so unaligned
+query strides cannot cause writes into the next query. Width 8 retains its
+previous executable code because measurements did not establish a reliable gain.
+The whole-kernel static store count remains sixteen: four vector stores plus
+twelve scalar tail stores. This is another case where static counts alone do
+not describe executed work. Selection grids and running merges now cover only
+real queries, while small-k kernels remain shared within each compiled width.
+
+The comparison harness accepts `CACHED_GRAPHS=1` to measure cached submission
+in both arms and `PADDED_SELECTION_BASELINE=1` to retain the former selection
+grid in the baseline. Detailed resource reports, generated-code checks, ordinary
+samples and separate instrumented stage intervals are retained in the record.
+
 Upstream references:
 
 - [Compile evidence and its interpretation](https://github.com/ROCm/hrx-system/blob/244cd3801b/loom/docs/src/workflows/compile-reports.md)

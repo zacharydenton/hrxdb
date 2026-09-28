@@ -2,6 +2,10 @@
 
 ## Unreleased — cached native GPU memory, prepared search, live snapshots
 
+- Write four adjacent batch scores per store at compiled widths 16–64, retaining
+  scalar stores for partial row groups and width 8. Preserve score bits and
+  accumulation order. Dispatch selection and running merges only for real
+  queries, sharing the existing compiled kernels across small-k batch counts.
 - Merge batch tile results directly from separate score/ID bindings, alternating
   output buffers so the final list always lands in the final result buffer.
   Remove four staging copies per additional tile and halve merge scratch.

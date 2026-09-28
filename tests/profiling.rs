@@ -52,7 +52,7 @@ fn profile_matches_search_for_single_batch_large_k_and_exclusions() -> Result<()
     let device = Device::open(0)?;
     let mut db = Searcher::build(&device, 129, (0..2051).map(|i| row(i, 129)))?;
     for k in [10, 33, 1024] {
-        for batch in [1, 3, 8, 60] {
+        for batch in [1, 3, 8, 33, 60] {
             for pass in 0..2 {
                 let queries: Vec<_> = (0..batch)
                     .flat_map(|q| row(9000 + pass * 71 + q, 129))
@@ -80,6 +80,14 @@ fn profile_matches_search_for_single_batch_large_k_and_exclusions() -> Result<()
                 assert!(profile.stages.contains_key("copy"));
                 if batch > 1 {
                     assert_eq!(profile.stages["copy"].commands, 4);
+                    for command in &profile.commands {
+                        if matches!(
+                            command.operation.as_str(),
+                            "select" | "sort_select" | "sorted_merge"
+                        ) {
+                            assert_eq!(command.grid.unwrap()[1], batch as u32);
+                        }
+                    }
                 }
                 if batch == 1 && !excluded.is_empty() {
                     assert!(profile.stages.contains_key("mask_scores"));
@@ -115,6 +123,11 @@ fn profile_tracks_tiles_and_snapshot_changes_and_empty_work() -> Result<()> {
         let profile = actual.execution.unwrap();
         check_profile(&profile);
         assert_eq!(profile.stages["copy"].commands, 4);
+        for command in &profile.commands {
+            if command.operation == "batch_merge" {
+                assert_eq!(command.grid.unwrap()[0], 3);
+            }
+        }
         if db.len() > 262_144 {
             assert!(profile.stages["batch_scan"].commands > 1);
             assert!(profile.stages.contains_key("batch_merge"));

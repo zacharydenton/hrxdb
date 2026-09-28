@@ -113,6 +113,8 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     let selection = matches!(comparison, Comparison::Selection | Comparison::Combined);
     let replay = matches!(comparison, Comparison::Replay | Comparison::Combined);
     let merge = comparison == Comparison::Merge;
+    let cached = merge || var("CACHED_GRAPHS", 0) != 0;
+    let padded_baseline = var("PADDED_SELECTION_BASELINE", 0) != 0;
     let rows = var("ROWS", 6_909_092);
     let dim = var("DIM", 384);
     let batch = var("BATCH", 60);
@@ -125,8 +127,9 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     for db in [&mut candidate, &mut baseline] {
         db.reserve_batch(batch, k)?;
     }
-    baseline.batch.as_mut().unwrap().immediate = !merge;
-    candidate.batch.as_mut().unwrap().immediate = !(replay || merge);
+    baseline.batch.as_mut().unwrap().immediate = !cached;
+    candidate.batch.as_mut().unwrap().immediate = !(replay || cached);
+    baseline.batch.as_mut().unwrap().padded_selection = padded_baseline;
     let width = batch.next_power_of_two().max(8);
     let source = |name: &str, default: &str| -> Result<String> {
         match std::env::var(name) {
@@ -328,8 +331,10 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         "scores_bitwise_equal": true, "ids_equal": true,
         "baseline_samples_ms": times[0], "candidate_samples_ms": times[1],
         "kernel_family": if selection { "select" } else if merge { "batch_merge" } else { "batch_scan" },
-        "baseline_submission": if merge { "cached_graph" } else { "immediate" },
-        "candidate_submission": if replay || merge { "cached_graph" } else { "immediate" },
+        "baseline_submission": if cached { "cached_graph" } else { "immediate" },
+        "candidate_submission": if replay || cached { "cached_graph" } else { "immediate" },
+        "baseline_padded_selection": padded_baseline,
+        "candidate_padded_selection": false,
         "baseline_compiler": baseline_report[0], "candidate_compiler": candidate_report[0],
         "baseline_compilers": baseline_report, "candidate_compilers": candidate_report,
         "baseline_source_digest": hrx::bundle::digest(baseline_source.as_bytes()),
