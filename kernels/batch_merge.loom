@@ -1,0 +1,84 @@
+// Merge each query's two sorted k-lists directly from separate bindings.
+// Output never aliases either input. Equal score/ID pairs prefer the left list.
+amdgpu.target<gfx1151> @target {subgroup_size = 32}
+config.decl @db.batch : %value: index where [range(%value, 1, 64)]
+config.decl @db.select.limit : %value: index where [range(%value, 1, 1073741824)]
+kernel.def target(@target) export("batch_merge") @batch_merge(%queries_arg: i32) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %raw = index.cast %queries_arg : i32 to index
+  %queries = index.assume %raw [range(%raw, 1, 64)] : index
+  kernel.launch.config workgroups(%queries, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%queries_arg: i32, %k_arg: i32, %rounds_arg: i32, %left_scores: buffer, %left_ids: buffer, %right_scores: buffer, %right_ids: buffer, %out_scores: buffer, %out_ids: buffer) {
+  %i0 = index.constant 0 : index
+  %i1 = index.constant 1 : index
+  %i2 = index.constant 2 : index
+  %c256 = index.constant 256 : index
+  %raw = index.cast %queries_arg : i32 to index
+  %queries = index.assume %raw [range(%raw, 1, 64)] : index
+  %kraw = index.cast %k_arg : i32 to index
+  %k = index.assume %kraw [range(%kraw, 1, 1024)] : index
+  // The caller supplies ceil(log2(k+1)) once when recording the graph.
+  %rounds0 = index.cast %rounds_arg : i32 to index
+  %rounds = index.assume %rounds0 [range(%rounds0, 1, 11)] : index
+  %tid0 = kernel.workitem.id<x> : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
+  %query0 = kernel.workgroup.id<x> : index
+  %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %queries)] : index
+  %four = index.constant 4 : offset
+  %stride = index.scale %k, %four : index, offset -> offset
+  %input_offset = index.scale %query, %stride : index, offset -> offset
+  %os = buffer.view %out_scores[%input_offset] : buffer -> view<[%k]xf32>
+  %oi = buffer.view %out_ids[%input_offset] : buffer -> view<[%k]xi32>
+  %twok = index.mul %k, %i2 : index
+  scf.for %candidate = [%tid to %twok step %c256] {
+    %from_right = index.cmp uge, %candidate, %k : index
+    %relative = index.sub %candidate, %k : index
+    %position0 = scf.select %from_right, %relative, %candidate : index
+    %position = index.assume %position0 [range(%position0, 0, 1023), lt(%position0, %k)] : index
+    %selected_scores = scf.select %from_right, %right_scores, %left_scores : buffer
+    %selected_ids = scf.select %from_right, %right_ids, %left_ids : buffer
+    %other_scores = scf.select %from_right, %left_scores, %right_scores : buffer
+    %other_ids = scf.select %from_right, %left_ids, %right_ids : buffer
+    %sv = buffer.view %selected_scores[%input_offset] : buffer -> view<[%k]xf32>
+    %iv = buffer.view %selected_ids[%input_offset] : buffer -> view<[%k]xi32>
+    %peer_scores = buffer.view %other_scores[%input_offset] : buffer -> view<[%k]xf32>
+    %peer_ids = buffer.view %other_ids[%input_offset] : buffer -> view<[%k]xi32>
+    %score = view.load %sv[%position] : view<[%k]xf32> -> f32
+    %id = view.load %iv[%position] : view<[%k]xi32> -> i32
+    // Binary-search the number of candidates preceding this one in the
+    // other list. Equal sentinel pairs prefer the left list, so even padded
+    // entries have unique output ranks. The uniform bound covers every lane.
+    %rank_other, %end = scf.for %step = [%i0 to %rounds step %i1](%lo = %i0 : index, %hi = %k : index) -> (index, index) {
+      %sum0 = index.add %lo, %hi : index
+      %sum = index.assume %sum0 [range(%sum0, 0, 2048)] : index
+      %mid = index.div %sum, %i2 : index
+      %active = index.cmp ult, %lo, %hi : index
+      %safe = scf.select %active, %mid, %i0 : index
+      %peer = index.assume %safe [range(%safe, 0, 1023), lt(%safe, %k)] : index
+      %s = view.load %peer_scores[%peer] : view<[%k]xf32> -> f32
+      %ident = view.load %peer_ids[%peer] : view<[%k]xi32> -> i32
+      %greater = scalar.cmpf ogt, %s, %score : f32
+      %equal = scalar.cmpf oeq, %s, %score : f32
+      %earlier = scalar.cmpi ult, %ident, %id : i32
+      %same_id = scalar.cmpi eq, %ident, %id : i32
+      %left_first = scalar.andi %same_id, %from_right : i1
+      %id_before = scalar.ori %earlier, %left_first : i1
+      %tie = scalar.andi %equal, %id_before : i1
+      %before = scalar.ori %greater, %tie : i1
+      %advance = scalar.andi %active, %before : i1
+      %after_mid = index.add %mid, %i1 : index
+      %next_lo = scf.select %advance, %after_mid, %lo : index
+      %next_hi = scf.select %advance, %hi, %mid : index
+      scf.yield %next_lo, %next_hi : index, index
+    }
+    %rank = index.add %position, %rank_other : index
+    %keep = index.cmp ult, %rank, %k : index
+    scf.if %keep {
+      %out = index.assume %rank [range(%rank, 0, 1023), lt(%rank, %k)] : index
+      view.store %score, %os[%out] : f32, view<[%k]xf32>
+      view.store %id, %oi[%out] : i32, view<[%k]xi32>
+    }
+  }
+  kernel.return
+}

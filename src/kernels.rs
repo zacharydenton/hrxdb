@@ -6,6 +6,7 @@ pub const SELECT: &str = include_str!("../kernels/select_family.loom");
 pub const SORT: &str = include_str!("../kernels/sort_family.loom");
 pub const MASK: &str = include_str!("../kernels/mask.loom");
 pub const BATCH_SCAN: &str = include_str!("../kernels/batch_scan.loom");
+pub const BATCH_MERGE: &str = include_str!("../kernels/batch_merge.loom");
 pub fn named_spec(symbol: &str) -> Specialization {
     let mut spec = Specialization::new(symbol);
     if ["sort_select", "sorted_merge"].contains(&symbol) {

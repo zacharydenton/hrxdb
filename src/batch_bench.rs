@@ -3,6 +3,51 @@
 use super::*;
 use std::time::Instant;
 
+/// Preserved staging path for interleaved comparisons and correctness oracles.
+pub(super) struct StagedMerge {
+    kernel: Kernel,
+    joined: (Buffer, Buffer),
+}
+
+impl StagedMerge {
+    pub(super) fn record<'a>(
+        &'a self,
+        commands: &mut Commands<'a>,
+        running: &'a (Buffer, Buffer),
+        tile: &'a (Buffer, Buffer),
+        queries: usize,
+        k: usize,
+    ) -> Result<()> {
+        let bytes = queries * k * 4;
+        for (joined, running, tile) in [
+            (&self.joined.0, &running.0, &tile.0),
+            (&self.joined.1, &running.1, &tile.1),
+        ] {
+            commands.copy(joined.try_slice(0, bytes)?, running.try_slice(0, bytes)?)?;
+            commands.copy(joined.try_slice(bytes, bytes)?, tile.try_slice(0, bytes)?)?;
+        }
+        let mut constants = Constants::new();
+        constants.push((queries * 2) as u32)?;
+        constants.push(k as u32)?;
+        // SAFETY: joined holds both queries*k inputs, and running is separate.
+        unsafe {
+            commands.dispatch(
+                &self.kernel,
+                [queries as u32, 1, 1],
+                [256, 1, 1],
+                &constants,
+                &[
+                    self.joined.0.binding(),
+                    self.joined.1.binding(),
+                    running.0.binding(),
+                    running.1.binding(),
+                ],
+            )?;
+        }
+        Ok(())
+    }
+}
+
 fn var(name: &str, default: usize) -> usize {
     std::env::var(name).map_or(default, |v| v.parse().expect("integer benchmark option"))
 }
@@ -49,17 +94,25 @@ fn compare_batch_optimized() -> Result<()> {
     compare_batch_kernels(Comparison::Combined)
 }
 
+#[test]
+#[ignore = "requires gfx1151; run alone to measure performance"]
+fn compare_batch_merge() -> Result<()> {
+    compare_batch_kernels(Comparison::Merge)
+}
+
 #[derive(PartialEq)]
 enum Comparison {
     Scan,
     Selection,
     Replay,
     Combined,
+    Merge,
 }
 
 fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     let selection = matches!(comparison, Comparison::Selection | Comparison::Combined);
     let replay = matches!(comparison, Comparison::Replay | Comparison::Combined);
+    let merge = comparison == Comparison::Merge;
     let rows = var("ROWS", 6_909_092);
     let dim = var("DIM", 384);
     let batch = var("BATCH", 60);
@@ -72,8 +125,8 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     for db in [&mut candidate, &mut baseline] {
         db.reserve_batch(batch, k)?;
     }
-    baseline.batch.as_mut().unwrap().immediate = true;
-    candidate.batch.as_mut().unwrap().immediate = !replay;
+    baseline.batch.as_mut().unwrap().immediate = !merge;
+    candidate.batch.as_mut().unwrap().immediate = !(replay || merge);
     let width = batch.next_power_of_two().max(8);
     let source = |name: &str, default: &str| -> Result<String> {
         match std::env::var(name) {
@@ -89,6 +142,8 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         "CANDIDATE_SOURCE",
         if selection {
             kernels::SELECT
+        } else if merge {
+            kernels::BATCH_MERGE
         } else {
             kernels::BATCH_SCAN
         },
@@ -97,6 +152,8 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         "BASELINE_SOURCE",
         if selection {
             include_str!("../tests/fixtures/select_two_reductions.loom")
+        } else if merge {
+            include_str!("../tests/fixtures/batch_merge_staged.loom")
         } else if replay {
             kernels::BATCH_SCAN
         } else {
@@ -104,10 +161,13 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         },
     )?;
     let mut reports = Vec::new();
-    for (db, source) in [
+    for (arm_index, (db, source)) in [
         (&mut baseline, &baseline_source),
         (&mut candidate, &candidate_source),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mut arm = Vec::new();
         for first in [true, false]
             .into_iter()
@@ -115,12 +175,18 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         {
             let mut spec = if selection {
                 kernels::select_spec(first)
+            } else if merge && arm_index == 0 {
+                let mut spec = kernels::named_spec("sorted_merge");
+                spec.set_config("db.merge.planar", "1");
+                spec
+            } else if merge {
+                kernels::named_spec("batch_merge")
             } else {
                 kernels::named_spec("batch_scan")
             };
             spec.set_report(hrx::loom::ReportMode::Details);
-            spec.set_config("db.batch", width.to_string());
-            if selection {
+            spec.set_config("db.batch", if merge { 1 } else { width }.to_string());
+            if selection || merge {
                 spec.set_config("db.select.limit", TILE_ROWS.to_string());
             } else {
                 spec.set_config("db.scan.dimensions", db.padded.to_string());
@@ -140,6 +206,17 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
                     plan.first = kernel;
                 } else {
                     plan.merge = kernel;
+                }
+            } else if merge {
+                if arm_index == 0 {
+                    let batch = db.batch.as_mut().unwrap();
+                    let bytes = batch.width * batch.k * 8;
+                    batch.staged_merge = Some(StagedMerge {
+                        kernel,
+                        joined: (db.stream.allocate(bytes)?, db.stream.allocate(bytes)?),
+                    });
+                } else {
+                    plan.running_merge = kernel;
                 }
             } else {
                 plan.scan = kernel;
@@ -250,9 +327,9 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         "compared_neighbors": compared_neighbors, "final_tile_scores_compared": score_count,
         "scores_bitwise_equal": true, "ids_equal": true,
         "baseline_samples_ms": times[0], "candidate_samples_ms": times[1],
-        "kernel_family": if selection { "select" } else { "batch_scan" },
-        "baseline_submission": "immediate",
-        "candidate_submission": if replay { "cached_graph" } else { "immediate" },
+        "kernel_family": if selection { "select" } else if merge { "batch_merge" } else { "batch_scan" },
+        "baseline_submission": if merge { "cached_graph" } else { "immediate" },
+        "candidate_submission": if replay || merge { "cached_graph" } else { "immediate" },
         "baseline_compiler": baseline_report[0], "candidate_compiler": candidate_report[0],
         "baseline_compilers": baseline_report, "candidate_compilers": candidate_report,
         "baseline_source_digest": hrx::bundle::digest(baseline_source.as_bytes()),

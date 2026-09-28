@@ -179,9 +179,8 @@ the records support improvements under that load, not isolated latency claims.
 Research in HRX-system at `244cd3801b` also covered affine-address fusion,
 loop-carried accumulator reuse, phased scheduling, explicit read-ahead and
 workgroup staging. The updated compiler applies its native optimizations to
-existing kernels automatically. Explicit pipelining remains further work:
-staging loops need their memory/recurrence contracts preserved, with oracle
-checks and controlled comparisons for each candidate. Removing fences alone
+existing kernels automatically. The subsequent prefetch experiments below
+preserve staging/recurrence contracts and check exact results. Removing fences alone
 did not improve the measured 1M-row case; instruction counts and latency both
 matter when choosing a rewrite.
 
@@ -194,6 +193,16 @@ The separate replay-only comparison holds kernels fixed and measures ordinary
 immediate submission against cached uninstrumented graphs. Its instrumented
 replays use fresh graphs in both arms, so their stage intervals cannot quantify
 that submission saving. The combined change passes 54 GPU correctness tests.
+
+The [prefetch and direct-merge experiments](../results/README.md#prefetch-and-direct-batch-merge)
+leave the scan unchanged: deeper pipelines increased register/code costs for
+weak timing gains, and doubled LDS reduced modeled occupancy to 62%.
+The new `batch_merge` stage reads separate sorted lists and alternates output
+buffers. Nonempty host batches now have four copies regardless of tile count;
+the 27-tile profile drops from 241 commands to 137. Its 19 VGPRs, zero spills,
+zero private/LDS bytes and 100% modeled occupancy show no residency penalty.
+Final ordinary timing is neutral under variable external load. Instrumented
+copy intervals shrink, but cannot establish an ordinary latency saving.
 
 Upstream references:
 

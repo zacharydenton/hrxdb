@@ -294,6 +294,9 @@ Equal computed scores still prefer the lower insertion ID.
 
 Scores are materialized for at most 262,144 corpus rows at a time. GPU selection
 keeps each query's tile top-k, then merges it with that query's running top-k.
+The running merge reads the two lists directly and alternates output buffers;
+it does not concatenate them through staging copies. Host batches use four
+copies in total: two to initialize the running lists and two for final readback.
 The full corpus × batch score matrix is never allocated, and only final results
 are read back (2,400 bytes for sixty top-5 queries).
 

@@ -2,6 +2,11 @@
 
 ## Unreleased — cached native GPU memory, prepared search, live snapshots
 
+- Merge batch tile results directly from separate score/ID bindings, alternating
+  output buffers so the final list always lands in the final result buffer.
+  Remove four staging copies per additional tile and halve merge scratch.
+  Bound binary search by k instead of always running eleven rounds. Preserve
+  exact score bits, tie ordering and padded entries for every k=1–1,024.
 - Select top-k up to 32 using wave winners and eight-lane reductions. Alternate
   shared-memory slots to halve workgroup barriers per rank, with unchanged
   score/ID ordering, register counts and zero spills.

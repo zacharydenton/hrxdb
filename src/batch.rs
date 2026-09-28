@@ -20,12 +20,14 @@ pub(crate) struct BatchScratch {
     scores: Buffer,
     candidates: [(Buffer, Buffer); 2],
     pub(crate) running: (Buffer, Buffer),
-    joined: (Buffer, Buffer),
+    merge_scratch: (Buffer, Buffer),
     plans: Vec<BatchPlan>,
     // Only the most recent exact query count, effective k, and mask mode.
     search_graph: Option<(usize, usize, bool, hrx::GraphExec)>,
     #[cfg(test)]
     immediate: bool,
+    #[cfg(test)]
+    staged_merge: Option<bench::StagedMerge>,
 }
 
 struct BatchPlan {
@@ -54,11 +56,13 @@ impl BatchScratch {
             scores: stream.allocate(width * tile_rows * 4)?,
             candidates: [pair(scratch)?, pair(scratch)?],
             running: pair(width * k * 4)?,
-            joined: pair(width * k * 8)?,
+            merge_scratch: pair(width * k * 4)?,
             plans: Vec::new(),
             search_graph: None,
             #[cfg(test)]
             immediate: false,
+            #[cfg(test)]
+            staged_merge: None,
         })
     }
 
@@ -114,10 +118,15 @@ impl Searcher {
             s.query.buffer().binding().len()
                 + s.readback.buffer().binding().len()
                 + s.scores.binding().len()
-                + [&s.candidates[0], &s.candidates[1], &s.running, &s.joined]
-                    .iter()
-                    .map(|(a, b)| a.binding().len() + b.binding().len())
-                    .sum::<usize>()
+                + [
+                    &s.candidates[0],
+                    &s.candidates[1],
+                    &s.running,
+                    &s.merge_scratch,
+                ]
+                .iter()
+                .map(|(a, b)| a.binding().len() + b.binding().len())
+                .sum::<usize>()
         })
     }
 
@@ -213,9 +222,7 @@ impl Searcher {
         let mut scan_spec = kernels::named_spec("batch_scan");
         scan_spec.set_config("db.scan.dimensions", self.padded.to_string());
         let scan = build(kernels::BATCH_SCAN, scan_spec, width)?;
-        let mut running_spec = kernels::named_spec("sorted_merge");
-        running_spec.set_config("db.merge.planar", "1");
-        let running_merge = build(kernels::SORT, running_spec, 1)?;
+        let running_merge = build(kernels::BATCH_MERGE, kernels::named_spec("batch_merge"), 1)?;
         let (selection, selection_reports) = crate::selection::SelectionPlan::new(
             &self.compiler,
             &self.stream,
@@ -534,6 +541,23 @@ impl BatchScratch {
         let width = queries.next_power_of_two().max(8);
         let queries = selection_width(queries, k);
         let plan = self.plans.iter().find(|p| p.width == width).unwrap();
+        let tiles: usize = corpus
+            .inner
+            .shards
+            .iter()
+            .map(|shard| shard.count.div_ceil(self.tile_rows))
+            .sum();
+        // Alternate destinations so no merge reads and writes the same list.
+        // Choose the first destination so the final tile always lands in running,
+        // including when shard boundaries add extra short tiles.
+        let start_in_scratch = tiles.is_multiple_of(2);
+        #[cfg(test)]
+        let start_in_scratch = start_in_scratch && self.staged_merge.is_none();
+        let (mut running, mut spare) = if start_in_scratch {
+            (&self.merge_scratch, &self.running)
+        } else {
+            (&self.running, &self.merge_scratch)
+        };
         let mut started = false;
         for shard in &corpus.inner.shards {
             for local in (0..shard.count).step_by(self.tile_rows) {
@@ -567,28 +591,27 @@ impl BatchScratch {
                 let bytes = queries * k * 4;
                 if !started {
                     commands.copy(
-                        self.running.0.try_slice(0, bytes)?,
+                        running.0.try_slice(0, bytes)?,
                         self.candidates[output].0.try_slice(0, bytes)?,
                     )?;
                     commands.copy(
-                        self.running.1.try_slice(0, bytes)?,
+                        running.1.try_slice(0, bytes)?,
                         self.candidates[output].1.try_slice(0, bytes)?,
                     )?;
                     started = true;
                 } else {
-                    for (joined, running, tile) in [
-                        (&self.joined.0, &self.running.0, &self.candidates[output].0),
-                        (&self.joined.1, &self.running.1, &self.candidates[output].1),
-                    ] {
-                        commands.copy(joined.try_slice(0, bytes)?, running.try_slice(0, bytes)?)?;
-                        commands
-                            .copy(joined.try_slice(bytes, bytes)?, tile.try_slice(0, bytes)?)?;
+                    #[cfg(test)]
+                    if let Some(staged) = &self.staged_merge {
+                        staged.record(commands, running, &self.candidates[output], queries, k)?;
+                        continue;
                     }
                     let mut constants = Constants::new();
-                    constants.push((queries * 2) as u32)?;
+                    constants.push(queries as u32)?;
                     constants.push(k as u32)?;
-                    // SAFETY: planar merge pairs each query's running list with
-                    // that query's tile list; output is a separate queries*k pair.
+                    constants.push(k.ilog2() + 1)?;
+                    // SAFETY: both inputs contain queries*k sorted entries.
+                    // The output is the other running pair, never either input.
+                    // k is in 1..=1024; its bit length bounds binary search.
                     unsafe {
                         commands.dispatch(
                             &plan.running_merge,
@@ -596,13 +619,16 @@ impl BatchScratch {
                             [256, 1, 1],
                             &constants,
                             &[
-                                self.joined.0.binding(),
-                                self.joined.1.binding(),
-                                self.running.0.binding(),
-                                self.running.1.binding(),
+                                running.0.binding(),
+                                running.1.binding(),
+                                self.candidates[output].0.binding(),
+                                self.candidates[output].1.binding(),
+                                spare.0.binding(),
+                                spare.1.binding(),
                             ],
                         )?;
                     }
+                    std::mem::swap(&mut running, &mut spare);
                 }
             }
         }
@@ -963,3 +989,7 @@ mod tests {
 #[cfg(test)]
 #[path = "batch_bench.rs"]
 mod bench;
+
+#[cfg(test)]
+#[path = "batch_merge_tests.rs"]
+mod merge_tests;

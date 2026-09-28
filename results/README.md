@@ -1,5 +1,87 @@
 # Measured results
 
+## Prefetch and direct batch merge
+
+Local gfx1151, 2026-09-28, HRX 0.8.11, bundle
+`native-20260927-244cd3801b`, Rust 1.95.0-nightly, baseline `dd1e6b4`.
+External load varied: `krea2` was active initially and later exited;
+`bench-before` and `beam.smp` subsequently held render-device handles. Clocks
+and competing work were uncontrolled. Our GPU runs were sequential. Each
+comparison alternates arms with changing queries on one shared corpus after
+three warmups. Compare within rows; these are not isolated latency claims.
+
+Direct running merge reads separate score/ID lists and alternates output
+buffers. Counting tiles across shard boundaries chooses the first destination
+so the final list needs no extra copy. Each additional tile eliminates four
+staging copies. For 6,909,092 × 384, 60 queries, k=5:
+
+| Structural evidence | Staged baseline | Direct merge |
+|---|---:|---:|
+| Total commands | 241 | 137 |
+| Copies | 108 | 4 |
+| Scan / selection / running-merge dispatches | 27 / 80 / 26 | 27 / 80 / 26 |
+| Merge scratch, reserved width 64 and k=8 | 8,192 bytes | 4,096 bytes |
+| Running-merge VGPRs / SGPRs | 12 / 34 | 19 / 34 |
+| Running-merge instructions / code bytes | 111 / 560 | 139 / 760 |
+| Spills / private bytes / LDS bytes | 0 / 0 / 0 | 0 / 0 / 0 |
+| Modeled occupancy | 100% | 100% |
+
+The host supplies `ceil(log2(k+1))` search rounds when recording the graph:
+three at k=5 instead of eleven. Both arms use cached graphs. Final-source
+ordinary timings are effectively neutral:
+
+| Corpus × dimensions | Queries / k | Samples | Staged median | Direct median | Ratio |
+|---|---:|---:|---:|---:|---:|
+| 6,909,092 × 384 | 60 / 5 | 31 | 74.158 ms | 74.273 ms | 0.998× |
+| 262,145 × 129 | 3 / 1,024 | 31 | 1.845 ms | 1.836 ms | 1.005× |
+
+Earlier direct-merge variants measured 0.6–2.1% gains in the large shape, but
+those gains did not persist in the final comparison. Other exploratory shapes
+were within 1% of baseline. Retain this change for fewer commands and half the
+merge scratch, without claiming a latency improvement. Three separate diagnostic
+replays follow each ordinary timing window; their copy intervals shrink but
+include instrumentation overhead and cannot be subtracted from ordinary time.
+
+Seven scan prefetch variants were rejected. At 1M × 384, 60 queries, k=5,
+31 samples each, both arms use immediate submission and the baseline scan is
+the eight-product implementation at `dd1e6b4`:
+
+| Candidate | Speedup | VGPRs | Code bytes | LDS bytes | Modeled occupancy |
+|---|---:|---:|---:|---:|---:|
+| Baseline | — | 52 | 6,648 | 12,544 | 100% |
+| Pipeline depth 2 | 1.009× | 73 | 11,588 | 12,544 | 100% |
+| Pipeline depth 3 | 1.012× | 108 | 16,356 | 12,544 | 75% |
+| Pipeline depth 4 | 0.994× | 120 | 20,848 | 12,544 | 75% |
+| Depth 2 + unroll 2 | 0.985× | 96 | 16,516 | 12,544 | 100% |
+| Depth 2 + recurrence scheduling | 1.002× | 115 | 21,192 | 12,544 | 75% |
+| Double-buffered LDS | 0.998× | 52 | 6,748 | 25,088 | 62% |
+| Double-buffered LDS + depth 2 | 0.973× | 75 | 11,832 | 25,088 | 62% |
+
+All variants report zero spills. Depth 2 measured 1.013× at 6.9M rows, still a
+weak gain against its register/code growth. Static wait/instruction counts
+include pipeline prologue/drain code and are not measured dynamic stalls.
+Production scan remains unchanged; exact score bits and IDs matched throughout.
+
+The [experiment record](hrx-0.8.11-prefetch-merge.json) retains all host samples,
+stage intervals, source/artifact identities, exploratory sources, final merge
+compiler reports and detailed resource counters for rejected scan variants.
+Earlier merge sources use two scalar launch arguments; the final source uses
+three, so reproducing those exploratory variants requires their matching ABI.
+
+```sh
+HRX_OFFLINE=1 ROWS=6909092 DIM=384 BATCH=60 K=5 SAMPLES=31 OUTPUT=merge.json \
+  cargo test --locked --release --lib compare_batch_merge -- --ignored --nocapture
+```
+
+The baseline kernel is preserved in `tests/fixtures/batch_merge_staged.loom`.
+For prefetch comparisons, extract `baseline` and a candidate from the record's
+`sources`, then pass `BASELINE_SOURCE` and `CANDIDATE_SOURCE` to
+`compare_batch_scan`. All 55 GPU correctness tests pass, including every
+k=1–1,024 against the staged kernel and an independent CPU merge with ties,
+signed zeros, infinities, subnormals, padding and large IDs. Existing coverage
+checks short tiles/shards, exclusions, cached replay and changing snapshots.
+CPU tests, doctests, Clippy, rustdoc, Rust 1.91 and formatting checks pass.
+
 ## Selection and cached batch graphs
 
 Local gfx1151, 2026-09-28, HRX 0.8.11, bundle

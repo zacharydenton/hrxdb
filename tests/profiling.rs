@@ -78,6 +78,9 @@ fn profile_matches_search_for_single_batch_large_k_and_exclusions() -> Result<()
                     "sort_select"
                 }));
                 assert!(profile.stages.contains_key("copy"));
+                if batch > 1 {
+                    assert_eq!(profile.stages["copy"].commands, 4);
+                }
                 if batch == 1 && !excluded.is_empty() {
                     assert!(profile.stages.contains_key("mask_scores"));
                 }
@@ -111,9 +114,10 @@ fn profile_tracks_tiles_and_snapshot_changes_and_empty_work() -> Result<()> {
         same_results(&actual.neighbors, &expected);
         let profile = actual.execution.unwrap();
         check_profile(&profile);
+        assert_eq!(profile.stages["copy"].commands, 4);
         if db.len() > 262_144 {
             assert!(profile.stages["batch_scan"].commands > 1);
-            assert!(profile.stages.contains_key("sorted_merge"));
+            assert!(profile.stages.contains_key("batch_merge"));
         }
     }
     let mut small = Searcher::build(&device, 3, [[1.0, 0.0, 0.0]])?;
