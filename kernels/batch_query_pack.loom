@@ -1,0 +1,42 @@
+// Normalize upstream in FP32, then narrow once and transpose [dimension][query]
+// to [query][dimension]. The scan reuses these halves across all corpus tiles.
+// Every thread reads eight adjacent queries; widths and dimensions are padded
+// so every packet and workgroup is full.
+amdgpu.target<gfx1151> @target {subgroup_size = 32}
+config.decl @db.batch : %value: index where [range(%value, 8, 256), mul(%value, 8)]
+config.decl @db.scan.dimensions : %value: index where [range(%value, 128, 16384), mul(%value, 128)]
+kernel.def target(@target) export("batch_query_pack") @batch_query_pack() {
+  %one = index.constant 1 : index
+  %threads = index.constant 128 : index
+  %batch = config.get @db.batch : index
+  %d = config.get @db.scan.dimensions : index
+  %size = index.mul %batch, %d : index
+  %packet = index.constant 1024 : index
+  %groups = index.div %size, %packet : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%input: buffer, %output: buffer) {
+  %zero = index.constant 0 : offset
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %batch = config.get @db.batch : index
+  %d = config.get @db.scan.dimensions : index
+  %tid = kernel.workitem.id<x> : index
+  %group = kernel.workgroup.id<x> : index
+  %base = index.mul %group, %c128 : index
+  %linear = index.add %base, %tid : index
+  %element = index.mul %linear, %c8 : index
+  %dim = index.div %element, %batch : index
+  %query = index.rem %element, %batch : index
+  %src = buffer.view %input[%zero] : buffer -> view<[%d]x[%batch]xf32>
+  %dst = buffer.view %output[%zero] : buffer -> view<[%batch]x[%d]xf16>
+  %values = vector.load %src[%dim, %query] : view<[%d]x[%batch]xf32> -> vector<8xf32>
+  %half = vector.fptrunc %values : vector<8xf32> to vector<8xf16>
+  scf.for %i = [%c0 to %c8 step %c1] unroll {
+    %q = index.add %query, %i : index
+    %value = vector.extract %half[%i] : vector<8xf16> -> f16
+    view.store %value, %dst[%q, %dim] : f16, view<[%batch]x[%d]xf16>
+  }
+  kernel.return
+}

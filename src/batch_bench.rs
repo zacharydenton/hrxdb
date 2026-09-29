@@ -231,6 +231,7 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     let selection = matches!(comparison, Comparison::Selection | Comparison::Combined);
     let replay = matches!(comparison, Comparison::Replay | Comparison::Combined);
     let pipeline = comparison == Comparison::Pipeline;
+    let fused_baseline = pipeline && var("BASELINE_FUSED", 0) != 0;
     let cached = pipeline || var("CACHED_GRAPHS", 0) != 0;
     let padded_baseline = var("PADDED_SELECTION_BASELINE", 0) != 0;
     let rows = var("ROWS", 6_909_092);
@@ -258,7 +259,8 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     baseline.batch.as_mut().unwrap().padded_selection = padded_baseline;
     // A scan-only experiment must replace every tile's scan. A pipeline
     // comparison also retains the unfused reference's separate compaction.
-    baseline.batch.as_mut().unwrap().separate_compact = comparison == Comparison::Scan || pipeline;
+    baseline.batch.as_mut().unwrap().separate_compact =
+        comparison == Comparison::Scan || (pipeline && !fused_baseline);
     candidate.batch.as_mut().unwrap().separate_compact = comparison == Comparison::Scan;
     let width = batch.next_power_of_two().max(8);
     let source = |name: &str, default: &str| -> Result<String> {
@@ -290,9 +292,19 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         },
     )?;
     let mut reports = Vec::new();
-    for (db, source) in [
-        (&mut baseline, &baseline_source),
-        (&mut candidate, &candidate_source),
+    let packed = [
+        var(
+            "BASELINE_PACKED_QUERIES",
+            usize::from(baseline_source == kernels::BATCH_SCAN),
+        ) != 0,
+        var(
+            "CANDIDATE_PACKED_QUERIES",
+            usize::from(candidate_source == kernels::BATCH_SCAN),
+        ) != 0,
+    ];
+    for (db, source, packed) in [
+        (&mut baseline, &baseline_source, packed[0]),
+        (&mut candidate, &candidate_source, packed[1]),
     ] {
         let mut arm = Vec::new();
         for first in [true, false]
@@ -329,6 +341,9 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
                 }
             } else {
                 plan.scan = kernel;
+                if !packed {
+                    plan.query_pack = None;
+                }
             }
             arm.push(report);
         }
@@ -336,6 +351,24 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     }
     let mut candidate_report = reports.pop().unwrap();
     let mut baseline_report = reports.pop().unwrap();
+    if fused_baseline {
+        let mut spec =
+            kernels::named_spec("batch_scan_pruned").with_report(hrx::loom::ReportMode::Details);
+        spec.set_config("db.batch", width.to_string());
+        spec.set_config("db.scan.dimensions", baseline.padded.to_string());
+        let (kernel, report) =
+            compile(&baseline.compiler, &baseline.stream, &baseline_source, spec)?;
+        baseline
+            .batch
+            .as_mut()
+            .unwrap()
+            .plans
+            .iter_mut()
+            .find(|p| p.width == width)
+            .unwrap()
+            .scan_pruned = kernel;
+        baseline_report.push(report);
+    }
     if pipeline {
         let threshold = source("BASELINE_THRESHOLD_SOURCE", kernels::THRESHOLD)?;
         for symbol in ["threshold_compact", "candidate_merge", "overflow_reduce"] {
@@ -365,6 +398,7 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
                     matches!(
                         r.symbol.as_str(),
                         "batch_scan_pruned"
+                            | "batch_query_pack"
                             | "candidate_merge"
                             | "overflow_reduce"
                             | "threshold_compact"

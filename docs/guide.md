@@ -286,7 +286,8 @@ valid query. A one-query batch uses the single-query scan.
 
 The [matrix kernel](../kernels/batch_scan.loom) stages 64 corpus rows and up to
 64 queries per workgroup in shared memory, then uses 16×16×16 FP16 matrix
-operations with FP32 accumulation. Normalized queries round to FP16 during staging. Batch
+operations with FP32 accumulation. Widths 128 and 256 pack normalized queries
+into transposed FP16 storage once per search; smaller widths round during staging. Batch
 scores differ from the FP32 single-query scan by at most 2^-11 for normalized
 rows; near-ties can change rank. All-subnormal FP16 corpus rows score at 2^-14
 relative precision.
@@ -312,8 +313,8 @@ Batch workspace grows to accommodate the largest reserved query width and k,
 and is reused. Widths round up to 8, 16, 32, 64, 128, or 256, with compiled
 kernels cached per width. At width 64 the workspace uses approximately **68 MiB for k=5** or
 **323 MiB for k=1,024**, plus query storage (96 KiB at dimension 384). At width
-256, the corresponding figures are about **74 MiB** and **332 MiB**, plus query storage (384 KiB at
-dimension 384). The tile size follows the largest reserved width and remains
+256, the corresponding figures are about **74 MiB** and **332 MiB**, plus query storage (576 KiB at
+dimension 384, including packed halves). The tile size follows the largest reserved width and remains
 bounded across k changes and corpus replacement. Smaller corpora need less. This storage is additional to the index and single-query
 scratch; `batch_workspace_bytes()` reports the reserved buffer bytes. First use
 can allocate and compile, so use `reserve_batch(query_count, k)` during setup

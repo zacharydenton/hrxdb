@@ -30,6 +30,7 @@ pub(crate) struct BatchScratch {
     k: usize,
     tile_rows: usize,
     query: HostBuffer,
+    packed_query: Option<Buffer>,
     readback: HostBuffer,
     scores: Buffer,
     candidates: [(Buffer, Buffer); 2],
@@ -52,6 +53,7 @@ pub(crate) struct BatchScratch {
 struct BatchPlan {
     width: usize,
     scan: Kernel,
+    query_pack: Option<Kernel>,
     scan_pruned: Kernel,
     selections: std::collections::HashMap<usize, crate::selection::SelectionPlan>,
     #[cfg(test)]
@@ -75,6 +77,9 @@ impl BatchScratch {
             k,
             tile_rows,
             query: HostBuffer::new(stream, width * padded * 4)?,
+            packed_query: (width >= 128)
+                .then(|| stream.allocate(width * padded * 2))
+                .transpose()?,
             readback: HostBuffer::new(stream, width * k * 8)?,
             scores: stream.allocate(width * tile_rows * 4)?,
             candidates: [pair(scratch)?, pair(scratch)?],
@@ -142,6 +147,7 @@ impl Searcher {
     pub fn batch_workspace_bytes(&self) -> usize {
         self.batch.as_ref().map_or(0, |s| {
             s.query.buffer().binding().len()
+                + s.packed_query.as_ref().map_or(0, |b| b.binding().len())
                 + s.readback.buffer().binding().len()
                 + s.scores.binding().len()
                 + s.pruned_counts.binding().len()
@@ -163,7 +169,8 @@ impl Searcher {
     /// the largest reserved width, including when later queries use fewer rows.
     /// At width 64 this uses about 68 MiB for k=5 or 323 MiB for k=1,024, plus
     /// query storage (96 KiB at 384 dimensions). At width 256, the corresponding
-    /// sizes are about 74 MiB and 332 MiB plus query storage (384 KiB).
+    /// sizes are about 74 MiB and 332 MiB plus query storage (576 KiB, including
+    /// packed halves).
     /// A one-query batch uses `search`.
     ///
     /// # Errors
@@ -241,7 +248,7 @@ impl Searcher {
         let mut reports = Vec::new();
         let mut build = |source, mut spec: hrx::loom::Specialization, queries: usize| {
             spec.set_config("db.batch", queries.to_string());
-            if !spec.symbol().starts_with("batch_scan") {
+            if !spec.symbol().starts_with("batch_scan") && spec.symbol() != "batch_query_pack" {
                 spec.set_config("db.select.limit", TILE_ROWS.to_string());
             }
             let (kernel, report) = compile(&self.compiler, &self.stream, source, spec)?;
@@ -254,6 +261,13 @@ impl Searcher {
         let mut pruned_spec = kernels::named_spec("batch_scan_pruned");
         pruned_spec.set_config("db.scan.dimensions", self.padded.to_string());
         let scan_pruned = build(kernels::BATCH_SCAN, pruned_spec, width)?;
+        let query_pack = if width >= 128 {
+            let mut spec = kernels::named_spec("batch_query_pack");
+            spec.set_config("db.scan.dimensions", self.padded.to_string());
+            Some(build(kernels::BATCH_QUERY_PACK, spec, width)?)
+        } else {
+            None
+        };
         let mut pruned = |symbol: &str| {
             let mut spec = hrx::loom::Specialization::new(symbol);
             spec.set_report(hrx::loom::ReportMode::Summary);
@@ -275,6 +289,7 @@ impl Searcher {
         self.batch.as_mut().unwrap().plans.push(BatchPlan {
             width,
             scan,
+            query_pack,
             scan_pruned,
             selections: std::collections::HashMap::from([(query_count, selection)]),
             #[cfg(test)]
@@ -597,6 +612,25 @@ impl BatchScratch {
             queries
         };
         let plan = self.plans.iter().find(|p| p.width == width).unwrap();
+
+        let query = if let Some(pack) = &plan.query_pack {
+            let packed = self.packed_query.as_ref().unwrap().binding();
+            // SAFETY: normalization produced width * padded FP32 values,
+            // including zero padding. The destination reserves as many halves.
+            // Commands orders this conversion before every scan in the search.
+            unsafe {
+                commands.dispatch(
+                    pack,
+                    [(width * corpus.padded_dimensions() / 1024) as u32, 1, 1],
+                    pack.info().workgroup_size,
+                    &Constants::new(),
+                    &[query, packed],
+                )?;
+            }
+            packed
+        } else {
+            query
+        };
 
         // The first tile is selected in full into the running lists. Every
         // later tile keeps only scores above its query's running k-th and

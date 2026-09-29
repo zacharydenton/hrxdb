@@ -146,3 +146,47 @@ fn invalid_wide_host_queries_leave_output_and_workspace_untouched() -> Result<()
     assert!(db.search_batch(&[], 5)?.is_empty());
     Ok(())
 }
+
+#[test]
+#[ignore = "requires gfx1151"]
+fn packed_queries_match_narrow_batches_with_padding_and_replay() -> Result<()> {
+    // Neither axis aligns with a scan tile. Narrow scans perform their own
+    // FP32-to-FP16 conversion, independently checking the packed wide path.
+    const DIM: usize = 769;
+    let row = |seed: usize| {
+        let mut state = seed as u32 + 1;
+        (0..DIM)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                (state >> 8) as f32 / 8_388_608.0 - 1.0
+            })
+            .collect::<Vec<_>>()
+    };
+    let device = Device::open(0)?;
+    let corpus = Corpus::build(&device, DIM, (0..145).map(row))?;
+    let mut wide = corpus.searcher()?;
+    let mut narrow = corpus.searcher()?;
+    for (iteration, count) in [65, 129, 256, 129, 65].into_iter().enumerate() {
+        let queries: Vec<_> = (0..count)
+            .flat_map(|q| row(1000 + iteration * 256 + q))
+            .collect();
+        let excluded = [0, 31, 64, 144];
+        let mut expected = Vec::new();
+        for chunk in queries.chunks(31 * DIM) {
+            expected.extend(narrow.search_batch_excluding(chunk, 50, &excluded)?);
+        }
+        let actual = wide.search_batch_excluding(&queries, 50, &excluded)?;
+        for (q, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
+            assert_eq!(actual, expected, "batch {count}, query {q}");
+        }
+        let profile = wide.profile_search(&queries, 50, &excluded)?;
+        assert_eq!(profile.neighbors, expected);
+        assert_eq!(
+            profile.execution.unwrap().stages["batch_query_pack"].commands,
+            1
+        );
+    }
+    Ok(())
+}

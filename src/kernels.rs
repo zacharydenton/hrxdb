@@ -5,6 +5,7 @@ pub const SCAN: &str = include_str!("../kernels/scan_family.loom");
 pub const SELECT: &str = include_str!("../kernels/select_family.loom");
 pub const SORT: &str = include_str!("../kernels/sort_family.loom");
 pub const MASK: &str = include_str!("../kernels/mask.loom");
+pub const BATCH_QUERY_PACK: &str = include_str!("../kernels/batch_query_pack.loom");
 pub const BATCH_SCAN: &str = include_str!("../kernels/batch_scan.loom");
 pub const THRESHOLD: &str = include_str!("../kernels/threshold_select.loom");
 pub fn named_spec(symbol: &str) -> Specialization {

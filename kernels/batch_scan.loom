@@ -3,16 +3,15 @@
 // up to 256 place successive query blocks in adjacent linear workgroups,
 // reusing the same corpus rows before advancing to the next row block.
 //
-// Corpus rows are already FP16. Queries arrive normalized in FP32, inputs by
-// queries, and are narrowed to FP16 as they are staged: the one precision this
-// kernel gives up, about three decimal digits of each query component, for the
-// matrix cores' throughput. Accumulation stays FP32, and each score is scaled
-// by its row's FP32 inverse norm as before.
+// Corpus rows and matrix inputs are FP16, while accumulation and inverse-norm
+// scaling stay FP32. Widths through 64 narrow FP32 queries during staging.
+// Wider batches pack and transpose queries once per search, allowing both
+// operands' matrix fragments to load contiguous halves from LDS.
 //
 // Eight wave32s tile the 64x64 block 4x2, each holding two 16x16 result
-// fragments. Both operands are staged 64 reduction components at a time into
-// LDS rows of 72 halves, which breaks bank conflicts: corpus rows as [row][k]
-// for the left operand, queries as [k][query] for the right. Query slots past
+// fragments. Both operands stage 64 reduction components at a time with
+// 72-half strides to break bank conflicts. The wide path keeps the inner
+// reduction loop rolled to bound live operand registers. Query slots past
 // the batch width stage zeros and are never stored. Results publish through
 // LDS so each lane writes eight adjacent rows of one query's scores.
 // The first tile publishes dense scores. Later tiles also append scores above
@@ -65,10 +64,13 @@ template.def<@db.batch.scan> @db.batch.wmma(%prune: index, %count_arg: i32, %mas
   %c16 = index.constant 16 : index
   %c32 = index.constant 32 : index
   %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
   %m = index.constant 16 : index
   %n = index.constant 16 : index
   %k = index.constant 16 : index
   %batch = config.get @db.batch : index
+  %packed_queries = index.cmp uge, %batch, %c128 : index
+  %mma_unroll = scf.select %packed_queries, %c1, %c4 : index
   %d = config.get @db.scan.dimensions : index
   %raw = index.cast %count_arg : i32 to index
   %count = index.assume %raw [range(%raw, 1, 262144)] : index
@@ -90,6 +92,7 @@ template.def<@db.batch.scan> @db.batch.wmma(%prune: index, %count_arg: i32, %mas
 
   %dv = buffer.view %data[%zero] : buffer -> view<[%count]x[%d]xf16>
   %qv = buffer.view %queries[%zero] : buffer -> view<[%d]x[%batch]xf32>
+  %pqv = buffer.view %queries[%zero] : buffer -> view<[%batch]x[%d]xf16>
   %nv = buffer.view %norms[%zero] : buffer -> view<[%count]xf32>
   %sv = buffer.view %scores[%zero] : buffer -> view<[%batch]x[%count]xf32>
 
@@ -100,6 +103,8 @@ template.def<@db.batch.scan> @db.batch.wmma(%prune: index, %count_arg: i32, %mas
   %lds = buffer.alloca<workgroup> align(16) %lds_bytes : buffer
   %xs = buffer.view %lds[%zero] : buffer -> view<64x72xf16>
   %qs = buffer.view %lds[%query_offset] : buffer -> view<64x72xf16>
+  %q_layout = encoding.layout.strided [1, 72] : encoding<layout>
+  %q_columns = buffer.view %lds[%query_offset] : buffer -> view<64x64xf16, %q_layout>
   %result_offset = index.scale %subgroup, %result_bytes : index, offset -> offset
   %result = buffer.view %lds[%result_offset] : buffer -> view<16x16xf32>
 
@@ -118,7 +123,7 @@ template.def<@db.batch.scan> @db.batch.wmma(%prune: index, %count_arg: i32, %mas
   %row_valid = index.cmp ult, %source_row, %count : index
   %safe_row = scf.select %row_valid, %source_row, %c0 : index
   %x_at = index.assume %safe_row [range(%safe_row, 0, 262143), lt(%safe_row, %count)] : index
-  // Query staging: each thread moves sixteen of one component's query slots,
+  // Narrow-batch staging: each thread moves sixteen of one component's query slots,
   // eight at a time; the width is a multiple of eight, so a packet is wholly
   // inside the batch or wholly padding.
   %q_packet = index.rem %tid, %c4 : index
@@ -147,29 +152,53 @@ template.def<@db.batch.scan> @db.batch.wmma(%prune: index, %count_arg: i32, %mas
     }
     vector.store %x_values, %xs[%x_row, %x_k] : vector<16xf16>, view<64x72xf16>
 
-    %q_dim = index.add %k_base, %q_k : index
-    %q_values0 = scf.if %q_live0 -> (vector<8xf16>) {
-      %wide = vector.load %qv[%q_dim, %q_global0] : view<[%d]x[%batch]xf32> -> vector<8xf32>
-      %narrow = vector.fptrunc %wide : vector<8xf32> to vector<8xf16>
-      scf.yield %narrow : vector<8xf16>
+    scf.if %packed_queries {
+      %query_row = index.add %query_base, %x_row : index
+      %query_valid = index.cmp ult, %query_row, %batch : index
+      %values = scf.if %query_valid -> (vector<16xf16>) {
+        %loaded = vector.load %pqv[%query_row, %x_dim] : view<[%batch]x[%d]xf16> -> vector<16xf16>
+        scf.yield %loaded : vector<16xf16>
+      } else {
+        scf.yield %zero_x : vector<16xf16>
+      }
+      vector.store %values, %qs[%x_row, %x_k] : vector<16xf16>, view<64x72xf16>
     } else {
-      scf.yield %zero_q : vector<8xf16>
+      %q_dim = index.add %k_base, %q_k : index
+      %q_values0 = scf.if %q_live0 -> (vector<8xf16>) {
+        %wide = vector.load %qv[%q_dim, %q_global0] : view<[%d]x[%batch]xf32> -> vector<8xf32>
+        %narrow = vector.fptrunc %wide : vector<8xf32> to vector<8xf16>
+        scf.yield %narrow : vector<8xf16>
+      } else {
+        scf.yield %zero_q : vector<8xf16>
+      }
+      %q_values1 = scf.if %q_live1 -> (vector<8xf16>) {
+        %wide = vector.load %qv[%q_dim, %q_global1] : view<[%d]x[%batch]xf32> -> vector<8xf32>
+        %narrow = vector.fptrunc %wide : vector<8xf32> to vector<8xf16>
+        scf.yield %narrow : vector<8xf16>
+      } else {
+        scf.yield %zero_q : vector<8xf16>
+      }
+      vector.store %q_values0, %qs[%q_k, %q_col] : vector<8xf16>, view<64x72xf16>
+      vector.store %q_values1, %qs[%q_k, %q_col1] : vector<8xf16>, view<64x72xf16>
     }
-    %q_values1 = scf.if %q_live1 -> (vector<8xf16>) {
-      %wide = vector.load %qv[%q_dim, %q_global1] : view<[%d]x[%batch]xf32> -> vector<8xf32>
-      %narrow = vector.fptrunc %wide : vector<8xf32> to vector<8xf16>
-      scf.yield %narrow : vector<8xf16>
-    } else {
-      scf.yield %zero_q : vector<8xf16>
-    }
-    vector.store %q_values0, %qs[%q_k, %q_col] : vector<8xf16>, view<64x72xf16>
-    vector.store %q_values1, %qs[%q_k, %q_col1] : vector<8xf16>, view<64x72xf16>
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
 
-    %next0, %next1 = scf.for %k_step = [%c0 to %c64 step %c16](%half0 = %run0 : vector<8xf32>, %half1 = %run1 : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>) unroll {
+    %next0, %next1 = scf.for %k_step = [%c0 to %c64 step %c16](%half0 = %run0 : vector<8xf32>, %half1 = %run1 : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>) unroll(%mma_unroll) {
       %lhs = vector.fragment.load<lhs> %xs[%wave_row, %k_step] shape [%m, %k] : view<64x72xf16> -> vector<16xf16>
-      %rhs0 = vector.fragment.load<rhs> %qs[%k_step, %wave_col] shape [%k, %n] : view<64x72xf16> -> vector<16xf16>
-      %rhs1 = vector.fragment.load<rhs> %qs[%k_step, %wave_col1] shape [%k, %n] : view<64x72xf16> -> vector<16xf16>
+      %rhs0 = scf.if %packed_queries -> (vector<16xf16>) {
+        %value = vector.fragment.load<rhs> %q_columns[%k_step, %wave_col] shape [%k, %n] : view<64x64xf16, %q_layout> -> vector<16xf16>
+        scf.yield %value : vector<16xf16>
+      } else {
+        %value = vector.fragment.load<rhs> %qs[%k_step, %wave_col] shape [%k, %n] : view<64x72xf16> -> vector<16xf16>
+        scf.yield %value : vector<16xf16>
+      }
+      %rhs1 = scf.if %packed_queries -> (vector<16xf16>) {
+        %value = vector.fragment.load<rhs> %q_columns[%k_step, %wave_col1] shape [%k, %n] : view<64x64xf16, %q_layout> -> vector<16xf16>
+        scf.yield %value : vector<16xf16>
+      } else {
+        %value = vector.fragment.load<rhs> %qs[%k_step, %wave_col1] shape [%k, %n] : view<64x72xf16> -> vector<16xf16>
+        scf.yield %value : vector<16xf16>
+      }
       %out0 = vector.mma %lhs, %rhs0, %half0 : vector<16xf16>, vector<16xf16>, vector<8xf32>
       %out1 = vector.mma %lhs, %rhs1, %half1 : vector<16xf16>, vector<16xf16>, vector<8xf32>
       scf.yield %out0, %out1 : vector<8xf32>, vector<8xf32>

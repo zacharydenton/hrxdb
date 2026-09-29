@@ -4,6 +4,9 @@
 //! Run: HRX_GPU_BENCH=1 HRX_OFFLINE=1 cargo bench --bench batch_kernels.
 //! REFERENCE_SCAN_SOURCE / REFERENCE_THRESHOLD_SOURCE enable alternating
 //! reference/candidate replays within each Criterion sample under shared load.
+//! Query packing is timed on every replay (production packs once per search).
+//! Custom SCAN_SOURCE files use FP32 queries unless SCAN_PACK_QUERIES=1;
+//! set REFERENCE_PACK_QUERIES=1 for a reference that also uses packed queries.
 use criterion::{Criterion, Throughput, criterion_group};
 use half::f16;
 use hrx::{Buffer, Constants, Device, GraphExec, Kernel, Stream, View, loom};
@@ -28,7 +31,7 @@ fn source(option: &str, default: &str) -> String {
 fn compile(stream: &Stream, source: &str, symbol: &str) -> Kernel {
     let compiler = loom::Compiler::for_stream(None, stream).unwrap();
     let mut spec = loom::Specialization::new(symbol).with_report(loom::ReportMode::Details);
-    if symbol.starts_with("batch_scan") {
+    if symbol.starts_with("batch_scan") || symbol == "batch_query_pack" {
         spec.set_config("db.batch", BATCH.to_string());
         spec.set_config("db.scan.dimensions", DIM.to_string());
     }
@@ -79,12 +82,38 @@ fn graph(
     args: &[usize],
     bindings: &[View<'_>],
 ) -> GraphExec {
+    packed_graph(stream, kernel, grid, args, bindings, None)
+}
+
+fn packed_graph(
+    stream: &Stream,
+    kernel: &Kernel,
+    grid: [u32; 3],
+    args: &[usize],
+    bindings: &[View<'_>],
+    pack: Option<(&Kernel, [View<'_>; 2])>,
+) -> GraphExec {
     let mut graph = stream.graph().unwrap();
+    let packed = pack.map(|(pack, inputs)| {
+        // SAFETY: both buffers contain DIM * BATCH elements of the declared type.
+        unsafe {
+            graph
+                .dispatch(
+                    &[],
+                    pack,
+                    [(DIM * BATCH / 1024) as u32, 1, 1],
+                    pack.info().workgroup_size,
+                    &Constants::new(),
+                    &inputs,
+                )
+                .unwrap()
+        }
+    });
     // SAFETY: callers allocate and initialize every kernel's declared extent.
     unsafe {
         graph
             .dispatch(
-                &[],
+                &packed.into_iter().collect::<Vec<_>>(),
                 kernel,
                 grid,
                 kernel.info().workgroup_size,
@@ -163,20 +192,46 @@ fn scan(c: &mut Criterion) {
     );
     let queries: Vec<_> = random(123).take(DIM * BATCH).collect();
     let query = floats(&mut stream, queries.iter().copied());
+    let half_query = stream.allocate_zeroed(DIM * BATCH * 2).unwrap();
+    let candidate_packed = std::env::var("SCAN_PACK_QUERIES").is_ok_and(|v| v == "1")
+        || (std::env::var_os("SCAN_PACK_QUERIES").is_none()
+            && source == include_str!("../kernels/batch_scan.loom"));
+    let reference_packed = std::env::var("REFERENCE_PACK_QUERIES").is_ok_and(|v| v == "1");
+    let pack = compile(
+        &stream,
+        include_str!("../kernels/batch_query_pack.loom"),
+        "batch_query_pack",
+    );
+    let mut pack_graph = graph(
+        &stream,
+        &pack,
+        [(DIM * BATCH / 1024) as u32, 1, 1],
+        &[],
+        &[query.binding(), half_query.binding()],
+    );
+    c.bench_function("query_pack/256x768", |b| {
+        b.iter(|| replay(&mut stream, &mut pack_graph))
+    });
+    let scan_query = if candidate_packed {
+        half_query.binding()
+    } else {
+        query.binding()
+    };
     let norms = floats(&mut stream, std::iter::repeat_n(1.0, ROWS));
     let scores = stream.allocate(ROWS * BATCH * 4).unwrap();
-    let mut graph = graph(
+    let mut graph = packed_graph(
         &stream,
         &kernel,
-        [(ROWS / 64 * 4) as u32, 1, 1],
+        [(ROWS.div_ceil(64) * BATCH.div_ceil(64)) as u32, 1, 1],
         &[ROWS, 0, 0, ROWS],
         &[
             data.binding(),
-            query.binding(),
+            scan_query,
             norms.binding(),
             scores.binding(),
             scores.binding(),
         ],
+        candidate_packed.then_some((&pack, [query.binding(), half_query.binding()])),
     );
     replay(&mut stream, &mut graph);
     // Independent dots sample every query and both row boundaries.
@@ -205,18 +260,36 @@ fn scan(c: &mut Criterion) {
             &std::fs::read_to_string(path).unwrap(),
             "batch_scan",
         );
-        let reference_graph = self::graph(
+        let mut reference_graph = packed_graph(
             &stream,
             &reference,
-            [(ROWS / 64 * 4) as u32, 1, 1],
+            [(ROWS.div_ceil(64) * BATCH.div_ceil(64)) as u32, 1, 1],
             &[ROWS, 0, 0, ROWS],
             &[
                 data.binding(),
-                query.binding(),
+                if reference_packed {
+                    half_query.binding()
+                } else {
+                    query.binding()
+                },
                 norms.binding(),
                 scores.binding(),
                 scores.binding(),
             ],
+            reference_packed.then_some((&pack, [query.binding(), half_query.binding()])),
+        );
+        let mut candidate_bytes = vec![0; ROWS * BATCH * 4];
+        stream
+            .read_blocking(scores.binding(), &mut candidate_bytes)
+            .unwrap();
+        replay(&mut stream, &mut reference_graph);
+        let mut reference_bytes = vec![0; ROWS * BATCH * 4];
+        stream
+            .read_blocking(scores.binding(), &mut reference_bytes)
+            .unwrap();
+        assert!(
+            candidate_bytes == reference_bytes,
+            "scan scores differ from reference"
         );
         bench_pair(
             &mut group,
@@ -233,6 +306,13 @@ fn scan(c: &mut Criterion) {
     group.finish();
     if source.contains("export(\"batch_scan_pruned\")") {
         let fused = compile(&stream, &source, "batch_scan_pruned");
+        let reference = std::env::var("REFERENCE_SCAN_SOURCE").ok().map(|path| {
+            compile(
+                &stream,
+                &std::fs::read_to_string(path).unwrap(),
+                "batch_scan_pruned",
+            )
+        });
         let compact = compile(
             &stream,
             include_str!("../kernels/threshold_select.loom"),
@@ -243,16 +323,48 @@ fn scan(c: &mut Criterion) {
         let candidate_scores = stream.allocate(BATCH * CAPACITY * 4).unwrap();
         let candidate_ids = stream.allocate(BATCH * CAPACITY * 4).unwrap();
         let mut group = c.benchmark_group("scan_filter");
-        for bound in [0.12f32, 0.16] {
+        for bound in [0.04f32, 0.12, 0.16] {
             let running = floats(&mut stream, std::iter::repeat_n(bound, BATCH * K));
-            let mut graphs = [false, true].map(|prune| {
+            let mut graphs = [false, true].map(|candidate| {
+                let prune = candidate || reference.is_some();
+                let scan_kernel = if candidate {
+                    &fused
+                } else {
+                    reference.as_ref().unwrap_or(&kernel)
+                };
                 let mut graph = stream.graph().unwrap();
                 let reset = graph
                     .copy(&[], counts.binding(), zero_counts.binding())
                     .unwrap();
+                let packed = if !candidate && reference.is_some() {
+                    reference_packed
+                } else {
+                    candidate_packed
+                };
+                let reset = if packed {
+                    // SAFETY: the scan waits for the packed query buffer.
+                    unsafe {
+                        graph
+                            .dispatch(
+                                &[reset],
+                                &pack,
+                                [(DIM * BATCH / 1024) as u32, 1, 1],
+                                pack.info().workgroup_size,
+                                &Constants::new(),
+                                &[query.binding(), half_query.binding()],
+                            )
+                            .unwrap()
+                    }
+                } else {
+                    reset
+                };
                 let mut bindings = vec![
                     data.binding(),
-                    query.binding(),
+                    if packed {
+                        half_query.binding()
+                    } else {
+                        query.binding()
+                    },
                     norms.binding(),
                     scores.binding(),
                     scores.binding(),
@@ -273,9 +385,9 @@ fn scan(c: &mut Criterion) {
                     graph
                         .dispatch(
                             &[reset],
-                            if prune { &fused } else { &kernel },
-                            [(ROWS / 64 * 4) as u32, 1, 1],
-                            [256, 1, 1],
+                            scan_kernel,
+                            [(ROWS.div_ceil(64) * BATCH.div_ceil(64)) as u32, 1, 1],
+                            scan_kernel.info().workgroup_size,
                             &constants(&args),
                             &bindings,
                         )
@@ -323,8 +435,9 @@ fn scan(c: &mut Criterion) {
                     .map(|q| {
                         let n = u32::from_le_bytes(lengths[q * 4..q * 4 + 4].try_into().unwrap())
                             as usize;
-                        assert!(n <= CAPACITY);
-                        let mut list: Vec<_> = (0..n)
+                        // Overflow lists retain a scheduling-dependent subset;
+                        // exact selection recovers from the dense scores.
+                        let mut list: Vec<_> = (0..n.min(CAPACITY))
                             .map(|i| {
                                 let at = (q * CAPACITY + i) * 4;
                                 (
@@ -334,7 +447,7 @@ fn scan(c: &mut Criterion) {
                             })
                             .collect();
                         list.sort_unstable();
-                        list
+                        (n, (n <= CAPACITY).then_some(list))
                     })
                     .collect::<Vec<_>>()
             });
@@ -342,7 +455,11 @@ fn scan(c: &mut Criterion) {
             bench_pair(
                 &mut group,
                 &format!("threshold{bound}"),
-                ["separate", "fused"],
+                if reference.is_some() {
+                    ["reference", "candidate"]
+                } else {
+                    ["separate", "fused"]
+                },
                 &mut stream,
                 &mut graphs,
             );
