@@ -11,7 +11,7 @@ pub struct ScoreBatch<'a> {
     pub(crate) columns: usize,
 }
 impl<'a> ScoreBatch<'a> {
-    /// Validate shape and binding extent without reading GPU data. At most 64
+    /// Validate shape and binding extent without reading GPU data. At most 256
     /// rows and 2^30 columns are supported, including empty matrices.
     pub fn new(values: View<'a>, batch: usize, columns: usize) -> Result<Self> {
         if batch > MAX_BATCH || columns > MAX_ROWS {
@@ -42,7 +42,7 @@ pub struct DeviceNeighbors {
     readback: Vec<u8>,
 }
 impl DeviceNeighbors {
-    /// Allocate reusable output for 0..=64 queries and k=1..=1024 on this device.
+    /// Allocate reusable output for 0..=256 queries and k=1..=1024 on this device.
     pub fn new(stream: &Stream, batch: usize, k: usize) -> Result<Self> {
         if batch > MAX_BATCH || !(1..=MAX_K).contains(&k) {
             return Err(invalid("invalid device result shape"));

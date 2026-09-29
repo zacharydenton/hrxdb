@@ -79,7 +79,7 @@ fn main() -> hrxdb::Result<()> {
 }
 ```
 
-`profile_search` accepts zero through 64 queries, k=1–1,024, and shared insertion
+`profile_search` accepts zero through 256 queries, k=1–1,024, and shared insertion
 ID exclusions. One query uses the single-query path. Invalid input follows the
 ordinary search contract. `execution` is `None` when an empty batch/corpus or
 all-excluded corpus requires no GPU commands; this does not invent zero-duration
@@ -242,6 +242,32 @@ The [fix qualification](../results/hrx-0.8.11-threshold-fixes.json) records
 and the new kernels' detailed resource, instruction, spill and wait counts.
 `overflow_reduce` uses 20 VGPRs and 16 KiB LDS with zero spills or private bytes.
 Its reported 100% occupancy is a compiler model, not measured utilization.
+
+Search and profiling accept up to 256 queries. The scan interleaves 64-query
+blocks in adjacent workgroups, keeping each workgroup's WMMA tile unchanged.
+Reserved width 128 uses at most 131,072 corpus rows per tile; width 256 uses
+65,536, capping score storage at 64 MiB. A worker retains the tile size of its
+largest reserved width even when later batches are smaller. Profiles therefore
+reflect that worker's reservation history as well as the current query count.
+
+Compare a production wide batch against repeated 64-query calls on one corpus:
+
+```sh
+HRX_OFFLINE=1 ROWS=2000000 DIM=768 BATCH=256 K=50 SAMPLES=15 OUTPUT=wide.json \
+  cargo test --locked --release --lib compare_batch_chunks -- --ignored --nocapture
+```
+
+This harness accepts 128, 192, or 256 queries, alternates ordinary timing order,
+and checks every returned score against both the chunked result and a CPU
+reference. Detailed compiler reports and instrumented stage totals are collected
+after timing. `compare_batch_replay`, `compare_batch_selection` and
+`compare_batch_tiles` also accept wide batches. Historical SIMT scan fixtures
+support up to 64 queries; `compare_batch_scan` requires a compatible explicit
+`BASELINE_SOURCE` for larger batches. The tile experiment allocates its largest
+variant outside timing, including variants beyond the production workspace cap.
+The [production qualification](../results/hrx-0.8.11-batch256.json) retains
+128/256-query comparisons through 10M rows, workspace sizes, CPU-reference
+errors, raw timings, compiler counts and separate profiled stages.
 
 Upstream references:
 

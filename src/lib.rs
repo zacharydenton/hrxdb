@@ -89,7 +89,7 @@ const PAGE_ROWS: usize = 16_384;
 pub const MAX_K: usize = 1024;
 /// Largest supported query count for batched search and standalone selection.
 /// This does not limit the number of rows requested by [`Corpus::gather_into`].
-pub const MAX_BATCH: usize = 64;
+pub const MAX_BATCH: usize = 256;
 const MAX_DIMENSIONS: usize = 16_384;
 const CHUNK_BYTES: usize = 4 * 1024 * 1024;
 

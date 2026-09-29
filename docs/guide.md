@@ -263,7 +263,7 @@ applications make that allocation during setup. Single-query searches compile no
 
 ## Batched queries
 
-Use `search_batch` for up to **64 queries over the same corpus**, such as sixty
+Use `search_batch` for up to **256 queries over the same corpus**, such as sixty
 sampled album photos each requesting five neighbors:
 
 ```rust
@@ -277,7 +277,7 @@ let matches = db.search_batch(&queries, 5)?;
 set to the batch. Both methods support k=1–1,024 and internal corpus sharding.
 Exclusions may be unsorted and repeated, and affect only that call. Every query
 is validated before GPU execution; incomplete rows, nonfinite or zero-norm
-queries, more than 64 queries, and out-of-range excluded IDs are errors. Empty
+queries, more than 256 queries, and out-of-range excluded IDs are errors. Empty
 batches return an empty vector; an empty index returns one empty result per
 valid query. A one-query batch uses the single-query scan.
 
@@ -285,32 +285,36 @@ valid query. A one-query batch uses the single-query scan.
 `Vec<Vec<Neighbor>>`, retaining capacities of rows that survive a batch resize.
 
 The [matrix kernel](../kernels/batch_scan.loom) stages 64 corpus rows and up to
-64 queries in workgroup memory, then uses 16×16×16 FP16 matrix operations with
-FP32 accumulation. Normalized queries round to FP16 during staging. Batch
+64 queries per workgroup in shared memory, then uses 16×16×16 FP16 matrix
+operations with FP32 accumulation. Normalized queries round to FP16 during staging. Batch
 scores differ from the FP32 single-query scan by at most 2^-11 for normalized
 rows; near-ties can change rank. All-subnormal FP16 corpus rows score at 2^-14
 relative precision.
 Equal computed scores still prefer the lower insertion ID.
 
-Scores are materialized for at most 262,144 corpus rows at a time. GPU selection
-initializes each query's running top-k from the first tile. Later tiles compact
+Adjacent workgroups cover successive 64-query blocks of the same corpus rows.
+Scores are materialized for at most 262,144 corpus rows at a time at widths
+through 64, 131,072 at width 128, and 65,536 at width 256. This caps the score
+allocation at 64 MiB; smaller corpora need less. GPU selection initializes each query's running top-k from the first tile. Later tiles compact
 only scores strictly above the running k-th score into at most 4,096 candidates
 per query, then merge them into the running list. Equal scores from later IDs
 cannot improve that list. If a query exceeds capacity, a parallel reduction
 tree keeps k per 4,096-row block until at most 4,096 entries remain for merging.
 Queries within capacity skip these reduction passes on the device.
-The scan pads query widths to 8, 16, 32 or 64 for corpus reuse; selection and
-running merges process only the real queries, including for small k.
+The scan pads query widths to 8, 16, 32, 64, 128 or 256 for corpus reuse;
+selection and running merges process only the real queries, including for small k.
 The running merge updates its list in place. Host batches use four
 copies in total: two to initialize the running lists and two for final readback.
 The full corpus × batch score matrix is never allocated, and only final results
 are read back (2,400 bytes for sixty top-5 queries).
 
 Batch workspace grows to accommodate the largest reserved query width and k,
-and is reused. Widths round up to 8, 16, 32, or 64, with compiled kernels cached
-per width. At width 64 the workspace uses approximately **68 MiB for k=5** or
-**324 MiB for k=1,024**, plus query storage (96 KiB at dimension 384). Smaller
-corpora need less. This storage is additional to the index and single-query
+and is reused. Widths round up to 8, 16, 32, 64, 128, or 256, with compiled
+kernels cached per width. At width 64 the workspace uses approximately **68 MiB for k=5** or
+**323 MiB for k=1,024**, plus query storage (96 KiB at dimension 384). At width
+256, the corresponding figures are about **74 MiB** and **332 MiB**, plus query storage (384 KiB at
+dimension 384). The tile size follows the largest reserved width and remains
+bounded across k changes and corpus replacement. Smaller corpora need less. This storage is additional to the index and single-query
 scratch; `batch_workspace_bytes()` reports the reserved buffer bytes. First use
 can allocate and compile, so use `reserve_batch(query_count, k)` during setup
 when first-request latency matters. `ScanConfig` tunes the single-query scan;
@@ -475,7 +479,7 @@ uses on the same stream, or establish event dependencies before overwriting it.
 
 Gather is independent of search limits: it supports up to 2^30 requested rows
 and 2^32 output components, subject to available memory. Public `MAX_BATCH`
-(64 queries) and `MAX_K` (1,024 results) describe search and standalone `TopK`.
+(256 queries) and `MAX_K` (1,024 results) describe search and standalone `TopK`.
 Applications can use these constants without duplicating the supported limits.
 
 The runnable [subset comparison example](../examples/subset_scores.rs) gathers two
@@ -532,7 +536,7 @@ Device normalization uses scaled FP32 reductions to handle extreme finite
 magnitudes, including entirely subnormal rows. Its rounding can differ from
 host FP64 normalization, and tiny relative components can underflow. Both paths
 search exhaustively with FP32 scores; very close rankings can differ. Up to
-64 queries and k=1–1,024 are supported. First use may allocate, compile, or wait
+256 queries and k=1–1,024 are supported. First use may allocate, compile, or wait
 when replacing imported host workspace; fully reserved submissions do not wait
 on the host.
 
@@ -546,7 +550,7 @@ search also accepts an application-owned bitmap with this layout.
 ## Standalone selection
 
 `TopK` consumes a `ScoreBatch`: a contiguous row-major FP32 matrix with up to
-64 queries and 2^30 candidate columns. It requires no corpus or cosine metric:
+256 queries and 2^30 candidate columns. It requires no corpus or cosine metric:
 
 ```rust
 use hrxdb::{DeviceNeighbors, ScoreBatch, TopK};
@@ -754,7 +758,7 @@ stream after the index itself has been dropped.
 
 Device pipeline tests cover independent shared-storage workers, snapshot
 ownership, zero-copy FP16 import and rejection of invalid rows, strided inputs,
-widths through 64, extreme magnitudes, device status, cross-stream event
+widths through 256, extreme magnitudes, device status, cross-stream event
 consumption, incremental GPU exclusions, and standalone selection across large
 matrix tiles. They verify bounded workspace and repeated output reuse.
 

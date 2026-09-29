@@ -59,7 +59,7 @@ pub struct ProfiledSearch {
 impl Searcher {
     /// Execute a diagnostic search with GPU timestamps around every command.
     ///
-    /// Accepts 0–64 row-major queries and shared exclusions, with the same
+    /// Accepts 0–256 row-major queries and shared exclusions, with the same
     /// validation and results as [`Self::search_batch_excluding`]. One query
     /// uses the single-query path. Scoring, masking, selection, merging and
     /// transfers all use the ordinary search implementation.

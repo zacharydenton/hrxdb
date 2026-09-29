@@ -4,7 +4,7 @@ kernel.def target(@target) export("finish") @finish(%batch_arg:i32) {
  %one=index.constant 1 : index
  %threads=index.constant 256 : index
  %raw=index.cast %batch_arg : i32 to index
- %batch=index.assume %raw [range(%raw,1,64)] : index
+ %batch=index.assume %raw [range(%raw,1,256)] : index
  kernel.launch.config workgroups(%batch,%one,%one) workgroup_size(%threads,%one,%one) : index
 } launch(%batch_arg:i32,%selected_arg:i32,%k_arg:i32,%scores:buffer,%ids:buffer,%status:buffer,%out_scores:buffer,%out_ids:buffer,%counts:buffer) {
  %zero=index.constant 0 : offset
@@ -13,7 +13,7 @@ kernel.def target(@target) export("finish") @finish(%batch_arg:i32) {
  %i4=index.constant 4 : index
  %c256=index.constant 256 : index
  %b0=index.cast %batch_arg : i32 to index
- %b=index.assume %b0 [range(%b0,1,64)] : index
+ %b=index.assume %b0 [range(%b0,1,256)] : index
  %m0=index.cast %selected_arg : i32 to index
  %m=index.assume %m0 [range(%m0,0,1024)] : index
  %k0=index.cast %k_arg : i32 to index
@@ -22,7 +22,7 @@ kernel.def target(@target) export("finish") @finish(%batch_arg:i32) {
  %ms0=scf.select %has,%m,%i1 : index
  %ms=index.assume %ms0 [range(%ms0,1,1024)] : index
  %q0=kernel.workgroup.id<x> : index
- %q=index.assume %q0 [range(%q0,0,63),lt(%q0,%b)] : index
+ %q=index.assume %q0 [range(%q0,0,255),lt(%q0,%b)] : index
  %tid=kernel.workitem.id<x> : index
  %sv=buffer.view %scores[%zero] : buffer -> view<[%b]x[%ms]xf32>
  %iv=buffer.view %ids[%zero] : buffer -> view<[%b]x[%ms]xi32>

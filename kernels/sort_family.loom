@@ -2,7 +2,7 @@
 // pairs of sorted k-lists. Each merge halves the number of lists, even at k=1024.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
 config.decl @db.select.limit : %value: index where [range(%value, 1, 1073741824)]
-config.decl @db.batch : %value: index where [range(%value, 1, 64)]
+config.decl @db.batch : %value: index where [range(%value, 1, 256)]
 config.decl @db.merge.planar : %value: index where [range(%value, 0, 1)]
 
 kernel.def target(@target) export("sort_select") @sort_select(%count_arg: i32) {
@@ -41,7 +41,7 @@ kernel.def target(@target) export("sort_select") @sort_select(%count_arg: i32) {
   %outbase = index.mul %group, %k : index
   %query0 = kernel.workgroup.id<y> : index
   %batch_count = config.get @db.batch : index
-  %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %batch_count)] : index
+  %query = index.assume %query0 [range(%query0, 0, 255), lt(%query0, %batch_count)] : index
   %limit = config.get @db.select.limit : index
   %input_span = index.assume %count [range(%count, 1, 1073741824), le(%count, %limit)] : index
   %output_span = index.assume %out_count [range(%out_count, 1, 1073741824), le(%out_count, %limit)] : index
@@ -183,7 +183,7 @@ kernel.def target(@target) export("sorted_merge") @sorted_merge(%groups_arg: i32
   %outbase = index.mul %group, %k : index
   %query0 = kernel.workgroup.id<y> : index
   %batch_count = config.get @db.batch : index
-  %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %batch_count)] : index
+  %query = index.assume %query0 [range(%query0, 0, 255), lt(%query0, %batch_count)] : index
   %limit = config.get @db.select.limit : index
   %input_span = index.assume %count [range(%count, 1, 1073741824), le(%count, %limit)] : index
   %output_span = index.assume %out_count [range(%out_count, 1, 1073741824), le(%out_count, %limit)] : index

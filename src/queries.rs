@@ -14,7 +14,7 @@ pub struct DeviceQueries<'a> {
     stride: usize,
 }
 impl<'a> DeviceQueries<'a> {
-    /// Validate a 0..=64 query batch, dimensions 1..=16384, and row stride between
+    /// Validate a 0..=256 query batch, dimensions 1..=16384, and row stride between
     /// dimensions and 16384. The binding must cover batch*stride FP32 elements.
     pub fn new(values: View<'a>, batch: usize, dimensions: usize, stride: usize) -> Result<Self> {
         if batch > MAX_BATCH

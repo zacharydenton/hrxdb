@@ -97,7 +97,7 @@ fn options() -> Result<Options, String> {
         return Err("rows and samples must be positive; k must be in 1..=1024; exclude-first must be less than rows".into());
     }
     if !(1..=hrxdb::MAX_BATCH).contains(&o.batch) || (o.batch > 1 && o.sweep) {
-        return Err("batch must be in 1..=64; batched GEMM does not use --sweep".into());
+        return Err("batch must be in 1..=256; batched GEMM does not use --sweep".into());
     }
     if o.append > 0 && o.appends == 0 {
         return Err("appends must be positive when --append is enabled".into());

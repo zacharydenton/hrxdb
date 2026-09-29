@@ -1,5 +1,7 @@
 // Batch scan on the matrix cores: a workgroup scores 64 corpus rows against up
-// to 64 queries with 16x16x16 FP16 WMMA, accumulating in FP32.
+// to 64 queries with 16x16x16 FP16 WMMA, accumulating in FP32. Logical batches
+// up to 256 place successive query blocks in adjacent linear workgroups,
+// reusing the same corpus rows before advancing to the next row block.
 //
 // Corpus rows are already FP16. Queries arrive normalized in FP32, inputs by
 // queries, and are narrowed to FP16 as they are staged: the one precision this
@@ -14,7 +16,7 @@
 // the batch width stage zeros and are never stored. Results publish through
 // LDS so each lane writes eight adjacent rows of one query's scores.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
-config.decl @db.batch : %value: index where [range(%value, 8, 64), mul(%value, 8)]
+config.decl @db.batch : %value: index where [range(%value, 8, 256), mul(%value, 8)]
 config.decl @db.scan.dimensions : %value: index where [range(%value, 128, 16384), mul(%value, 128)]
 kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
   %one = index.constant 1 : index
@@ -25,7 +27,11 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
   %count = index.assume %raw [range(%raw, 1, 262144)] : index
   %rounded = index.add %count, %extra : index
   %groups = index.div %rounded, %rows : index
-  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+  %batch = config.get @db.batch : index
+  %batch_rounded = index.add %batch, %extra : index
+  %query_groups = index.div %batch_rounded, %rows : index
+  %total_groups = index.mul %groups, %query_groups : index
+  kernel.launch.config workgroups(%total_groups, %one, %one) workgroup_size(%threads, %one, %one) : index
 } launch(%count_arg: i32, %masked_arg: i32, %row_base_arg: i32, %total_arg: i32, %data: buffer, %queries: buffer, %norms: buffer, %bitmap: buffer, %scores: buffer) {
   %zero = index.constant 0 : offset
   %c0 = index.constant 0 : index
@@ -45,8 +51,15 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
   %count = index.assume %raw [range(%raw, 1, 262144)] : index
   %tid0 = kernel.workitem.id<x> : index
   %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
-  %group0 = kernel.workgroup.id<x> : index
+  %linear0 = kernel.workgroup.id<x> : index
+  %linear = index.assume %linear0 [range(%linear0, 0, 16383)] : index
+  %c63 = index.constant 63 : index
+  %batch_rounded = index.add %batch, %c63 : index
+  %query_groups = index.div %batch_rounded, %c64 : index
+  %group0 = index.div %linear, %query_groups : index
   %group = index.assume %group0 [range(%group0, 0, 4095)] : index
+  %q_group = index.rem %linear, %query_groups : index
+  %query_base = index.mul %q_group, %c64 : index
   %subgroup0 = kernel.subgroup.id : index
   %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
   %lane = kernel.subgroup.lane.id : index
@@ -90,8 +103,10 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
   %q_col1 = index.add %q_col, %c8 : index
   %q_k0 = index.div %tid, %c4 : index
   %q_k = index.assume %q_k0 [range(%q_k0, 0, 63)] : index
-  %q_live0 = index.cmp ult, %q_col, %batch : index
-  %q_live1 = index.cmp ult, %q_col1, %batch : index
+  %q_global0 = index.add %query_base, %q_col : index
+  %q_global1 = index.add %query_base, %q_col1 : index
+  %q_live0 = index.cmp ult, %q_global0, %batch : index
+  %q_live1 = index.cmp ult, %q_global1, %batch : index
 
   %zero_x = vector.constant 0.0 : vector<16xf16>
   %zero_q = vector.constant 0.0 : vector<8xf16>
@@ -111,14 +126,14 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
 
     %q_dim = index.add %k_base, %q_k : index
     %q_values0 = scf.if %q_live0 -> (vector<8xf16>) {
-      %wide = vector.load %qv[%q_dim, %q_col] : view<[%d]x[%batch]xf32> -> vector<8xf32>
+      %wide = vector.load %qv[%q_dim, %q_global0] : view<[%d]x[%batch]xf32> -> vector<8xf32>
       %narrow = vector.fptrunc %wide : vector<8xf32> to vector<8xf16>
       scf.yield %narrow : vector<8xf16>
     } else {
       scf.yield %zero_q : vector<8xf16>
     }
     %q_values1 = scf.if %q_live1 -> (vector<8xf16>) {
-      %wide = vector.load %qv[%q_dim, %q_col1] : view<[%d]x[%batch]xf32> -> vector<8xf32>
+      %wide = vector.load %qv[%q_dim, %q_global1] : view<[%d]x[%batch]xf32> -> vector<8xf32>
       %narrow = vector.fptrunc %wide : vector<8xf32> to vector<8xf16>
       scf.yield %narrow : vector<8xf16>
     } else {
@@ -167,10 +182,11 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
 
     %fragment_col = index.mul %fragment, %c16 : index
     %col_base = index.add %wave_col, %fragment_col : index
-    %query0 = index.add %col_base, %lane_col : index
+    %query_local = index.add %col_base, %lane_col : index
+    %query0 = index.add %query_base, %query_local : index
     %live = index.cmp ult, %query0, %batch : index
     scf.if %live {
-      %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %batch)] : index
+      %query = index.assume %query0 [range(%query0, 0, 255), lt(%query0, %batch)] : index
       scf.for %i = [%c0 to %c8 step %c1] unroll {
         %local = index.add %lane_row, %i : index
         %row = index.add %first_row, %i : index

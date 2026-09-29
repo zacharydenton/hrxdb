@@ -9,12 +9,38 @@ fn shared_corpus_is_send_sync() {
 
 #[test]
 #[ignore = "requires gfx1151"]
+fn wide_device_limits_reject_oversized_shapes_before_allocation() -> hrxdb::Result<()> {
+    let device = Device::open(0)?;
+    let stream = device.stream()?;
+    // Cover the rejected shape's entire binding, so errors establish the
+    // public query-count limit rather than an insufficient buffer extent.
+    let input = stream.allocate(257 * 3 * 4)?;
+    assert!(hrxdb::DeviceQueries::new(input.binding(), 256, 3, 3).is_ok());
+    assert!(hrxdb::DeviceQueries::new(input.binding(), 257, 3, 3).is_err());
+    assert!(ScoreBatch::new(input.binding(), 256, 3).is_ok());
+    assert!(ScoreBatch::new(input.binding(), 257, 3).is_err());
+    assert!(DeviceNeighbors::new(&stream, 257, 1).is_err());
+    let mut topk = TopK::new(&stream)?;
+    assert!(topk.reserve(&stream, 257, 3, 1).is_err());
+    assert_eq!(topk.memory_usage(), 0);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires gfx1151"]
 fn standalone_topk_handles_batches_ties_missing_and_reuse() -> hrxdb::Result<()> {
     let device = Device::open(0)?;
     let mut stream = device.stream()?;
     let mut topk = TopK::new(&stream)?;
-    for n in [0usize, 3, 2057] {
-        let batch = 3;
+    for (n, batch) in [
+        (0usize, 3),
+        (3, 3),
+        (2057, 3),
+        (0, 256),
+        (3, 65),
+        (2057, 129),
+        (2057, 256),
+    ] {
         let values: Vec<f32> = (0..batch * n)
             .map(|i| match i % 17 {
                 0 => f32::NAN,
@@ -262,11 +288,12 @@ fn topk_merges_large_matrix_tiles_and_global_ids() -> hrxdb::Result<()> {
     let device = Device::open(0)?;
     let mut stream = device.stream()?;
     let n = 262_145;
-    let batch = 2;
+    let batch = hrxdb::MAX_BATCH;
     let mut values = vec![-2.0f32; batch * n];
-    values[n - 1] = 3.0;
-    values[n + 17] = 2.0;
-    values[2 * n - 1] = 4.0;
+    for q in 0..batch {
+        values[q * n + q] = 2.0;
+        values[(q + 1) * n - 1] = 3.0 + q as f32;
+    }
     let buffer = stream.allocate(values.len() * 4)?;
     stream.upload(
         buffer.binding(),
@@ -284,12 +311,21 @@ fn topk_merges_large_matrix_tiles_and_global_ids() -> hrxdb::Result<()> {
             &mut out,
         )?;
         let got = out.read(&mut stream)?;
-        assert_eq!(got[0][0].id, n as u32 - 1);
-        assert_eq!(got[1][0].id, n as u32 - 1);
-        assert_eq!(got[1][1].id, 17);
-        assert_eq!(got[0][1].id, 0);
-        assert_eq!(got[0].len(), k);
-        assert_eq!(got[1].len(), k);
+        for (q, result) in got.iter().enumerate() {
+            assert_eq!(result.len(), k);
+            assert_eq!(result[0].id, n as u32 - 1);
+            assert_eq!(result[0].similarity, 3.0 + q as f32);
+            assert_eq!(result[1].id, q as u32);
+            assert_eq!(result[1].similarity, 2.0);
+            let expected: Vec<_> = (0..n as u32)
+                .filter(|&id| id != q as u32)
+                .take(k - 2)
+                .collect();
+            assert_eq!(
+                result[2..].iter().map(|n| n.id).collect::<Vec<_>>(),
+                expected
+            );
+        }
     }
     Ok(())
 }
@@ -309,7 +345,7 @@ fn device_query_strides_widths_and_invalid_rows() -> hrxdb::Result<()> {
             .collect();
         let corpus = Corpus::build(&device, d, &rows)?;
         let mut searcher = corpus.searcher()?;
-        for batch in [1usize, 3, 9, 33, 64] {
+        for batch in [1usize, 3, 9, 33, 64, 65, 127, 128, 129, 255, 256] {
             let queries: Vec<f32> = (0..batch)
                 .flat_map(|i| (0..d).map(move |j| ((i * 19 + j * 7) % 97) as f32 - 45.5))
                 .collect();
@@ -416,7 +452,7 @@ fn device_query_strides_widths_and_invalid_rows() -> hrxdb::Result<()> {
     }]];
     assert!(output.read_into(searcher.stream(), &mut reused).is_err());
     assert_eq!(reused[0][0].id, 42);
-    assert!(DeviceQueries::new(buffer.binding(), 65, 3, 3).is_err());
+    assert!(DeviceQueries::new(buffer.binding(), hrxdb::MAX_BATCH + 1, 3, 3).is_err());
     assert!(DeviceQueries::new(buffer.binding(), 4, 3, 2).is_err());
     assert!(DeviceQueries::new(buffer.binding(), 4, 3, 4).is_err());
     Ok(())

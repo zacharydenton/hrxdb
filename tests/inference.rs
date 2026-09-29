@@ -86,3 +86,62 @@ fn context_fp16_storage_and_tensors_share_the_budget() -> hrxdb::Result<()> {
     assert_eq!(manager.statistics().reserved_bytes, 0);
     Ok(())
 }
+
+#[test]
+#[ignore = "requires gfx1151"]
+fn prepared_wide_batches_reuse_slots_and_report_invalid_tail_queries() -> hrxdb::Result<()> {
+    let context = ModelContext::new(RuntimeOptions::default())?;
+    let axis = |n: usize| {
+        let mut row = [0.0; 3];
+        row[n % 3] = 1.0;
+        row
+    };
+    let corpus = hrxdb::Corpus::build_in(&context, 3, (0..2057).map(axis))?;
+    let mut reference = corpus.searcher()?;
+    for (batch, k) in [(65, 5), (128, 33), (129, 33), (256, 1024)] {
+        let search = corpus.prepare_search(&context, batch, k, 1)?;
+        let expected: Vec<_> = (0..3)
+            .map(|q| reference.search(&axis(q), k))
+            .collect::<hrxdb::Result<_>>()?;
+        let desc = TensorDesc::new(DType::F32, vec![batch, 3])?.with_layout(Layout::Rows)?;
+        for iteration in 0..2 {
+            let bytes: Vec<_> = (0..batch)
+                .flat_map(|q| axis(q + iteration))
+                .flat_map(f32::to_le_bytes)
+                .collect();
+            let query = context.upload(desc.clone(), &bytes)?;
+            let actual = search.submit(&query)?.read()?;
+            for (q, row) in actual.iter().enumerate() {
+                assert_eq!(*row, expected[(q + iteration) % 3]);
+            }
+        }
+        let mut invalid: Vec<_> = (0..batch)
+            .flat_map(axis)
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        invalid[(batch - 1) * 12..].fill(0);
+        let query = context.upload(desc.clone(), &invalid)?;
+        let result = search.submit(&query)?;
+        let status = context.download(result.status())?.wait()?;
+        let counts = context.download(result.counts())?.wait()?;
+        assert!(status[..(batch - 1) * 4].iter().all(|&b| b == 0));
+        assert_eq!(
+            u32::from_le_bytes(status[(batch - 1) * 4..].try_into().unwrap()),
+            1
+        );
+        assert_eq!(
+            u32::from_le_bytes(counts[(batch - 1) * 4..].try_into().unwrap()),
+            0
+        );
+        assert!(result.read().is_err());
+        // An invalid row must not leave stale status in the reused slot.
+        let valid: Vec<_> = (0..batch)
+            .flat_map(axis)
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        let query = context.upload(desc, &valid)?;
+        assert_eq!(search.submit(&query)?.read()?.len(), batch);
+    }
+    assert!(corpus.prepare_search(&context, 257, 5, 1).is_err());
+    Ok(())
+}

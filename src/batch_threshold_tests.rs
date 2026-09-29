@@ -115,11 +115,15 @@ fn overflow_preserves_varied_scores_across_reduction_blocks() -> Result<()> {
             }
         }),
     )?;
-    db.reserve_batch(3, 1024)?;
+    db.reserve_batch(256, 1024)?;
     db.batch.as_mut().unwrap().tile_rows = tile;
     // Axis queries are represented exactly in FP16; their scores also match
     // the independent single-query scan and selection path bit for bit.
-    let queries = [1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let queries: Vec<_> = [1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+        .into_iter()
+        .cycle()
+        .take(256 * 3)
+        .collect();
     for k in [1, 5, 33, 1024] {
         let batch = db.search_batch(&queries, k)?;
         for (query, actual) in queries.chunks_exact(3).zip(batch) {

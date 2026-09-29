@@ -3,6 +3,13 @@ use super::*;
 
 const TILE_ROWS: usize = 262_144;
 
+// Keep at most 64 MiB of scores, even as the reserved query width grows.
+// Using the reserved width also keeps smaller subsequent batches within the
+// existing allocation, without resizing or invalidating their cached plans.
+fn batch_tile_rows(rows: usize, width: usize) -> usize {
+    rows.min(TILE_ROWS * 64 / width.max(64))
+}
+
 /// Candidates each query keeps for a tile after the first. After the first tile
 /// a query expects about k survivors a tile, so this is overflowed only when
 /// its bound is weak.
@@ -86,7 +93,7 @@ impl BatchScratch {
         // set_corpus also calls this when capacity is unchanged. Recorded
         // bindings and tile counts still belong to the previous snapshot.
         self.search_graph = None;
-        let tile_rows = rows.min(TILE_ROWS);
+        let tile_rows = batch_tile_rows(rows, self.width);
         if tile_rows == self.tile_rows {
             return Ok(());
         }
@@ -114,7 +121,7 @@ fn batch_size(dimensions: usize, values: usize, k: usize) -> Result<usize> {
     let count = values / dimensions;
     if count > MAX_BATCH {
         return Err(invalid(
-            "a query batch supports at most 64 rows; split larger batches",
+            "a query batch supports at most 256 rows; split larger batches",
         ));
     }
     Ok(count)
@@ -143,18 +150,22 @@ impl Searcher {
     ///
     /// `search_batch` calls this automatically. Call it during setup to exclude
     /// allocation and compilation from the first batch. Scan widths are rounded
-    /// to 8, 16, 32, or 64; selection omits padded query rows for every k.
+    /// to 8, 16, 32, 64, 128, or 256; selection omits padded query rows for every k.
     /// Both are cached and workspace is retained.
-    /// Score storage covers at most 262,144 corpus rows, independent of index size.
-    /// At width 64 this uses about 68 MiB for k=5 or 324 MiB for k=1,024, plus
-    /// query storage (96 KiB at 384 dimensions). A one-query batch uses `search`.
+    /// Score storage is capped at 64 MiB: up to 262,144 corpus rows at widths
+    /// through 64, 131,072 at width 128, and 65,536 at width 256. Tile size follows
+    /// the largest reserved width, including when later queries use fewer rows.
+    /// At width 64 this uses about 68 MiB for k=5 or 323 MiB for k=1,024, plus
+    /// query storage (96 KiB at 384 dimensions). At width 256, the corresponding
+    /// sizes are about 74 MiB and 332 MiB plus query storage (384 KiB).
+    /// A one-query batch uses `search`.
     ///
     /// # Errors
-    /// `query_count` must be 1–64 and `k` must be 1–1,024. Allocation,
+    /// `query_count` must be 1–256 and `k` must be 1–1,024. Allocation,
     /// synchronization, and compiler failures propagate as errors.
     pub fn reserve_batch(&mut self, query_count: usize, k: usize) -> Result<()> {
         if !(1..=MAX_BATCH).contains(&query_count) {
-            return Err(invalid("query_count must be in 1..=64"));
+            return Err(invalid("query_count must be in 1..=256"));
         }
         if !(1..=MAX_K).contains(&k) {
             return Err(invalid("k must be in 1..=1024"));
@@ -165,8 +176,6 @@ impl Searcher {
         let width = query_count.next_power_of_two().max(8);
         let query_count = selection_plan_width(query_count, k.min(self.count));
         let capacity = k.min(self.count).next_power_of_two();
-        // Sized by capacity, so appends within the reserve keep this scratch.
-        let tile_rows = self.corpus.capacity_range().end.min(TILE_ROWS);
         if self.batch.as_ref().is_some_and(|s| {
             s.width >= width
                 && s.k >= capacity
@@ -184,9 +193,14 @@ impl Searcher {
         {
             let old_width = self.batch.as_ref().map_or(0, |s| s.width);
             let old_k = self.batch.as_ref().map_or(0, |s| s.k);
+            let reserved_width = width.max(old_width);
+            // Size by corpus capacity and retained query width. In particular,
+            // growing k after a smaller batch must not expand a wide workspace
+            // back to 262,144 rows and multiply its score storage.
+            let tile_rows = batch_tile_rows(self.corpus.capacity_range().end, reserved_width);
             let mut scratch = BatchScratch::new(
                 &self.stream,
-                width.max(old_width),
+                reserved_width,
                 capacity.max(old_k),
                 tile_rows,
                 self.padded,
@@ -260,7 +274,7 @@ impl Searcher {
         Ok(())
     }
 
-    /// Search up to 64 row-major FP32 queries, sharing corpus reads across them.
+    /// Search up to 256 row-major FP32 queries, sharing corpus reads across them.
     ///
     /// `queries` contains `batch_size * self.dimensions()` components. Results
     /// retain query order and use the same score/ID ordering as [`Self::search`].
@@ -294,7 +308,7 @@ impl Searcher {
     /// ```
     ///
     /// # Errors
-    /// Rejects incomplete rows, more than 64 queries, k outside 1–1,024, and
+    /// Rejects incomplete rows, more than 256 queries, k outside 1–1,024, and
     /// nonfinite or zero-norm queries. All queries are validated before execution.
     /// Runtime and compilation failures propagate as errors.
     pub fn search_batch(&mut self, queries: &[f32], k: usize) -> Result<Vec<Vec<Neighbor>>> {
@@ -586,6 +600,7 @@ impl BatchScratch {
                 constants.push(u32::from(exclusions.is_some()))?;
                 constants.push(start as u32)?;
                 constants.push(corpus.len() as u32)?;
+                let scan_grid = [(rows.div_ceil(64) * width.div_ceil(64)) as u32, 1, 1];
                 // SAFETY: the tile belongs to this shard, has at most TILE_ROWS
                 // rows, and its dimensions match the compiled kernel. The query
                 // and score buffers reserve width rows. Norms use local row
@@ -593,7 +608,7 @@ impl BatchScratch {
                 unsafe {
                     commands.dispatch(
                         &plan.scan,
-                        [rows.div_ceil(64) as u32, 1, 1],
+                        scan_grid,
                         plan.scan.info().workgroup_size,
                         &constants,
                         &[
@@ -854,7 +869,9 @@ mod tests {
             let mut db = Searcher::build_fp16(&device, 3, encoded)?;
             // Exercise cached wide -> narrow -> wide query plans as well as
             // a final corpus tile smaller than all preceding dispatches.
-            for batch in [60usize, 2, 3, 4, 8, 17, 33, 64, 9, 3] {
+            for batch in [
+                60usize, 2, 3, 4, 8, 17, 33, 64, 65, 127, 128, 129, 255, 256, 9, 3,
+            ] {
                 let queries: Vec<f32> = (0..batch)
                     .flat_map(|q| {
                         [
@@ -918,7 +935,13 @@ mod tests {
         assert_eq!(batch_size(3, 0, 5).unwrap(), 0);
         assert_eq!(batch_size(3, 180, 5).unwrap(), 60);
         assert_eq!(batch_size(3, 192, 1024).unwrap(), 64);
-        for (values, k) in [(1, 5), (181, 5), (195, 5), (0, 0), (3, 1025)] {
+        for (values, k) in [
+            (1, 5),
+            (181, 5),
+            ((MAX_BATCH + 1) * 3, 5),
+            (0, 0),
+            (3, 1025),
+        ] {
             assert!(batch_size(3, values, k).is_err());
         }
     }
@@ -943,8 +966,8 @@ mod tests {
             |row, d, p, bytes| encode(*row, d, p, bytes),
         )?;
         assert_eq!(db.shard_count(), 3);
-        let queries: Vec<_> = (0..60).flat_map(|i| rows[i]).collect();
-        db.reserve_batch(60, 1024)?;
+        let queries: Vec<_> = (0..256).flat_map(|i| rows[i]).collect();
+        db.reserve_batch(256, 1024)?;
         // Force several short, unaligned tiles in each unaligned shard. This
         // exercises masks crossing word boundaries and k larger than a tile.
         db.batch.as_mut().unwrap().tile_rows = 257;
@@ -952,7 +975,7 @@ mod tests {
         let some = [0, 7, 8, 31, 32, 33, 256, 257, 1030, 1031, 1032, 2064, 1031];
         for excluded in [&[][..], &some, &all[2..], &all] {
             for k in [1, 5, 32, 33, 1024] {
-                for count in [3usize, 60, 4] {
+                for count in [3usize, 60, 65, 128, 129, 255, 256, 4] {
                     let queries = &queries[..count * 3];
                     let batch = db.search_batch_excluding(queries, k, excluded)?;
                     for (actual, query) in batch.iter().zip(queries.as_chunks::<3>().0) {
@@ -977,7 +1000,7 @@ mod tests {
         let valid = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         for bad in [
             vec![1.0],
-            vec![1.0; 65 * 3],
+            vec![1.0; (MAX_BATCH + 1) * 3],
             vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             vec![1.0, 0.0, 0.0, f32::NAN, 0.0, 0.0],
             vec![f32::INFINITY; 6],
@@ -989,7 +1012,7 @@ mod tests {
         assert!(db.search_batch(&valid, 1025).is_err());
         assert!(db.search_batch_excluding(&valid, 5, &[67]).is_err());
         assert!(db.search_batch(&[], 5)?.is_empty());
-        for size in [0, 65] {
+        for size in [0, MAX_BATCH + 1] {
             assert!(db.reserve_batch(size, 5).is_err());
         }
         assert!(db.reserve_batch(2, 0).is_err());
@@ -1089,3 +1112,7 @@ mod bench;
 #[cfg(test)]
 #[path = "batch_threshold_tests.rs"]
 mod threshold_tests;
+
+#[cfg(test)]
+#[path = "batch_wide_tests.rs"]
+mod wide_tests;

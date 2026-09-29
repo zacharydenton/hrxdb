@@ -1,5 +1,50 @@
 # Measured results
 
+## Production batches through 256 queries
+
+The [production qualification](hrx-0.8.11-batch256.json) implements the
+`ce4204b` experiment with bounded workspace reservation and corpus resizing.
+The scan retains a 64×64 WMMA workgroup and places successive query blocks in
+adjacent workgroups. Reserved width 128 uses 131,072-row tiles, and width 256
+uses 65,536-row tiles. Score storage stays at or below 64 MiB, including after
+k growth, smaller queries and corpus replacement. Host/device/prepared search,
+profiling and standalone TopK accept up to 256 queries.
+
+Local gfx1151, 2026-09-29, HRX 0.8.11. Each comparison alternates ordinary
+completed searches on one shared corpus with changing queries and cached
+graphs: three warmups and fifteen samples. The baseline reuses one worker for
+repeated 64-query calls. External GPU load varied, so these establish gains
+under that load; times from separate rows are not directly comparable.
+
+| Corpus / queries / k | 64-query chunks | One batch | Ratio | Pairs won | Batch workspace |
+|---|---:|---:|---:|---:|---:|
+| 1M × 384 / 128 / 5 | 14.68 ms | 12.15 ms | 1.21× | 14/15 | 70.20 MiB |
+| 1M × 384 / 256 / 5 | 53.45 ms | 46.51 ms | 1.15× | 15/15 | 74.41 MiB |
+| 2M × 768 / 256 / 50 | 98.58 ms | 70.45 ms | 1.40× | 15/15 | 89.00 MiB |
+| 10M × 384 / 256 / 5 | 304.43 ms | 282.18 ms | 1.08× | 12/15 | 74.41 MiB |
+| 10M × 768 / 256 / 50 | 458.16 ms | 322.07 ms | 1.42× | 15/15 | 89.00 MiB |
+
+The 10M × 768 corpus spans two native shards. Both 10M comparisons retain the
+same workspace size as their smaller counterparts. The 10M × 384 run had
+substantial timing variation: its median paired speedup was 1.26×, while the
+ratio of arm medians in the table is 1.08×. The record preserves every pair.
+
+Every returned ID and score bit matches the chunked baseline; independent CPU
+score error is below 9.91e-7. Both scans use 64 VGPRs and 18 KiB LDS, with zero
+spills, reloads or private bytes and 87% modeled occupancy. Wider addressing
+increases static instructions from 1,074 to 1,131 and code from 6,004 to 6,272
+bytes at padded dimensions 384/768. Static WMMA count remains eight; the
+dimension loop's trip count determines runtime work. The record retains
+compiler evidence and separate instrumented stage totals. Some profiled stages
+were heavily interrupted by other GPU work; their sums are not components of
+the ordinary latency above.
+
+Sixty GPU tests pass, including wide workspace/snapshot transitions, empty and
+invalid inputs, device strides, prepared slot reuse, multi-tile standalone
+TopK and profiler parity. CPU, Rust 1.91, Clippy, documentation and packaging
+checks pass. `compare_batch_chunks` reproduces these comparisons; additional
+smoke checks cover wide replay, selection, tile-size and CLI profiling paths.
+
 ## WMMA comparison and threshold overflow fixes
 
 The [2026-09-29 qualification](hrx-0.8.11-threshold-fixes.json) covers the

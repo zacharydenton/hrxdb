@@ -2,6 +2,12 @@
 
 ## Unreleased — cached native GPU memory, prepared search, live snapshots
 
+- Support up to 256 queries in host, device and prepared search, profiling,
+  and standalone `TopK`. Schedule adjacent 64-query WMMA blocks over the same
+  corpus rows without increasing per-workgroup register or shared-memory use.
+  Cap score storage at 64 MiB by using 131,072-row tiles at reserved width 128
+  and 65,536-row tiles at width 256. Preserve that cap across workspace growth
+  and corpus replacement; query and k reservations remain reusable.
 - Run the batch scan on the matrix cores: 16x16x16 FP16 WMMA with FP32
   accumulation, eight waves tiling 64 rows by 64 query slots. Queries are
   narrowed to FP16 as they are staged, so a batch cosine is within 2^-11 of the

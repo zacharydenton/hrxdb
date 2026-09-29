@@ -230,7 +230,11 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     let batch = var("BATCH", 60);
     let k = var("K", 5);
     let samples = var("SAMPLES", 15);
-    assert!(rows > 0 && samples > 0 && (2..=64).contains(&batch));
+    assert!(rows > 0 && samples > 0 && (2..=MAX_BATCH).contains(&batch));
+    assert!(
+        batch <= 64 || selection || replay || std::env::var_os("BASELINE_SOURCE").is_some(),
+        "the historical scan supports up to 64 queries; use compare_batch_chunks or supply a compatible BASELINE_SOURCE"
+    );
     let device = Device::open(0)?;
     let mut candidate = Searcher::build(&device, dim, (0..rows).map(|i| row(i as u32, dim)))?;
     let mut baseline = candidate.corpus().searcher()?;
@@ -364,7 +368,9 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     }
     // Check every materialized score in the final tile, outside timing. Small
     // corpora fit in one tile, so this also supports complete matrix comparisons.
-    let final_rows = (candidate.corpus.inner.shards.last().unwrap().count - 1) % TILE_ROWS + 1;
+    let final_rows = (candidate.corpus.inner.shards.last().unwrap().count - 1)
+        % candidate.batch.as_ref().unwrap().tile_rows
+        + 1;
     let score_count = width * final_rows;
     let mut scores = [vec![0; score_count * 4], vec![0; score_count * 4]];
     for (db, bytes) in [&mut baseline, &mut candidate].into_iter().zip(&mut scores) {
@@ -485,10 +491,17 @@ fn compare_batch_tiles() -> Result<()> {
     let batch = var("BATCH", 60);
     let k = var("K", 5);
     let samples = var("SAMPLES", 15);
-    assert!(rows > 0 && samples > 0 && (2..=64).contains(&batch));
+    assert!(rows > 0 && samples > 0 && (2..=MAX_BATCH).contains(&batch));
     let device = Device::open(0)?;
     let mut db = Searcher::build(&device, dim, (0..rows).map(|i| row(i as u32, dim)))?;
     db.reserve_batch(batch, k)?;
+    // This experiment deliberately includes tiles beyond the production cap.
+    // Allocate the largest variant before timing so every dispatch fits.
+    let old = db.batch.as_mut().unwrap();
+    let mut scratch =
+        BatchScratch::new(&db.stream, old.width, old.k, rows.min(TILE_ROWS), db.padded)?;
+    scratch.plans = std::mem::take(&mut old.plans);
+    db.batch = Some(scratch);
     db.batch.as_mut().unwrap().immediate = true;
     let tiles = [16_384, 32_768, 65_536, 131_072, 262_144];
     let mut times = vec![Vec::new(); tiles.len()];
@@ -535,6 +548,109 @@ fn compare_batch_tiles() -> Result<()> {
         "scores_bitwise_equal": true, "ids_equal": true,
         "timing": "Host completion; changing queries and rotating variant order on one corpus. Compilation and ingestion excluded. Same workspace capacity for every tile size. GPU clocks and other system activity were not controlled.",
     });
+    if let Ok(path) = std::env::var("OUTPUT") {
+        std::fs::write(path, serde_json::to_string_pretty(&report)?)?;
+    }
+    Ok(())
+}
+
+/// Compare a production wide batch with repeated production 64-query calls.
+#[test]
+#[ignore = "requires gfx1151; run alone to measure performance"]
+fn compare_batch_chunks() -> Result<()> {
+    let rows = var("ROWS", 1_000_000);
+    let dim = var("DIM", 384);
+    let batch = var("BATCH", 256);
+    let k = var("K", 5);
+    let samples = var("SAMPLES", 15);
+    assert!(
+        rows > 0 && samples > 0 && (128..=MAX_BATCH).contains(&batch) && batch.is_multiple_of(64)
+    );
+    let device = Device::open(0)?;
+    let mut wide = Searcher::build(&device, dim, (0..rows).map(|i| row(i as u32, dim)))?;
+    let mut chunks = wide.corpus().searcher()?;
+    wide.reserve_batch(batch, k)?;
+    chunks.reserve_batch(64, k)?;
+    let mut times = [Vec::new(), Vec::new()];
+    let mut observations = Vec::new();
+    for iteration in 0..samples + 3 {
+        let queries: Vec<_> = (0..batch)
+            .flat_map(|q| row((rows + 888 + iteration * batch + q) as u32, dim))
+            .collect();
+        let mut outputs = [Vec::new(), Vec::new()];
+        for arm in if iteration % 2 == 0 { [0, 1] } else { [1, 0] } {
+            let now = Instant::now();
+            if arm == 0 {
+                for query in queries.chunks_exact(64 * dim) {
+                    outputs[arm].extend(chunks.search_batch(query, k)?);
+                }
+            } else {
+                outputs[arm] = wide.search_batch(&queries, k)?;
+            }
+            if iteration >= 3 {
+                times[arm].push(now.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+        observations.push((queries, outputs));
+    }
+    let mut checks = ComparisonChecks::default();
+    for (queries, outputs) in &observations {
+        checks.check(rows, dim, k, queries, outputs, [true, true]);
+    }
+    let queries = &observations.last().unwrap().0;
+    let mut profiles = [Vec::new(), Vec::new()];
+    for iteration in 0..3 {
+        for arm in if iteration % 2 == 0 { [0, 1] } else { [1, 0] } {
+            let db = if arm == 0 { &mut chunks } else { &mut wide };
+            let mut stages = std::collections::BTreeMap::<String, StageProfile>::new();
+            for query in queries.chunks(if arm == 0 { 64 * dim } else { batch * dim }) {
+                let expected = db.search_batch(query, k)?;
+                let actual = db.profile_search(query, k, &[])?;
+                assert_eq!(actual.neighbors, expected);
+                for (name, stage) in actual.execution.unwrap().stages {
+                    let sum = stages.entry(name).or_default();
+                    sum.commands += stage.commands;
+                    sum.device_ms += stage.device_ms;
+                }
+            }
+            profiles[arm].push(stages);
+        }
+    }
+    let mut reports = [
+        chunks.detailed_compilation_reports()?,
+        wide.detailed_compilation_reports()?,
+    ];
+    for report in reports.iter_mut().flatten() {
+        let path = std::path::Path::new(&report.artifact);
+        report.artifact = format!(
+            "hrx-cache/kernels/{}/{}",
+            path.parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy(),
+            path.file_name().unwrap().to_string_lossy()
+        );
+    }
+    let baseline_ms = median(&times[0]);
+    let candidate_ms = median(&times[1]);
+    let report = serde_json::json!({
+        "rows": rows, "dimensions": dim, "batch": batch, "k": k, "samples": samples, "warmups": 3,
+        "baseline_ms": baseline_ms, "candidate_ms": candidate_ms, "speedup": baseline_ms / candidate_ms,
+        "baseline_samples_ms": times[0], "candidate_samples_ms": times[1],
+        "baseline_tile_rows": chunks.batch.as_ref().unwrap().tile_rows,
+        "candidate_tile_rows": wide.batch.as_ref().unwrap().tile_rows,
+        "baseline_workspace_bytes": chunks.batch_workspace_bytes(), "candidate_workspace_bytes": wide.batch_workspace_bytes(),
+        "scores_bitwise_equal": checks.score_bit_differences == 0, "ids_equal": checks.rank_differences == 0,
+        "compared_neighbors": checks.neighbors, "max_cpu_reference_error": checks.max_reference_error,
+        "baseline_compilers": reports[0], "candidate_compilers": reports[1],
+        "baseline_profiles": profiles[0], "candidate_profiles": profiles[1],
+        "timing": "Alternating completed searches on one corpus with changing queries and cached graphs. Baseline reuses one 64-query worker. CPU checks, detailed compilation and three instrumented stage replays occur after ordinary timings. External GPU activity is uncontrolled."
+    });
+    println!(
+        "64-query chunks {baseline_ms:.3} ms, batch {batch} {candidate_ms:.3} ms; {:.3}x",
+        baseline_ms / candidate_ms
+    );
     if let Ok(path) = std::env::var("OUTPUT") {
         std::fs::write(path, serde_json::to_string_pretty(&report)?)?;
     }

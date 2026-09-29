@@ -87,7 +87,7 @@ kernel.def target(@target) export("threshold_compact") @threshold_compact(%rows_
   %raw = index.cast %rows_arg : i32 to index
   %rows = index.assume %raw [range(%raw, 1, 262144)] : index
   %qraw = index.cast %queries_arg : i32 to index
-  %queries = index.assume %qraw [range(%qraw, 1, 64)] : index
+  %queries = index.assume %qraw [range(%qraw, 1, 256)] : index
   %rounded = index.add %rows, %extra : index
   %groups = index.div %rounded, %tile : index
   kernel.launch.config workgroups(%groups, %queries, %one) workgroup_size(%threads, %one, %one) : index
@@ -101,7 +101,7 @@ kernel.def target(@target) export("threshold_compact") @threshold_compact(%rows_
   %raw = index.cast %rows_arg : i32 to index
   %rows = index.assume %raw [range(%raw, 1, 262144)] : index
   %qraw = index.cast %queries_arg : i32 to index
-  %queries = index.assume %qraw [range(%qraw, 1, 64)] : index
+  %queries = index.assume %qraw [range(%qraw, 1, 256)] : index
   %kraw = index.cast %k_arg : i32 to index
   %k = index.assume %kraw [range(%kraw, 1, 1024)] : index
   %craw = index.cast %capacity_arg : i32 to index
@@ -121,12 +121,12 @@ kernel.def target(@target) export("threshold_compact") @threshold_compact(%rows_
   %group0 = kernel.workgroup.id<x> : index
   %group = index.assume %group0 [range(%group0, 0, 255)] : index
   %query0 = kernel.workgroup.id<y> : index
-  %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %queries)] : index
+  %query = index.assume %query0 [range(%query0, 0, 255), lt(%query0, %queries)] : index
   // The running list is sorted, so its last entry is the k-th best score.
   %kth_row = index.mul %query, %k : index
   %kth_raw = index.add %kth_row, %k : index
   %kth_at0 = index.sub %kth_raw, %i1 : index
-  %kth_at = index.assume %kth_at0 [range(%kth_at0, 0, 65535), lt(%kth_at0, %running_count)] : index
+  %kth_at = index.assume %kth_at0 [range(%kth_at0, 0, 262143), lt(%kth_at0, %running_count)] : index
   %threshold = view.load %rv[%kth_at] : view<[%running_count]xf32> -> f32
   %tile_base = index.mul %group, %c1024 : index
   %score_base = index.mul %query, %rows : index
@@ -140,7 +140,7 @@ kernel.def target(@target) export("threshold_compact") @threshold_compact(%rows_
     scf.if %valid {
       %r = index.assume %row [range(%row, 0, 262143), lt(%row, %rows)] : index
       %at0 = index.add %score_base, %r : index
-      %at = index.assume %at0 [range(%at0, 0, 16777215), lt(%at0, %score_count)] : index
+      %at = index.assume %at0 [range(%at0, 0, 67108863), lt(%at0, %score_count)] : index
       %score = view.load %sv[%at] : view<[%score_count]xf32> -> f32
       %above = scalar.cmpf ogt, %score, %threshold : f32
       scf.if %above {
@@ -149,9 +149,9 @@ kernel.def target(@target) export("threshold_compact") @threshold_compact(%rows_
         // Past capacity the count still rises, which is how the merge knows.
         %fits = index.cmp ult, %slot0, %capacity : index
         scf.if %fits {
-          %slot = index.assume %slot0 [range(%slot0, 0, 65535), lt(%slot0, %capacity)] : index
+          %slot = index.assume %slot0 [range(%slot0, 0, 262143), lt(%slot0, %capacity)] : index
           %out0 = index.add %candidate_base, %slot : index
-          %out = index.assume %out0 [range(%out0, 0, 4194303), lt(%out0, %candidate_count)] : index
+          %out = index.assume %out0 [range(%out0, 0, 16777215), lt(%out0, %candidate_count)] : index
           %global = index.add %row_base, %r : index
           %id = index.cast %global : index to i32
           view.store %score, %cs[%out] : f32, view<[%candidate_count]xf32>
@@ -170,7 +170,7 @@ kernel.def target(@target) export("candidate_merge") @candidate_merge(%queries_a
   %one = index.constant 1 : index
   %threads = index.constant 256 : index
   %qraw = index.cast %queries_arg : i32 to index
-  %queries = index.assume %qraw [range(%qraw, 1, 64)] : index
+  %queries = index.assume %qraw [range(%qraw, 1, 256)] : index
   kernel.launch.config workgroups(%queries, %one, %one) workgroup_size(%threads, %one, %one) : index
 } launch(%queries_arg: i32, %k_arg: i32, %capacity_arg: i32, %overflow_rows_arg: i32, %counts: buffer, %candidate_scores: buffer, %candidate_ids: buffer, %running_scores: buffer, %running_ids: buffer, %overflow_scores: buffer, %overflow_ids: buffer) {
   %zero = index.constant 0 : offset
@@ -182,7 +182,7 @@ kernel.def target(@target) export("candidate_merge") @candidate_merge(%queries_a
   %c256 = index.constant 256 : index
   %c1024 = index.constant 1024 : index
   %qraw = index.cast %queries_arg : i32 to index
-  %queries = index.assume %qraw [range(%qraw, 1, 64)] : index
+  %queries = index.assume %qraw [range(%qraw, 1, 256)] : index
   %kraw = index.cast %k_arg : i32 to index
   %k = index.assume %kraw [range(%kraw, 1, 1024)] : index
   %craw = index.cast %capacity_arg : i32 to index
@@ -202,7 +202,7 @@ kernel.def target(@target) export("candidate_merge") @candidate_merge(%queries_a
   %tid0 = kernel.workitem.id<x> : index
   %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
   %query0 = kernel.workgroup.id<x> : index
-  %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %queries)] : index
+  %query = index.assume %query0 [range(%query0, 0, 255), lt(%query0, %queries)] : index
   %n32 = view.load %nv[%query] : view<[%queries]xi32> -> i32
   %n0 = index.cast %n32 : i32 to index
   %n = index.assume %n0 [range(%n0, 0, 262144)] : index
@@ -229,7 +229,7 @@ kernel.def target(@target) export("candidate_merge") @candidate_merge(%queries_a
       %valid = index.cmp ult, %local, %k : index
       %safe = scf.select %valid, %local, %i0 : index
       %at0 = index.add %running_base, %safe : index
-      %at = index.assume %at0 [range(%at0, 0, 65535), lt(%at0, %running_count)] : index
+      %at = index.assume %at0 [range(%at0, 0, 262143), lt(%at0, %running_count)] : index
       %s0 = view.load %rs[%at] : view<[%running_count]xf32> -> f32
       %i0v = view.load %ri[%at] : view<[%running_count]xi32> -> i32
       %s = scf.select %valid, %s0, %neg : f32
@@ -249,7 +249,7 @@ kernel.def target(@target) export("candidate_merge") @candidate_merge(%queries_a
           %safe = scf.select %valid, %source, %i0 : index
           %r = index.assume %safe [range(%safe, 0, 262143), lt(%safe, %rows)] : index
           %at0 = index.add %score_base, %r : index
-          %at = index.assume %at0 [range(%at0, 0, 16777215), lt(%at0, %score_count)] : index
+          %at = index.assume %at0 [range(%at0, 0, 67108863), lt(%at0, %score_count)] : index
           %s0 = view.load %sv[%at] : view<[%score_count]xf32> -> f32
           %id0 = view.load %iv[%at] : view<[%score_count]xi32> -> i32
           %s1 = scf.select %valid, %s0, %neg : f32
@@ -258,7 +258,7 @@ kernel.def target(@target) export("candidate_merge") @candidate_merge(%queries_a
         } else {
           %safe = scf.select %valid, %source, %i0 : index
           %at0 = index.add %candidate_base, %safe : index
-          %at = index.assume %at0 [range(%at0, 0, 4194303), lt(%at0, %candidate_count)] : index
+          %at = index.assume %at0 [range(%at0, 0, 16777215), lt(%at0, %candidate_count)] : index
           %s0 = view.load %cs[%at] : view<[%candidate_count]xf32> -> f32
           %i0v = view.load %ci[%at] : view<[%candidate_count]xi32> -> i32
           %s1 = scf.select %valid, %s0, %neg : f32
@@ -279,7 +279,7 @@ kernel.def target(@target) export("candidate_merge") @candidate_merge(%queries_a
       %valid = index.cmp ult, %local, %k : index
       scf.if %valid {
         %at0 = index.add %running_base, %local : index
-        %at = index.assume %at0 [range(%at0, 0, 65535), lt(%at0, %running_count)] : index
+        %at = index.assume %at0 [range(%at0, 0, 262143), lt(%at0, %running_count)] : index
         %local_at = index.assume %local [range(%local, 0, 1023)] : index
         %s = view.load %ss[%local_at] : view<2048xf32> -> f32
         %id = view.load %ii[%local_at] : view<2048xi32> -> i32
@@ -306,7 +306,7 @@ kernel.def target(@target) export("overflow_reduce") @overflow_reduce(%rows_arg:
   %raw = index.cast %rows_arg : i32 to index
   %rows = index.assume %raw [range(%raw, 1, 262144)] : index
   %qraw = index.cast %queries_arg : i32 to index
-  %queries = index.assume %qraw [range(%qraw, 1, 64)] : index
+  %queries = index.assume %qraw [range(%qraw, 1, 256)] : index
   %rounded = index.add %rows, %extra : index
   %groups = index.div %rounded, %tile : index
   kernel.launch.config workgroups(%groups, %queries, %one) workgroup_size(%threads, %one, %one) : index
@@ -322,11 +322,11 @@ kernel.def target(@target) export("overflow_reduce") @overflow_reduce(%rows_arg:
   %raw = index.cast %rows_arg : i32 to index
   %rows = index.assume %raw [range(%raw, 1, 262144)] : index
   %qraw = index.cast %queries_arg : i32 to index
-  %queries = index.assume %qraw [range(%qraw, 1, 64)] : index
+  %queries = index.assume %qraw [range(%qraw, 1, 256)] : index
   %kraw = index.cast %k_arg : i32 to index
   %k = index.assume %kraw [range(%kraw, 1, 1024)] : index
   %query0 = kernel.workgroup.id<y> : index
-  %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %queries)] : index
+  %query = index.assume %query0 [range(%query0, 0, 255), lt(%query0, %queries)] : index
   %nv = buffer.view %counts[%zero] : buffer -> view<[%queries]xi32>
   %n = view.load %nv[%query] : view<[%queries]xi32> -> i32
   %overflowed = scalar.cmpi ugt, %n, %capacity_arg : i32
@@ -379,7 +379,7 @@ kernel.def target(@target) export("overflow_reduce") @overflow_reduce(%rows_arg:
         %valid = index.cmp ult, %row, %rows : index
         %safe = scf.select %valid, %row, %i0 : index
         %at0 = index.add %input_base, %safe : index
-        %at = index.assume %at0 [range(%at0, 0, 16777215), lt(%at0, %input_count)] : index
+        %at = index.assume %at0 [range(%at0, 0, 67108863), lt(%at0, %input_count)] : index
         %value = view.load %sv[%at] : view<[%input_count]xf32> -> f32
         %id0 = scf.if %first -> (i32) {
           %global = index.add %row_base, %safe : index
@@ -407,7 +407,7 @@ kernel.def target(@target) export("overflow_reduce") @overflow_reduce(%rows_arg:
       %valid = index.cmp ult, %local, %k : index
       scf.if %valid {
         %at0 = index.add %outbase, %local : index
-        %at = index.assume %at0 [range(%at0, 0, 16777215), lt(%at0, %output_count)] : index
+        %at = index.assume %at0 [range(%at0, 0, 67108863), lt(%at0, %output_count)] : index
         %s = view.load %ss[%local] : view<2048xf32> -> f32
         %id = view.load %ii[%local] : view<2048xi32> -> i32
         view.store %s, %os[%at] : f32, view<[%output_count]xf32>

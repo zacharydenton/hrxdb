@@ -52,7 +52,7 @@ fn profile_matches_search_for_single_batch_large_k_and_exclusions() -> Result<()
     let device = Device::open(0)?;
     let mut db = Searcher::build(&device, 129, (0..2051).map(|i| row(i, 129)))?;
     for k in [10, 33, 1024] {
-        for batch in [1, 3, 8, 33, 60] {
+        for batch in [1, 3, 8, 33, 60, 65, 128, 129, 256] {
             for pass in 0..2 {
                 let queries: Vec<_> = (0..batch)
                     .flat_map(|q| row(9000 + pass * 71 + q, 129))
@@ -161,6 +161,8 @@ fn detailed_reports_identify_resources_waits_and_unchanged_code() -> Result<()> 
     let device = Device::open(0)?;
     let mut db = Searcher::build(&device, 129, (0..1033).map(|i| row(i, 129)))?;
     db.reserve_batch(3, 33)?;
+    db.reserve_batch(128, 33)?;
+    db.reserve_batch(256, 33)?;
     let detailed = db.detailed_compilation_reports()?;
     assert_eq!(detailed.len(), db.compilation_reports().len());
     for (ordinary, detailed) in db.compilation_reports().iter().zip(&detailed) {

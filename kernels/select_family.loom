@@ -3,7 +3,7 @@
 // invalidated together; equal scores always prefer the lower insertion ID.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
 config.decl @db.select.limit : %value: index where [range(%value, 1, 1073741824)]
-config.decl @db.batch : %value: index where [range(%value, 1, 64)]
+config.decl @db.batch : %value: index where [range(%value, 1, 256)]
 config.decl @db.select.first : %value: index where [range(%value, 0, 1)]
 template.decl @db.candidate_id(%first: index, %ids: buffer, %count: index, %at: index, %input_offset: offset, %row_base: index) -> (i32)
 template.def<@db.candidate_id> @db.row_id(%first: index, %ids: buffer, %count: index, %at: index, %input_offset: offset, %row_base: index) -> (i32) where [eq(%first, 1)] {
@@ -53,7 +53,7 @@ kernel.def target(@target) export("select") @select(%count_arg: i32) {
   %out_count = index.mul %groups, %k : index
   %query0 = kernel.workgroup.id<y> : index
   %batch_count = config.get @db.batch : index
-  %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %batch_count)] : index
+  %query = index.assume %query0 [range(%query0, 0, 255), lt(%query0, %batch_count)] : index
   %limit = config.get @db.select.limit : index
   %input_span = index.assume %count [range(%count, 1, 1073741824), le(%count, %limit)] : index
   %output_span = index.assume %out_count [range(%out_count, 1, 1073741824), le(%out_count, %limit)] : index

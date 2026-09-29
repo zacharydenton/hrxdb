@@ -3,7 +3,7 @@
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
 config.decl @query.dimensions : %v:index where [range(%v,1,16384)]
 config.decl @query.padded : %v:index where [range(%v,128,16384),mul(%v,128)]
-config.decl @query.width : %v:index where [range(%v,1,64)]
+config.decl @query.width : %v:index where [range(%v,1,256)]
 template.decl @query.scale(%bits:i32,%max_exp:i32)->(f32)
 template.def<@query.scale> @query.scale_impl(%bits:i32,%max_exp:i32)->(f32) {
  %zero=scalar.constant 0 : i32
@@ -53,7 +53,7 @@ kernel.def target(@target) export("prepare_queries") @prepare_queries(%batch_arg
  %one=index.constant 1 : index
  %threads=index.constant 128 : index
  %raw=index.cast %batch_arg : i32 to index
- %batch=index.assume %raw [range(%raw,1,64)] : index
+ %batch=index.assume %raw [range(%raw,1,256)] : index
  kernel.launch.config workgroups(%batch,%one,%one) workgroup_size(%threads,%one,%one) : index
 } launch(%batch_arg:i32,%stride_arg:i32,%input:buffer,%packed:buffer,%status:buffer) {
  %zero=index.constant 0 : offset
@@ -63,11 +63,11 @@ kernel.def target(@target) export("prepare_queries") @prepare_queries(%batch_arg
  %p=config.get @query.padded : index
  %w=config.get @query.width : index
  %b0=index.cast %batch_arg : i32 to index
- %b=index.assume %b0 [range(%b0,1,64),le(%b0,%w)] : index
+ %b=index.assume %b0 [range(%b0,1,256),le(%b0,%w)] : index
  %s0=index.cast %stride_arg : i32 to index
  %s=index.assume %s0 [range(%s0,1,16384),ge(%s0,%d)] : index
  %q0=kernel.workgroup.id<x> : index
- %q=index.assume %q0 [range(%q0,0,63),lt(%q0,%b),lt(%q0,%w)] : index
+ %q=index.assume %q0 [range(%q0,0,255),lt(%q0,%b),lt(%q0,%w)] : index
  %tid=kernel.workitem.id<x> : index
  %iv=buffer.view %input[%zero] : buffer -> view<[%b]x[%s]xf32>
  %ov=buffer.view %packed[%zero] : buffer -> view<[%p]x[%w]xf32>

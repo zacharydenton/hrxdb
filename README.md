@@ -23,7 +23,7 @@ unified memory does not make every operation zero-copy or remove bandwidth limit
 
 - **Exact cosine search:** exhaustive FP16 corpus scans, FP32 scores, deterministic
   ties, exclusions, and top-k up to 1,024.
-- **Shared-read batches:** up to 64 queries per batch with bounded score tiles
+- **Shared-read batches:** up to 256 queries per batch with bounded score tiles
   and running GPU top-k.
 - **Composable storage:** cheap-clone `Corpus` handles, independent `Searcher`
   workspaces, read-only shard bindings, and device-resident row gathering.
