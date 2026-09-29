@@ -132,8 +132,9 @@ independently of the worker. Independent streams do not guarantee concurrent
 execution, more memory bandwidth, priority, or latency isolation.
 
 The FP32 constructor normalizes each row, rounds it to FP16, and stores an FP32
-inverse norm for the rounded row. Queries are normalized to FP32. Scores are
-FP32 dot products corrected by that stored inverse norm. Search is exhaustive
+inverse norm for the rounded row. Queries are normalized to FP32; multi-query
+batches additionally round them to FP16 for matrix operations. Scores use FP32
+accumulation corrected by that stored inverse norm. Search is exhaustive
 over this **quantized representation**; FP16 rounding and FP32 arithmetic can
 change rankings relative to the original vectors. Scores are not clamped.
 For `build_fp16`, the quantized representation is the supplied values; preserving
@@ -283,29 +284,32 @@ valid query. A one-query batch uses the single-query scan.
 `search_batch_into` and `search_batch_excluding_into` accept a reusable
 `Vec<Vec<Neighbor>>`, retaining capacities of rows that survive a batch resize.
 
-The [matrix kernel](../kernels/batch_scan.loom) loads a tile of 64 corpus rows into workgroup memory and
-reuses it across the queries. Corpus values stay FP16 in workgroup memory and
-expand to FP32 in registers; normalized queries and accumulation stay FP32.
-Groups of eight ordered products let the compiler reuse accumulators and pair
-multiply-add instructions. Cooperative staging loops have unrolled trip counts.
-The increasing-component accumulation order differs from the single-query scan,
-so very close scores can change rank.
+The [matrix kernel](../kernels/batch_scan.loom) stages 64 corpus rows and up to
+64 queries in workgroup memory, then uses 16×16×16 FP16 matrix operations with
+FP32 accumulation. Normalized queries round to FP16 during staging. Batch
+scores differ from the FP32 single-query scan by at most 2^-11 for normalized
+rows; near-ties can change rank. All-subnormal FP16 corpus rows score at 2^-14
+relative precision.
 Equal computed scores still prefer the lower insertion ID.
 
 Scores are materialized for at most 262,144 corpus rows at a time. GPU selection
-keeps each query's tile top-k, then merges it with that query's running top-k.
+initializes each query's running top-k from the first tile. Later tiles compact
+only scores strictly above the running k-th score into at most 4,096 candidates
+per query, then merge them into the running list. Equal scores from later IDs
+cannot improve that list. If a query exceeds capacity, a parallel reduction
+tree keeps k per 4,096-row block until at most 4,096 entries remain for merging.
+Queries within capacity skip these reduction passes on the device.
 The scan pads query widths to 8, 16, 32 or 64 for corpus reuse; selection and
 running merges process only the real queries, including for small k.
-The running merge reads the two lists directly and alternates output buffers;
-it does not concatenate them through staging copies. Host batches use four
+The running merge updates its list in place. Host batches use four
 copies in total: two to initialize the running lists and two for final readback.
 The full corpus × batch score matrix is never allocated, and only final results
 are read back (2,400 bytes for sixty top-5 queries).
 
 Batch workspace grows to accommodate the largest reserved query width and k,
 and is reused. Widths round up to 8, 16, 32, or 64, with compiled kernels cached
-per width. At width 64 the workspace uses approximately **66 MiB for k=5** or
-**322 MiB for k=1,024**, plus query storage (96 KiB at dimension 384). Smaller
+per width. At width 64 the workspace uses approximately **68 MiB for k=5** or
+**324 MiB for k=1,024**, plus query storage (96 KiB at dimension 384). Smaller
 corpora need less. This storage is additional to the index and single-query
 scratch; `batch_workspace_bytes()` reports the reserved buffer bytes. First use
 can allocate and compile, so use `reserve_batch(query_count, k)` during setup
@@ -320,9 +324,10 @@ graph, including snapshot changes that keep the same dimensions and capacity.
 records its graph. Device-query submissions remain directly queued on the
 worker's stream.
 
-On 6,909,092 × 384 generated rows, sixty top-5 queries took **80.7 ms** with
-the optimized batch scan versus **114.7 ms** with its predecessor (1.42×),
-with identical returned IDs and scores. Workspace remains 66.11 MiB. See the
+Before the matrix-core rewrite, on 6,909,092 × 384 generated rows, sixty top-5
+queries took **80.7 ms** with the optimized batch scan versus **114.7 ms** with
+its predecessor (1.42×), with identical returned IDs and scores and 66.11 MiB
+of workspace. See the
 [interleaved comparison and samples](https://github.com/zacharydenton/hrxdb/blob/main/results/README.md#batch-scan-optimization);
 the earlier batch-versus-individual measurement is retained separately.
 

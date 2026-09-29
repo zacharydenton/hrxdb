@@ -3,6 +3,11 @@ use super::*;
 
 const TILE_ROWS: usize = 262_144;
 
+/// Candidates each query keeps for a tile after the first. After the first tile
+/// a query expects about k survivors a tile, so this is overflowed only when
+/// its bound is weak.
+const PRUNED: usize = 4_096;
+
 fn selection_plan_width(queries: usize, k: usize) -> usize {
     // Small-k kernels are shared by all query counts within a scan width.
     // Dispatch only the real query prefix of this compiled grid.
@@ -22,7 +27,10 @@ pub(crate) struct BatchScratch {
     scores: Buffer,
     candidates: [(Buffer, Buffer); 2],
     pub(crate) running: (Buffer, Buffer),
-    merge_scratch: (Buffer, Buffer),
+    // Scores above each query's running k-th, at most PRUNED per query.
+    // Overflow uses the existing selection scratch for parallel reduction.
+    pruned: (Buffer, Buffer),
+    pruned_counts: Buffer,
     plans: Vec<BatchPlan>,
     // Only the most recent exact query count, effective k, and mask mode.
     search_graph: Option<(usize, usize, bool, hrx::GraphExec)>,
@@ -30,15 +38,15 @@ pub(crate) struct BatchScratch {
     immediate: bool,
     #[cfg(test)]
     padded_selection: bool,
-    #[cfg(test)]
-    staged_merge: Option<bench::StagedMerge>,
 }
 
 struct BatchPlan {
     width: usize,
     scan: Kernel,
     selections: std::collections::HashMap<usize, crate::selection::SelectionPlan>,
-    running_merge: Kernel,
+    compact: Kernel,
+    overflow_reduce: Kernel,
+    candidate_merge: Kernel,
 }
 
 impl BatchScratch {
@@ -60,15 +68,14 @@ impl BatchScratch {
             scores: stream.allocate(width * tile_rows * 4)?,
             candidates: [pair(scratch)?, pair(scratch)?],
             running: pair(width * k * 4)?,
-            merge_scratch: pair(width * k * 4)?,
+            pruned: pair(width * PRUNED * 4)?,
+            pruned_counts: stream.allocate_zeroed(MAX_BATCH * 4)?,
             plans: Vec::new(),
             search_graph: None,
             #[cfg(test)]
             immediate: false,
             #[cfg(test)]
             padded_selection: false,
-            #[cfg(test)]
-            staged_merge: None,
         })
     }
 
@@ -124,15 +131,11 @@ impl Searcher {
             s.query.buffer().binding().len()
                 + s.readback.buffer().binding().len()
                 + s.scores.binding().len()
-                + [
-                    &s.candidates[0],
-                    &s.candidates[1],
-                    &s.running,
-                    &s.merge_scratch,
-                ]
-                .iter()
-                .map(|(a, b)| a.binding().len() + b.binding().len())
-                .sum::<usize>()
+                + s.pruned_counts.binding().len()
+                + [&s.candidates[0], &s.candidates[1], &s.running, &s.pruned]
+                    .iter()
+                    .map(|(a, b)| a.binding().len() + b.binding().len())
+                    .sum::<usize>()
         })
     }
 
@@ -143,7 +146,7 @@ impl Searcher {
     /// to 8, 16, 32, or 64; selection omits padded query rows for every k.
     /// Both are cached and workspace is retained.
     /// Score storage covers at most 262,144 corpus rows, independent of index size.
-    /// At width 64 this uses about 66 MiB for k=5 or 322 MiB for k=1,024, plus
+    /// At width 64 this uses about 68 MiB for k=5 or 324 MiB for k=1,024, plus
     /// query storage (96 KiB at 384 dimensions). A one-query batch uses `search`.
     ///
     /// # Errors
@@ -228,7 +231,16 @@ impl Searcher {
         let mut scan_spec = kernels::named_spec("batch_scan");
         scan_spec.set_config("db.scan.dimensions", self.padded.to_string());
         let scan = build(kernels::BATCH_SCAN, scan_spec, width)?;
-        let running_merge = build(kernels::BATCH_MERGE, kernels::named_spec("batch_merge"), 1)?;
+        let mut pruned = |symbol: &str| {
+            let mut spec = hrx::loom::Specialization::new(symbol);
+            spec.set_report(hrx::loom::ReportMode::Summary);
+            let (kernel, report) = compile(&self.compiler, &self.stream, kernels::THRESHOLD, spec)?;
+            reports.push(report);
+            Ok::<_, Error>(kernel)
+        };
+        let compact = pruned("threshold_compact")?;
+        let overflow_reduce = pruned("overflow_reduce")?;
+        let candidate_merge = pruned("candidate_merge")?;
         let (selection, selection_reports) = crate::selection::SelectionPlan::new(
             &self.compiler,
             &self.stream,
@@ -240,7 +252,9 @@ impl Searcher {
             width,
             scan,
             selections: std::collections::HashMap::from([(query_count, selection)]),
-            running_merge,
+            compact,
+            overflow_reduce,
+            candidate_merge,
         });
         self.reports.extend(reports);
         Ok(())
@@ -250,11 +264,13 @@ impl Searcher {
     ///
     /// `queries` contains `batch_size * self.dimensions()` components. Results
     /// retain query order and use the same score/ID ordering as [`Self::search`].
-    /// A tiled FP16 × FP32 matrix kernel reuses each corpus tile across the batch;
-    /// device selection maintains one running top-k per query. No full corpus ×
-    /// batch score matrix or host-side selection is used. Queries are normalized
-    /// to FP32 without additional quantization. Accumulation order differs from
-    /// `search`, so rounding can change rankings of near-ties.
+    /// A tiled FP16 WMMA kernel reuses each corpus tile across the batch on the
+    /// matrix cores; device selection maintains one running top-k per query, and
+    /// after the first tile sorts only the rows that beat each query's running
+    /// k-th score. No full corpus × batch score matrix or host-side selection is
+    /// used. Queries are normalized in FP32, then narrowed to FP16 for the scan,
+    /// with FP32 accumulation: each cosine is within 2^-11 of the FP32 scan's
+    /// that [`Self::search`] uses, so rankings of near-ties can differ from it.
     ///
     /// An empty batch returns an empty vector. First use of a query width may
     /// allocate and compile; [`Self::reserve_batch`] can prepare it in advance.
@@ -555,23 +571,11 @@ impl BatchScratch {
             queries
         };
         let plan = self.plans.iter().find(|p| p.width == width).unwrap();
-        let tiles: usize = corpus
-            .inner
-            .shards
-            .iter()
-            .map(|shard| shard.count.div_ceil(self.tile_rows))
-            .sum();
-        // Alternate destinations so no merge reads and writes the same list.
-        // Choose the first destination so the final tile always lands in running,
-        // including when shard boundaries add extra short tiles.
-        let start_in_scratch = tiles.is_multiple_of(2);
-        #[cfg(test)]
-        let start_in_scratch = start_in_scratch && self.staged_merge.is_none();
-        let (mut running, mut spare) = if start_in_scratch {
-            (&self.merge_scratch, &self.running)
-        } else {
-            (&self.running, &self.merge_scratch)
-        };
+
+        // The first tile is selected in full into the running lists. Every
+        // later tile keeps only scores above its query's running k-th and
+        // merges those in place: see `kernels/threshold_select.loom`.
+        let bytes = queries * k * 4;
         let mut started = false;
         for shard in &corpus.inner.shards {
             for local in (0..shard.count).step_by(self.tile_rows) {
@@ -590,7 +594,7 @@ impl BatchScratch {
                     commands.dispatch(
                         &plan.scan,
                         [rows.div_ceil(64) as u32, 1, 1],
-                        [(width * 4) as u32, 1, 1],
+                        plan.scan.info().workgroup_size,
                         &constants,
                         &[
                             shard.vectors(corpus.padded_dimensions(), local, rows)?,
@@ -601,48 +605,109 @@ impl BatchScratch {
                         ],
                     )?;
                 }
-                let output = select_tile(commands, self, plan, rows, start, k, queries)?;
-                let bytes = queries * k * 4;
                 if !started {
+                    let output = select_tile(commands, self, plan, rows, start, k, queries)?;
                     commands.copy(
-                        running.0.try_slice(0, bytes)?,
+                        self.running.0.try_slice(0, bytes)?,
                         self.candidates[output].0.try_slice(0, bytes)?,
                     )?;
                     commands.copy(
-                        running.1.try_slice(0, bytes)?,
+                        self.running.1.try_slice(0, bytes)?,
                         self.candidates[output].1.try_slice(0, bytes)?,
                     )?;
                     started = true;
-                } else {
-                    #[cfg(test)]
-                    if let Some(staged) = &self.staged_merge {
-                        staged.record(commands, running, &self.candidates[output], queries, k)?;
-                        continue;
-                    }
-                    let mut constants = Constants::new();
-                    constants.push(queries as u32)?;
-                    constants.push(k as u32)?;
-                    constants.push(k.ilog2() + 1)?;
-                    // SAFETY: both inputs contain queries*k sorted entries.
-                    // The output is the other running pair, never either input.
-                    // k is in 1..=1024; its bit length bounds binary search.
+                    continue;
+                }
+                let mut compact = Constants::new();
+                compact.push(rows as u32)?;
+                compact.push(queries as u32)?;
+                compact.push(k as u32)?;
+                compact.push(start as u32)?;
+                compact.push(PRUNED as u32)?;
+                // SAFETY: scores hold queries*rows entries, the pruned buffers
+                // queries*PRUNED entries, and running holds queries*k entries.
+                // The previous tile's merge reset all counts before this one.
+                unsafe {
+                    commands.dispatch(
+                        &plan.compact,
+                        [rows.div_ceil(1024) as u32, queries as u32, 1],
+                        [256, 1, 1],
+                        &compact,
+                        &[
+                            self.scores.binding(),
+                            self.running.0.binding(),
+                            self.pruned_counts.binding(),
+                            self.pruned.0.binding(),
+                            self.pruned.1.binding(),
+                        ],
+                    )?;
+                }
+                // Overflowed queries reduce disjoint 4,096-row blocks in
+                // parallel. Each pass keeps k per block, so the final merge
+                // sees at most PRUNED entries instead of serializing a tile.
+                // Other queries skip these kernels before reading score data.
+                let mut remaining = rows;
+                let mut overflow = (&self.scores, &self.scores);
+                let mut output = 0;
+                let mut first = true;
+                while remaining > PRUNED {
+                    let groups = remaining.div_ceil(PRUNED);
+                    let mut reduce = Constants::new();
+                    reduce.push(remaining as u32)?;
+                    reduce.push(queries as u32)?;
+                    reduce.push(k as u32)?;
+                    reduce.push(u32::from(first))?;
+                    reduce.push(start as u32)?;
+                    reduce.push(PRUNED as u32)?;
+                    let dest = &self.candidates[output];
+                    // SAFETY: disjoint inputs/outputs, queries*remaining inputs,
+                    // queries*groups*k output capacity. The first pass assigns
+                    // IDs; later passes read the preceding pass's score/ID pair.
                     unsafe {
                         commands.dispatch(
-                            &plan.running_merge,
-                            [queries as u32, 1, 1],
+                            &plan.overflow_reduce,
+                            [groups as u32, queries as u32, 1],
                             [256, 1, 1],
-                            &constants,
+                            &reduce,
                             &[
-                                running.0.binding(),
-                                running.1.binding(),
-                                self.candidates[output].0.binding(),
-                                self.candidates[output].1.binding(),
-                                spare.0.binding(),
-                                spare.1.binding(),
+                                self.pruned_counts.binding(),
+                                overflow.0.binding(),
+                                overflow.1.binding(),
+                                dest.0.binding(),
+                                dest.1.binding(),
                             ],
                         )?;
                     }
-                    std::mem::swap(&mut running, &mut spare);
+                    overflow = (&dest.0, &dest.1);
+                    output = 1 - output;
+                    remaining = groups * k;
+                    first = false;
+                }
+                let mut merge = Constants::new();
+                merge.push(queries as u32)?;
+                merge.push(k as u32)?;
+                merge.push(PRUNED as u32)?;
+                merge.push(remaining as u32)?;
+                // SAFETY: overflow is read only when the counter exceeds
+                // PRUNED, which implies rows > PRUNED and at least one reduction
+                // pass. That pass produced queries*remaining sorted candidates.
+                // Counts are reset only after all reduction passes consume them.
+                unsafe {
+                    commands.dispatch(
+                        &plan.candidate_merge,
+                        [queries as u32, 1, 1],
+                        [256, 1, 1],
+                        &merge,
+                        &[
+                            self.pruned_counts.binding(),
+                            self.pruned.0.binding(),
+                            self.pruned.1.binding(),
+                            self.running.0.binding(),
+                            self.running.1.binding(),
+                            overflow.0.binding(),
+                            overflow.1.binding(),
+                        ],
+                    )?;
                 }
             }
         }
@@ -817,7 +882,9 @@ mod tests {
                         let expected = x
                             .iter()
                             .zip(query)
-                            .map(|(&x, &y)| x as f64 * ((y as f64 / qnorm) as f32) as f64)
+                            .map(|(&x, &y)| {
+                                x as f64 * f16::from_f32((y as f64 / qnorm) as f32).to_f64()
+                            })
                             .sum::<f64>()
                             * inv as f64;
                         let at = (q * tail + r) * 4;
@@ -992,13 +1059,19 @@ mod tests {
                         let expected: f64 = row
                             .iter()
                             .zip(query)
-                            .map(|(&x, &y)| x as f64 * ((y as f64 / length) as f32) as f64)
+                            .map(|(&x, &y)| {
+                                x as f64 * f16::from_f32((y as f64 / length) as f32).to_f64()
+                            })
                             .sum::<f64>()
                             * inverse as f64;
                         let at = (q * rows.len() + r) * 4;
                         let actual = f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+                        // The matrix cores carry an all-subnormal row (row 0,
+                        // every component 2^-24) at 2^-14 relative precision;
+                        // every normal row matches the FP16-query reference.
+                        let bound = if r == 0 { 2f64.powi(-14) * 1.001 } else { 3e-6 };
                         assert!(
-                            (actual as f64 - expected).abs() < 3e-6,
+                            (actual as f64 - expected).abs() <= bound * expected.abs().max(1.0),
                             "d={d} batch={batch} q={q} r={r}: {actual} vs {expected}"
                         );
                     }
@@ -1014,5 +1087,5 @@ mod tests {
 mod bench;
 
 #[cfg(test)]
-#[path = "batch_merge_tests.rs"]
-mod merge_tests;
+#[path = "batch_threshold_tests.rs"]
+mod threshold_tests;

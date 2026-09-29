@@ -170,10 +170,21 @@ particular, unrolling raises static staging-load counts without increasing
 runtime corpus traffic. Instrumented replays localize the gain to `batch_scan`;
 selection costs remain similar except when interrupted by the concurrent job.
 
-The comparison harness accepts `BASELINE_SOURCE` and `CANDIDATE_SOURCE`, checks
-IDs and score bits, and retains detailed reports from the actual loaded kernels
-plus three separate interleaved profiled replays. Its default baseline is the
-preserved per-column kernel from `abfcd5c`. All runs used another active GPU job;
+The comparison harness accepts `BASELINE_SOURCE` and `CANDIDATE_SOURCE` and
+dispatches each scan with its compiled workgroup size. It checks each returned
+score against an FP64 CPU reference using that arm's query precision, along
+with finite scores, unique IDs and result ordering. Same-precision arms must
+match IDs and score bits exactly. FP32 versus FP16 query arms allow rank scores
+and every final-tile score to differ by at most 2^-11; near-tie IDs can differ.
+Validation runs after the ordinary timing window.
+
+The detailed scan report's WMMA count selects the reference precision by
+default. Custom sources can override it with `BASELINE_QUERY_PRECISION=fp32`
+or `fp16`, and `CANDIDATE_QUERY_PRECISION` likewise. JSON records both precisions,
+workgroup sizes, actual parity flags, difference counts and maximum errors.
+The harness retains detailed reports from the actual loaded kernels plus three
+separate interleaved profiled replays. Its default baseline is the preserved
+per-column kernel from `abfcd5c`. All recorded tuning runs used another active GPU job;
 the records support improvements under that load, not isolated latency claims.
 
 Research in HRX-system at `244cd3801b` also covered affine-address fusion,
@@ -219,6 +230,18 @@ The comparison harness accepts `CACHED_GRAPHS=1` to measure cached submission
 in both arms and `PADDED_SELECTION_BASELINE=1` to retain the former selection
 grid in the baseline. Detailed resource reports, generated-code checks, ordinary
 samples and separate instrumented stage intervals are retained in the record.
+
+The WMMA/threshold follow-up replaces later-tile selection with
+`threshold_compact`, guarded `overflow_reduce` passes, and `candidate_merge`.
+An overflow retains k entries per 4,096-row block in parallel, reducing again
+until the final merge sees at most 4,096 candidates. Non-overflowing queries
+return from the reduction before reading scores. These guarded dispatches
+still appear in profiles; their presence alone does not imply overflow.
+The [fix qualification](../results/hrx-0.8.11-threshold-fixes.json) records
+56 passing GPU tests, precision-aware scan comparisons at all four widths,
+and the new kernels' detailed resource, instruction, spill and wait counts.
+`overflow_reduce` uses 20 VGPRs and 16 KiB LDS with zero spills or private bytes.
+Its reported 100% occupancy is a compiler model, not measured utilization.
 
 Upstream references:
 

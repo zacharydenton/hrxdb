@@ -1,5 +1,24 @@
 # Measured results
 
+## WMMA comparison and threshold overflow fixes
+
+The [2026-09-29 qualification](hrx-0.8.11-threshold-fixes.json) covers the
+comparison harness fixes and parallel threshold overflow reduction on HRX
+0.8.11. All four scan widths pass with the actual compiled workgroup sizes;
+FP32/FP16 query comparisons use separate CPU references and record near-tie
+ranking differences. Same-precision controls retain exact ID/score parity.
+All 56 GPU tests pass, including capacity boundaries, masks, counter resets,
+varied overflow scores, and three reduction levels at k=1,024.
+
+For a synthetic 524,288-row, three-dimensional, two-query top-5 search whose
+second tile entirely exceeds the threshold, the old serial fallback took
+7.77–8.05 ms. Two later runs with the parallel fallback took 1.24–1.25 ms and
+2.43–2.86 ms. These runs were sequential under changing external GPU load,
+so they diagnose the bottleneck without establishing an isolated speedup.
+The record retains both runs, the empty-candidate control, separate stage
+timestamps, and compiler resource/instruction/spill counts. The new reduction
+uses 20 VGPRs, 16 KiB LDS, and zero spills, reusing existing selection buffers.
+
 ## Batch score stores and real-query selection
 
 Local gfx1151, 2026-09-28, HRX 0.8.11, bundle

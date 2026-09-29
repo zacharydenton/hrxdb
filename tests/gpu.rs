@@ -42,12 +42,25 @@ fn batch_matches_individual_queries() -> hrxdb::Result<()> {
                 let expected = db.search(query, k)?;
                 let scores = db.scores(query)?;
                 let mut ids = std::collections::HashSet::new();
-                for (got, want) in matches.iter().zip(&expected) {
+                if count == 1 {
+                    assert_eq!(*matches, expected);
+                }
+                // A batch scans with FP16 queries on the matrix cores: a unit
+                // query component rounds to within 2^-11, so each cosine moves
+                // by at most 2^-11 from the FP32 scan's, and near-ties may swap.
+                // Every returned row is then within twice that of the k-th best.
+                let bound = 2f32.powi(-11);
+                let kth = expected.last().map_or(f32::NEG_INFINITY, |n| n.similarity);
+                for got in matches {
+                    let exact = scores[got.id as usize];
                     assert!(
-                        (got.similarity - want.similarity).abs() < 3e-6,
-                        "batch={count} k={k} got={got:?} want={want:?}"
+                        (got.similarity - exact).abs() <= bound,
+                        "batch={count} k={k} got={got:?} exact={exact}"
                     );
-                    assert!((got.similarity - scores[got.id as usize]).abs() < 3e-6);
+                    assert!(
+                        exact >= kth - 2.0 * bound,
+                        "batch={count} k={k} got={got:?}"
+                    );
                     assert!(ids.insert(got.id));
                 }
                 assert!(matches.windows(2).all(|w| w[0].similarity > w[1].similarity

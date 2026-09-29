@@ -2,6 +2,25 @@
 
 ## Unreleased — cached native GPU memory, prepared search, live snapshots
 
+- Run the batch scan on the matrix cores: 16x16x16 FP16 WMMA with FP32
+  accumulation, eight waves tiling 64 rows by 64 query slots. Queries are
+  narrowed to FP16 as they are staged, so a batch cosine is within 2^-11 of the
+  FP32 single-query scan's and near-ties can rank differently; an all-subnormal
+  FP16 row scores at 2^-14 relative precision. At 2M × 768 with 64 queries the
+  scan falls from about 26 ms to 19 ms.
+- Prune batch selection after the first tile. `threshold_compact` keeps only
+  scores above each query's running k-th -- exact, since later rows lose ties --
+  and `candidate_merge` merges those into the running list in place. A query
+  overflowing its 4,096 candidates uses a parallel reduction tree over its
+  score row, leaving at most 4,096 entries for the final merge. The reduction
+  reuses selection scratch; queries within capacity skip it on the device.
+  This replaces per-tile sorting and the running `batch_merge`: at 2M × 768
+  with 64 queries a search falls from 52 ms to 25 ms at k=50 and from 40 ms to
+  23 ms at k=32, interleaved on a shared GPU.
+- Dispatch comparison scans with each compiled kernel's declared workgroup
+  size. Validate FP32/FP16 query arms against their respective CPU references,
+  retaining exact parity checks for arms with the same precision and reporting
+  measured score and ranking differences.
 - Write four adjacent batch scores per store at compiled widths 16–64, retaining
   scalar stores for partial row groups and width 8. Preserve score bits and
   accumulation order. Dispatch selection and running merges only for real

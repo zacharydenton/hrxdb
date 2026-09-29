@@ -3,51 +3,6 @@
 use super::*;
 use std::time::Instant;
 
-/// Preserved staging path for interleaved comparisons and correctness oracles.
-pub(super) struct StagedMerge {
-    kernel: Kernel,
-    joined: (Buffer, Buffer),
-}
-
-impl StagedMerge {
-    pub(super) fn record<'a>(
-        &'a self,
-        commands: &mut Commands<'a>,
-        running: &'a (Buffer, Buffer),
-        tile: &'a (Buffer, Buffer),
-        queries: usize,
-        k: usize,
-    ) -> Result<()> {
-        let bytes = queries * k * 4;
-        for (joined, running, tile) in [
-            (&self.joined.0, &running.0, &tile.0),
-            (&self.joined.1, &running.1, &tile.1),
-        ] {
-            commands.copy(joined.try_slice(0, bytes)?, running.try_slice(0, bytes)?)?;
-            commands.copy(joined.try_slice(bytes, bytes)?, tile.try_slice(0, bytes)?)?;
-        }
-        let mut constants = Constants::new();
-        constants.push((queries * 2) as u32)?;
-        constants.push(k as u32)?;
-        // SAFETY: joined holds both queries*k inputs, and running is separate.
-        unsafe {
-            commands.dispatch(
-                &self.kernel,
-                [queries as u32, 1, 1],
-                [256, 1, 1],
-                &constants,
-                &[
-                    self.joined.0.binding(),
-                    self.joined.1.binding(),
-                    running.0.binding(),
-                    running.1.binding(),
-                ],
-            )?;
-        }
-        Ok(())
-    }
-}
-
 fn var(name: &str, default: usize) -> usize {
     std::env::var(name).map_or(default, |v| v.parse().expect("integer benchmark option"))
 }
@@ -68,6 +23,169 @@ fn median(values: &[f64]) -> f64 {
     let mut sorted = values.to_vec();
     sorted.sort_by(f64::total_cmp);
     (sorted[(sorted.len() - 1) / 2] + sorted[sorted.len() / 2]) * 0.5
+}
+
+// Precision is inferred from the actual compiled scan, with explicit overrides
+// for custom sources. Selection-only comparisons keep the production scan.
+fn fp16_queries(option: &str, report: &Compilation, selection: bool) -> Result<bool> {
+    match std::env::var(option) {
+        Ok(value) => match value.as_str() {
+            "fp16" => Ok(true),
+            "fp32" => Ok(false),
+            _ => Err(invalid("query precision must be fp16 or fp32")),
+        },
+        Err(std::env::VarError::NotPresent) if selection => Ok(true),
+        Err(std::env::VarError::NotPresent) => report
+            .report
+            .as_ref()
+            .and_then(|r| r.pointer("/static_instruction_mix/wmma_count"))
+            .and_then(serde_json::Value::as_u64)
+            .map(|count| count != 0)
+            .ok_or_else(|| {
+                invalid("missing scan instruction report; set query precision explicitly")
+            }),
+        Err(_) => Err(invalid("invalid query precision option")),
+    }
+}
+
+fn unit_query(query: &[f32], half: bool) -> Vec<f64> {
+    let length = norm(query, query.len()).unwrap();
+    query
+        .iter()
+        .map(|&v| {
+            let unit = (v as f64 / length) as f32;
+            if half {
+                f16::from_f32(unit).to_f64()
+            } else {
+                unit as f64
+            }
+        })
+        .collect()
+}
+
+fn reference_score(id: u32, query: &[f64]) -> f64 {
+    let source = row(id, query.len());
+    let length = norm(&source, source.len()).unwrap();
+    let stored: Vec<_> = source
+        .iter()
+        .map(|&v| f16::from_f64(v as f64 / length).to_f64())
+        .collect();
+    let inverse = (1.0 / stored.iter().map(|v| v * v).sum::<f64>().sqrt()) as f32;
+    stored.iter().zip(query).map(|(x, y)| x * y).sum::<f64>() * inverse as f64
+}
+
+#[derive(Default)]
+struct ComparisonChecks {
+    neighbors: usize,
+    rank_differences: usize,
+    score_bit_differences: usize,
+    max_rank_score_difference: f64,
+    max_reference_error: [f64; 2],
+}
+
+impl ComparisonChecks {
+    fn check(
+        &mut self,
+        rows: usize,
+        dim: usize,
+        k: usize,
+        query: &[f32],
+        output: &[Vec<Vec<Neighbor>>; 2],
+        half: [bool; 2],
+    ) {
+        let batch = query.len() / dim;
+        for arm in 0..2 {
+            assert_eq!(output[arm].len(), batch);
+            for (q, result) in output[arm].iter().enumerate() {
+                assert_eq!(result.len(), k.min(rows));
+                let unit = unit_query(&query[q * dim..(q + 1) * dim], half[arm]);
+                let mut ids = std::collections::HashSet::new();
+                for got in result {
+                    assert!(
+                        (got.id as usize) < rows && ids.insert(got.id),
+                        "invalid or duplicate ID"
+                    );
+                    assert!(got.similarity.is_finite());
+                    let error = (got.similarity as f64 - reference_score(got.id, &unit)).abs();
+                    self.max_reference_error[arm] = self.max_reference_error[arm].max(error);
+                    assert!(
+                        error <= 3e-6,
+                        "arm {arm}: score disagrees with CPU reference by {error}"
+                    );
+                }
+                assert!(
+                    result.windows(2).all(|w| w[0].similarity > w[1].similarity
+                        || (w[0].similarity == w[1].similarity && w[0].id < w[1].id)),
+                    "unsorted results"
+                );
+            }
+        }
+        for (a, b) in output[0].iter().flatten().zip(output[1].iter().flatten()) {
+            let error = (a.similarity as f64 - b.similarity as f64).abs();
+            self.max_rank_score_difference = self.max_rank_score_difference.max(error);
+            self.rank_differences += usize::from(a.id != b.id);
+            self.score_bit_differences +=
+                usize::from(a.similarity.to_bits() != b.similarity.to_bits());
+            if half[0] == half[1] {
+                assert_eq!(a.id, b.id, "ranking mismatch");
+                assert_eq!(
+                    a.similarity.to_bits(),
+                    b.similarity.to_bits(),
+                    "score mismatch"
+                );
+            } else {
+                // Sorting cannot increase a uniform per-row score perturbation.
+                // IDs may swap only within this score envelope. Each returned
+                // ID's own score was independently checked above.
+                assert!(
+                    error <= 2f64.powi(-11),
+                    "rank score difference exceeds FP16-query bound: {error}"
+                );
+            }
+            self.neighbors += 1;
+        }
+    }
+}
+
+#[test]
+fn comparison_checks_validate_each_precision_and_reject_matching_corruption() {
+    let query = row(888, 129);
+    let outputs = [false, true].map(|half| {
+        let unit = unit_query(&query, half);
+        let mut neighbors: Vec<_> = (0..4)
+            .map(|id| Neighbor {
+                id,
+                similarity: reference_score(id, &unit) as f32,
+            })
+            .collect();
+        neighbors.sort_by(|a, b| b.similarity.total_cmp(&a.similarity).then(a.id.cmp(&b.id)));
+        vec![neighbors]
+    });
+    ComparisonChecks::default().check(4, 129, 4, &query, &outputs, [false, true]);
+
+    // Equal arms alone cannot establish correctness: reject the same wrong
+    // score or duplicate ID in both, even though parity would pass.
+    for duplicate in [false, true] {
+        let mut bad = outputs[0].clone();
+        if duplicate {
+            bad[0][1] = bad[0][0];
+        } else {
+            bad[0][0].similarity += 0.01;
+        }
+        assert!(
+            std::panic::catch_unwind(|| {
+                ComparisonChecks::default().check(
+                    4,
+                    129,
+                    4,
+                    &query,
+                    &[bad.clone(), bad],
+                    [false, false],
+                );
+            })
+            .is_err()
+        );
+    }
 }
 
 #[test]
@@ -94,26 +212,18 @@ fn compare_batch_optimized() -> Result<()> {
     compare_batch_kernels(Comparison::Combined)
 }
 
-#[test]
-#[ignore = "requires gfx1151; run alone to measure performance"]
-fn compare_batch_merge() -> Result<()> {
-    compare_batch_kernels(Comparison::Merge)
-}
-
 #[derive(PartialEq)]
 enum Comparison {
     Scan,
     Selection,
     Replay,
     Combined,
-    Merge,
 }
 
 fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     let selection = matches!(comparison, Comparison::Selection | Comparison::Combined);
     let replay = matches!(comparison, Comparison::Replay | Comparison::Combined);
-    let merge = comparison == Comparison::Merge;
-    let cached = merge || var("CACHED_GRAPHS", 0) != 0;
+    let cached = var("CACHED_GRAPHS", 0) != 0;
     let padded_baseline = var("PADDED_SELECTION_BASELINE", 0) != 0;
     let rows = var("ROWS", 6_909_092);
     let dim = var("DIM", 384);
@@ -145,8 +255,6 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         "CANDIDATE_SOURCE",
         if selection {
             kernels::SELECT
-        } else if merge {
-            kernels::BATCH_MERGE
         } else {
             kernels::BATCH_SCAN
         },
@@ -155,8 +263,6 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         "BASELINE_SOURCE",
         if selection {
             include_str!("../tests/fixtures/select_two_reductions.loom")
-        } else if merge {
-            include_str!("../tests/fixtures/batch_merge_staged.loom")
         } else if replay {
             kernels::BATCH_SCAN
         } else {
@@ -164,13 +270,10 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         },
     )?;
     let mut reports = Vec::new();
-    for (arm_index, (db, source)) in [
+    for (db, source) in [
         (&mut baseline, &baseline_source),
         (&mut candidate, &candidate_source),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    ] {
         let mut arm = Vec::new();
         for first in [true, false]
             .into_iter()
@@ -178,18 +281,12 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         {
             let mut spec = if selection {
                 kernels::select_spec(first)
-            } else if merge && arm_index == 0 {
-                let mut spec = kernels::named_spec("sorted_merge");
-                spec.set_config("db.merge.planar", "1");
-                spec
-            } else if merge {
-                kernels::named_spec("batch_merge")
             } else {
                 kernels::named_spec("batch_scan")
             };
             spec.set_report(hrx::loom::ReportMode::Details);
-            spec.set_config("db.batch", if merge { 1 } else { width }.to_string());
-            if selection || merge {
+            spec.set_config("db.batch", width.to_string());
+            if selection {
                 spec.set_config("db.select.limit", TILE_ROWS.to_string());
             } else {
                 spec.set_config("db.scan.dimensions", db.padded.to_string());
@@ -210,17 +307,6 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
                 } else {
                     plan.merge = kernel;
                 }
-            } else if merge {
-                if arm_index == 0 {
-                    let batch = db.batch.as_mut().unwrap();
-                    let bytes = batch.width * batch.k * 8;
-                    batch.staged_merge = Some(StagedMerge {
-                        kernel,
-                        joined: (db.stream.allocate(bytes)?, db.stream.allocate(bytes)?),
-                    });
-                } else {
-                    plan.running_merge = kernel;
-                }
             } else {
                 plan.scan = kernel;
             }
@@ -231,7 +317,26 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     let mut candidate_report = reports.pop().unwrap();
     let mut baseline_report = reports.pop().unwrap();
     let mut times = [Vec::new(), Vec::new()];
-    let mut compared_neighbors = 0;
+    let half = [
+        fp16_queries("BASELINE_QUERY_PRECISION", &baseline_report[0], selection)?,
+        fp16_queries("CANDIDATE_QUERY_PRECISION", &candidate_report[0], selection)?,
+    ];
+    let scan_blocks: Vec<_> = [&baseline, &candidate]
+        .iter()
+        .map(|db| {
+            db.batch
+                .as_ref()
+                .unwrap()
+                .plans
+                .iter()
+                .find(|p| p.width == width)
+                .unwrap()
+                .scan
+                .info()
+                .workgroup_size
+        })
+        .collect();
+    let mut observations = Vec::new();
     for iteration in 0..samples + 3 {
         let query: Vec<_> = (0..batch)
             .flat_map(|q| row((rows + 888 + iteration * batch + q) as u32, dim))
@@ -249,21 +354,13 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
                 times[index].push(clock.elapsed().as_secs_f64() * 1000.0);
             }
         }
-        assert_eq!(output[0].len(), batch);
-        assert_eq!(output[1].len(), batch);
-        for (expected, actual) in output[0].iter().zip(&output[1]) {
-            assert_eq!(actual.len(), expected.len());
-            for (a, b) in actual.iter().zip(expected) {
-                assert!(a.similarity.is_finite());
-                assert_eq!(a.id, b.id, "ranking mismatch");
-                assert_eq!(
-                    a.similarity.to_bits(),
-                    b.similarity.to_bits(),
-                    "score mismatch"
-                );
-                compared_neighbors += 1;
-            }
-        }
+        observations.push((query, output));
+    }
+    // CPU and precision-aware validation happens after the complete ordinary
+    // timing window, so it cannot become part of either arm's search latency.
+    let mut checks = ComparisonChecks::default();
+    for (query, output) in &observations {
+        checks.check(rows, dim, k, query, output, half);
     }
     // Check every materialized score in the final tile, outside timing. Small
     // corpora fit in one tile, so this also supports complete matrix comparisons.
@@ -280,6 +377,8 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
             bytes,
         )?;
     }
+    let mut matrix_bit_differences = 0;
+    let mut max_matrix_score_difference = 0.0f64;
     for (at, (expected, actual)) in scores[0]
         .as_chunks::<4>()
         .0
@@ -287,7 +386,20 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         .zip(scores[1].as_chunks::<4>().0)
         .enumerate()
     {
-        assert_eq!(actual, expected, "final tile score mismatch at {at}");
+        matrix_bit_differences += usize::from(actual != expected);
+        let a = f32::from_le_bytes(*actual);
+        let b = f32::from_le_bytes(*expected);
+        assert!(a.is_finite() && b.is_finite());
+        let error = (a as f64 - b as f64).abs();
+        max_matrix_score_difference = max_matrix_score_difference.max(error);
+        if half[0] == half[1] {
+            assert_eq!(actual, expected, "final tile score mismatch at {at}");
+        } else {
+            assert!(
+                error <= 2f64.powi(-11),
+                "final tile score error {error} at {at}"
+            );
+        }
     }
     let query: Vec<_> = (0..batch)
         .flat_map(|q| row((rows + 999 + q) as u32, dim))
@@ -327,10 +439,22 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         "warmups": 3, "samples": samples,
         "baseline_ms": baseline_ms, "candidate_ms": candidate_ms,
         "speedup": baseline_ms / candidate_ms,
-        "compared_neighbors": compared_neighbors, "final_tile_scores_compared": score_count,
-        "scores_bitwise_equal": true, "ids_equal": true,
+        "compared_neighbors": checks.neighbors, "final_tile_scores_compared": score_count,
+        "scores_bitwise_equal": checks.score_bit_differences == 0 && matrix_bit_differences == 0,
+        "ids_equal": checks.rank_differences == 0,
+        "rank_differences": checks.rank_differences,
+        "returned_score_bit_differences": checks.score_bit_differences,
+        "final_tile_score_bit_differences": matrix_bit_differences,
+        "max_rank_score_difference": checks.max_rank_score_difference,
+        "max_final_tile_score_difference": max_matrix_score_difference,
+        "max_cpu_reference_error": checks.max_reference_error,
+        "baseline_query_precision": if half[0] { "fp16" } else { "fp32" },
+        "candidate_query_precision": if half[1] { "fp16" } else { "fp32" },
+        "baseline_scan_workgroup": scan_blocks[0],
+        "candidate_scan_workgroup": scan_blocks[1],
+        "validation": "All returned scores versus FP64 CPU reference for each arm's query precision (3e-6); finite, unique, ordered IDs. Same precision requires exact IDs/score bits. Different precisions allow rank scores and every final-tile score to differ by at most 2^-11.",
         "baseline_samples_ms": times[0], "candidate_samples_ms": times[1],
-        "kernel_family": if selection { "select" } else if merge { "batch_merge" } else { "batch_scan" },
+        "kernel_family": if selection { "select" } else { "batch_scan" },
         "baseline_submission": if cached { "cached_graph" } else { "immediate" },
         "candidate_submission": if replay || cached { "cached_graph" } else { "immediate" },
         "baseline_padded_selection": padded_baseline,
@@ -343,7 +467,7 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         "timing": "Ordinary completed searches, alternating order on one corpus; three warmups. Separate profiled replays after all timed windows; instrumentation is not part of ordinary latency.",
     });
     println!(
-        "baseline {baseline_ms:.3} ms, candidate {candidate_ms:.3} ms, speedup {:.3}x; {score_count} final-tile scores bitwise equal",
+        "baseline {baseline_ms:.3} ms, candidate {candidate_ms:.3} ms, speedup {:.3}x; {score_count} final-tile scores checked",
         baseline_ms / candidate_ms
     );
     if let Ok(path) = std::env::var("OUTPUT") {

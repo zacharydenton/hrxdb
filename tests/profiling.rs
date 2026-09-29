@@ -124,13 +124,14 @@ fn profile_tracks_tiles_and_snapshot_changes_and_empty_work() -> Result<()> {
         check_profile(&profile);
         assert_eq!(profile.stages["copy"].commands, 4);
         for command in &profile.commands {
-            if command.operation == "batch_merge" {
+            if command.operation == "candidate_merge" {
                 assert_eq!(command.grid.unwrap()[0], 3);
             }
         }
         if db.len() > 262_144 {
             assert!(profile.stages["batch_scan"].commands > 1);
-            assert!(profile.stages.contains_key("batch_merge"));
+            assert!(profile.stages.contains_key("threshold_compact"));
+            assert!(profile.stages.contains_key("candidate_merge"));
         }
     }
     let mut small = Searcher::build(&device, 3, [[1.0, 0.0, 0.0]])?;

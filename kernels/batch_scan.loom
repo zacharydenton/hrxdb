@@ -1,16 +1,26 @@
-// SIMT GEMM: a workgroup scores 64 corpus rows against 8–64 queries. Corpus
-// components enter LDS once in FP16 and expand to FP32 in registers. Queries
-// and accumulation remain FP32; components accumulate in increasing order.
+// Batch scan on the matrix cores: a workgroup scores 64 corpus rows against up
+// to 64 queries with 16x16x16 FP16 WMMA, accumulating in FP32.
+//
+// Corpus rows are already FP16. Queries arrive normalized in FP32, inputs by
+// queries, and are narrowed to FP16 as they are staged: the one precision this
+// kernel gives up, about three decimal digits of each query component, for the
+// matrix cores' throughput. Accumulation stays FP32, and each score is scaled
+// by its row's FP32 inverse norm as before.
+//
+// Eight wave32s tile the 64x64 block 4x2, each holding two 16x16 result
+// fragments. Both operands are staged 64 reduction components at a time into
+// LDS rows of 72 halves, which breaks bank conflicts: corpus rows as [row][k]
+// for the left operand, queries as [k][query] for the right. Query slots past
+// the batch width stage zeros and are never stored. Results publish through
+// LDS so each lane writes eight adjacent rows of one query's scores.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
 config.decl @db.batch : %value: index where [range(%value, 8, 64), mul(%value, 8)]
 config.decl @db.scan.dimensions : %value: index where [range(%value, 128, 16384), mul(%value, 128)]
 kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
   %one = index.constant 1 : index
-  %four = index.constant 4 : index
+  %threads = index.constant 256 : index
   %rows = index.constant 64 : index
   %extra = index.constant 63 : index
-  %batch = config.get @db.batch : index
-  %threads = index.mul %batch, %four : index
   %raw = index.cast %count_arg : i32 to index
   %count = index.assume %raw [range(%raw, 1, 262144)] : index
   %rounded = index.add %count, %extra : index
@@ -18,119 +28,119 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
   kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%threads, %one, %one) : index
 } launch(%count_arg: i32, %masked_arg: i32, %row_base_arg: i32, %total_arg: i32, %data: buffer, %queries: buffer, %norms: buffer, %bitmap: buffer, %scores: buffer) {
   %zero = index.constant 0 : offset
-  %i0 = index.constant 0 : index
-  %i1 = index.constant 1 : index
-  %i4 = index.constant 4 : index
-  %i8 = index.constant 8 : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
   %c32 = index.constant 32 : index
   %c64 = index.constant 64 : index
-  %c68 = index.constant 68 : index
-  %c512 = index.constant 512 : index
+  %m = index.constant 16 : index
+  %n = index.constant 16 : index
+  %k = index.constant 16 : index
   %batch = config.get @db.batch : index
   %d = config.get @db.scan.dimensions : index
-  %threads = index.mul %batch, %i4 : index
-  %query_groups = index.div %batch, %i4 : index
   %raw = index.cast %count_arg : i32 to index
   %count = index.assume %raw [range(%raw, 1, 262144)] : index
   %tid0 = kernel.workitem.id<x> : index
   %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
   %group0 = kernel.workgroup.id<x> : index
   %group = index.assume %group0 [range(%group0, 0, 4095)] : index
+  %subgroup0 = kernel.subgroup.id : index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %lane = kernel.subgroup.lane.id : index
   %row_base = index.mul %group, %c64 : index
-  %row_group = index.div %tid, %query_groups : index
-  %query_group = index.rem %tid, %query_groups : index
-  %local_row_base = index.mul %row_group, %i4 : index
-  %local_query_base = index.mul %query_group, %i4 : index
+
   %dv = buffer.view %data[%zero] : buffer -> view<[%count]x[%d]xf16>
   %qv = buffer.view %queries[%zero] : buffer -> view<[%d]x[%batch]xf32>
   %nv = buffer.view %norms[%zero] : buffer -> view<[%count]xf32>
   %sv = buffer.view %scores[%zero] : buffer -> view<[%batch]x[%count]xf32>
-  %xbytes = index.constant 4352 : offset
-  %query_words = index.mul %c32, %batch : index
-  %four_offset = index.constant 4 : offset
-  %qbytes = index.scale %query_words, %four_offset : index, offset -> offset
-  %xscratch = buffer.alloca<workgroup> align(16) %xbytes : buffer
-  %qscratch = buffer.alloca<workgroup> align(16) %qbytes : buffer
-  // Padding breaks bank conflicts when transposing corpus components into LDS.
-  %xs = buffer.view %xscratch[%zero] : buffer -> view<32x68xf16>
-  %qs = buffer.view %qscratch[%zero] : buffer -> view<32x[%batch]xf32>
-  %f0 = scalar.constant 0.0 : f32
-  %initial = vector.splat %f0 : vector<16xf32>
-  %query_vectors = index.mul %i8, %batch : index
-  %accumulated = scf.for %base = [%i0 to %d step %c32](%acc = %initial : vector<16xf32>) -> (vector<16xf32>) {
-    // Exact trip counts let the compiler unroll cooperative staging. Both
-    // widths divide the number of four-component corpus/query loads.
-    %x_iterations = index.div %c512, %threads : index
-    scf.for %xi = [%i0 to %x_iterations step %i1] unroll {
-      %xstep = index.mul %xi, %threads : index
-      %v = index.add %tid, %xstep : index
-      %r = index.div %v, %i8 : index
-      %column_group = index.rem %v, %i8 : index
-      %column = index.mul %column_group, %i4 : index
-      %row = index.add %row_base, %r : index
-      %valid = index.cmp ult, %row, %count : index
-      %safe = scf.select %valid, %row, %i0 : index
-      %at = index.assume %safe [range(%safe, 0, 262143), lt(%safe, %count)] : index
-      %dim = index.add %base, %column : index
-      %values = vector.load %dv[%at, %dim] : view<[%count]x[%d]xf16> -> vector<4xf16>
-      scf.for %j = [%i0 to %i4 step %i1] unroll {
-        %col = index.add %column, %j : index
-        %value = vector.extract %values[%j] : vector<4xf16> -> f16
-        view.store %value, %xs[%col, %r] : f16, view<32x68xf16>
-      }
+
+  // Two 9 KiB staging tiles, whose 18 KiB then holds eight 1 KiB result tiles.
+  %lds_bytes = index.constant 18432 : offset
+  %query_offset = index.constant 9216 : offset
+  %result_bytes = index.constant 1024 : offset
+  %lds = buffer.alloca<workgroup> align(16) %lds_bytes : buffer
+  %xs = buffer.view %lds[%zero] : buffer -> view<64x72xf16>
+  %qs = buffer.view %lds[%query_offset] : buffer -> view<64x72xf16>
+  %result_offset = index.scale %subgroup, %result_bytes : index, offset -> offset
+  %result = buffer.view %lds[%result_offset] : buffer -> view<16x16xf32>
+
+  %wave_m = index.div %subgroup, %c2 : index
+  %wave_n = index.rem %subgroup, %c2 : index
+  %wave_row = index.mul %wave_m, %c16 : index
+  %wave_col = index.mul %wave_n, %c32 : index
+  %wave_col1 = index.add %wave_col, %c16 : index
+
+  // Corpus staging: each thread moves sixteen halves of one row.
+  %x_packet = index.rem %tid, %c4 : index
+  %x_k = index.mul %x_packet, %c16 : index
+  %x_row0 = index.div %tid, %c4 : index
+  %x_row = index.assume %x_row0 [range(%x_row0, 0, 63)] : index
+  %source_row = index.add %row_base, %x_row : index
+  %row_valid = index.cmp ult, %source_row, %count : index
+  %safe_row = scf.select %row_valid, %source_row, %c0 : index
+  %x_at = index.assume %safe_row [range(%safe_row, 0, 262143), lt(%safe_row, %count)] : index
+  // Query staging: each thread moves sixteen of one component's query slots,
+  // eight at a time; the width is a multiple of eight, so a packet is wholly
+  // inside the batch or wholly padding.
+  %q_packet = index.rem %tid, %c4 : index
+  %q_col = index.mul %q_packet, %c16 : index
+  %q_col1 = index.add %q_col, %c8 : index
+  %q_k0 = index.div %tid, %c4 : index
+  %q_k = index.assume %q_k0 [range(%q_k0, 0, 63)] : index
+  %q_live0 = index.cmp ult, %q_col, %batch : index
+  %q_live1 = index.cmp ult, %q_col1, %batch : index
+
+  %zero_x = vector.constant 0.0 : vector<16xf16>
+  %zero_q = vector.constant 0.0 : vector<8xf16>
+  %zero_acc = vector.constant 0.0 : vector<8xf32>
+  %acc_init0 = vector.fragment<init> %zero_acc shape [%m, %n] : vector<8xf32>
+  %acc_init1 = vector.fragment<init> %zero_acc shape [%m, %n] : vector<8xf32>
+
+  %acc0, %acc1 = scf.for %k_base = [%c0 to %d step %c64](%run0 = %acc_init0 : vector<8xf32>, %run1 = %acc_init1 : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>) {
+    %x_dim = index.add %k_base, %x_k : index
+    %x_values = scf.if %row_valid -> (vector<16xf16>) {
+      %loaded = vector.load %dv[%x_at, %x_dim] : view<[%count]x[%d]xf16> -> vector<16xf16>
+      scf.yield %loaded : vector<16xf16>
+    } else {
+      scf.yield %zero_x : vector<16xf16>
     }
-    %q_iterations = index.div %query_vectors, %threads : index
-    scf.for %qi = [%i0 to %q_iterations step %i1] unroll {
-      %qstep = index.mul %qi, %threads : index
-      %v = index.add %tid, %qstep : index
-      %col = index.div %v, %query_groups : index
-      %qgroup = index.rem %v, %query_groups : index
-      %q = index.mul %qgroup, %i4 : index
-      %dim = index.add %base, %col : index
-      %values = vector.load %qv[%dim, %q] : view<[%d]x[%batch]xf32> -> vector<4xf32>
-      vector.store %values, %qs[%col, %q] : vector<4xf32>, view<32x[%batch]xf32>
+    vector.store %x_values, %xs[%x_row, %x_k] : vector<16xf16>, view<64x72xf16>
+
+    %q_dim = index.add %k_base, %q_k : index
+    %q_values0 = scf.if %q_live0 -> (vector<8xf16>) {
+      %wide = vector.load %qv[%q_dim, %q_col] : view<[%d]x[%batch]xf32> -> vector<8xf32>
+      %narrow = vector.fptrunc %wide : vector<8xf32> to vector<8xf16>
+      scf.yield %narrow : vector<8xf16>
+    } else {
+      scf.yield %zero_q : vector<8xf16>
+    }
+    %q_values1 = scf.if %q_live1 -> (vector<8xf16>) {
+      %wide = vector.load %qv[%q_dim, %q_col1] : view<[%d]x[%batch]xf32> -> vector<8xf32>
+      %narrow = vector.fptrunc %wide : vector<8xf32> to vector<8xf16>
+      scf.yield %narrow : vector<8xf16>
+    } else {
+      scf.yield %zero_q : vector<8xf16>
+    }
+    vector.store %q_values0, %qs[%q_k, %q_col] : vector<8xf16>, view<64x72xf16>
+    vector.store %q_values1, %qs[%q_k, %q_col1] : vector<8xf16>, view<64x72xf16>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+
+    %next0, %next1 = scf.for %k_step = [%c0 to %c64 step %c16](%half0 = %run0 : vector<8xf32>, %half1 = %run1 : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>) unroll {
+      %lhs = vector.fragment.load<lhs> %xs[%wave_row, %k_step] shape [%m, %k] : view<64x72xf16> -> vector<16xf16>
+      %rhs0 = vector.fragment.load<rhs> %qs[%k_step, %wave_col] shape [%k, %n] : view<64x72xf16> -> vector<16xf16>
+      %rhs1 = vector.fragment.load<rhs> %qs[%k_step, %wave_col1] shape [%k, %n] : view<64x72xf16> -> vector<16xf16>
+      %out0 = vector.mma %lhs, %rhs0, %half0 : vector<16xf16>, vector<16xf16>, vector<8xf32>
+      %out1 = vector.mma %lhs, %rhs1, %half1 : vector<16xf16>, vector<16xf16>, vector<8xf32>
+      scf.yield %out0, %out1 : vector<8xf32>, vector<8xf32>
     }
     kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-    // Eight ordered products share each incoming accumulator. After the first
-    // FMA, dot-local accumulators permit compact and paired FMAC instructions.
-    %empty_tile = vector.splat %f0 : vector<8x4xf32>
-    %empty_dot = vector.splat %f0 : vector<8xf32>
-    %next = scf.for %col = [%i0 to %c32 step %i8](%values = %acc : vector<16xf32>) -> (vector<16xf32>) unroll {
-      %xt, %qt = scf.for %j = [%i0 to %i8 step %i1](%xts = %empty_tile : vector<8x4xf32>, %qts = %empty_tile : vector<8x4xf32>) -> (vector<8x4xf32>, vector<8x4xf32>) unroll {
-        %column = index.add %col, %j : index
-        %halves = vector.load %xs[%column, %local_row_base] : view<32x68xf16> -> vector<4xf16>
-        %xvalues = vector.extf %halves : vector<4xf16> to vector<4xf32>
-        %qvalues = vector.load %qs[%column, %local_query_base] : view<32x[%batch]xf32> -> vector<4xf32>
-        %new_x = vector.insert %xvalues into %xts[%j] : vector<4xf32>, vector<8x4xf32>
-        %new_q = vector.insert %qvalues into %qts[%j] : vector<4xf32>, vector<8x4xf32>
-        scf.yield %new_x, %new_q : vector<8x4xf32>, vector<8x4xf32>
-      }
-      %updated = scf.for %r = [%i0 to %i4 step %i1](%rs = %values : vector<16xf32>) -> (vector<16xf32>) unroll {
-        %rbase = index.mul %r, %i4 : index
-        %vx = scf.for %j = [%i0 to %i8 step %i1](%xv = %empty_dot : vector<8xf32>) -> (vector<8xf32>) unroll {
-          %x = vector.extract %xt[%j, %r] : vector<8x4xf32> -> f32
-          %new_x = vector.insert %x into %xv[%j] : f32, vector<8xf32>
-          scf.yield %new_x : vector<8xf32>
-        }
-        %new_row = scf.for %q = [%i0 to %i4 step %i1](%sums = %rs : vector<16xf32>) -> (vector<16xf32>) unroll {
-          %vy = scf.for %j = [%i0 to %i8 step %i1](%qvec = %empty_dot : vector<8xf32>) -> (vector<8xf32>) unroll {
-            %y = vector.extract %qt[%j, %q] : vector<8x4xf32> -> f32
-            %new_y = vector.insert %y into %qvec[%j] : f32, vector<8xf32>
-            scf.yield %new_y : vector<8xf32>
-          }
-          %slot = index.add %rbase, %q : index
-          %old = vector.extract %sums[%slot] : vector<16xf32> -> f32
-          %sum = vector.dotf %vx, %vy, %old : vector<8xf32>, vector<8xf32>, f32
-          %inserted = vector.insert %sum into %sums[%slot] : f32, vector<16xf32>
-          scf.yield %inserted : vector<16xf32>
-        }
-        scf.yield %new_row : vector<16xf32>
-      }
-      scf.yield %updated : vector<16xf32>
-    }
-    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-    scf.yield %next : vector<16xf32>
+    scf.yield %next0, %next1 : vector<8xf32>, vector<8xf32>
   }
+
+  // Each lane publishes one query column and eight adjacent rows of it.
   %zero_i32 = scalar.constant 0 : i32
   %masked = scalar.cmpi ne, %masked_arg, %zero_i32 : i32
   %c31 = index.constant 31 : index
@@ -141,125 +151,58 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
   %rounded = index.add %total, %c31 : index
   %words = index.div %rounded, %c32 : index
   %bv = buffer.view %bitmap[%zero] : buffer -> view<[%words]xi32>
-  // One-wave batches retain scalar stores: measured gains did not reliably
-  // justify extra vector-tail control. This configuration branch folds away
-  // at compile time; wider batches benefit from four-score stores.
-  %narrow = index.cmp eq, %batch, %i8 : index
-  scf.if %narrow {
-    scf.for %r = [%i0 to %i4 step %i1] unroll {
-      %local = index.add %local_row_base, %r : index
-      %row = index.add %row_base, %local : index
-      %valid = index.cmp ult, %row, %count : index
-      scf.if %valid {
-        %at = index.assume %row [range(%row, 0, 262143), lt(%row, %count)] : index
-        %inverse = view.load %nv[%at] : view<[%count]xf32> -> f32
-        %excluded = scf.if %masked -> (i1) {
-          %global0 = index.add %global_base, %at : index
-          %global = index.assume %global0 [range(%global0, 0, 1073741823), lt(%global0, %total)] : index
-          %word0 = index.div %global, %c32 : index
-          %word = index.assume %word0 [range(%word0, 0, 33554431), lt(%word0, %words)] : index
-          %bit = index.rem %global, %c32 : index
-          %bits = view.load %bv[%word] : view<[%words]xi32> -> i32
-          %shift = index.cast %bit : index to i32
-          %shifted = scalar.shrui %bits, %shift : i32
-          %one = scalar.constant 1 : i32
-          %flag = scalar.andi %shifted, %one : i32
-          %test = scalar.cmpi ne, %flag, %zero_i32 : i32
-          scf.yield %test : i1
-        } else {
-          %no = scalar.constant false : i1
-          scf.yield %no : i1
-        }
-        %rbase = index.mul %r, %i4 : index
-        scf.for %q = [%i0 to %i4 step %i1] unroll {
-          %query = index.add %local_query_base, %q : index
-          %slot = index.add %rbase, %q : index
-          %sum = vector.extract %accumulated[%slot] : vector<16xf32> -> f32
+  %badbits = scalar.constant -8388608 : i32
+  %neg = scalar.bitcast %badbits : i32 to f32
+  %lane_col = index.rem %lane, %c16 : index
+  %lane_half = index.div %lane, %c16 : index
+  %lane_row = index.mul %lane_half, %c8 : index
+  %tile_row = index.add %wave_row, %lane_row : index
+  %first_row = index.add %row_base, %tile_row : index
+
+  scf.for %fragment = [%c0 to %c2 step %c1] unroll {
+    %is_second = index.cmp eq, %fragment, %c1 : index
+    %chosen = scf.select %is_second, %acc1, %acc0 : vector<8xf32>
+    vector.fragment.store<result> %chosen, %result[%c0, %c0] shape [%m, %n] : vector<8xf32>, view<16x16xf32>
+    kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+
+    %fragment_col = index.mul %fragment, %c16 : index
+    %col_base = index.add %wave_col, %fragment_col : index
+    %query0 = index.add %col_base, %lane_col : index
+    %live = index.cmp ult, %query0, %batch : index
+    scf.if %live {
+      %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %batch)] : index
+      scf.for %i = [%c0 to %c8 step %c1] unroll {
+        %local = index.add %lane_row, %i : index
+        %row = index.add %first_row, %i : index
+        %valid = index.cmp ult, %row, %count : index
+        scf.if %valid {
+          %at = index.assume %row [range(%row, 0, 262143), lt(%row, %count)] : index
+          %sum = view.load %result[%local, %lane_col] : view<16x16xf32> -> f32
+          %inverse = view.load %nv[%at] : view<[%count]xf32> -> f32
           %cosine = scalar.mulf %sum, %inverse : f32
-          %badbits = scalar.constant -8388608 : i32
-          %neg = scalar.bitcast %badbits : i32 to f32
+          %excluded = scf.if %masked -> (i1) {
+            %global0 = index.add %global_base, %at : index
+            %global = index.assume %global0 [range(%global0, 0, 1073741823), lt(%global0, %total)] : index
+            %word0 = index.div %global, %c32 : index
+            %word = index.assume %word0 [range(%word0, 0, 33554431), lt(%word0, %words)] : index
+            %bit = index.rem %global, %c32 : index
+            %bits = view.load %bv[%word] : view<[%words]xi32> -> i32
+            %shift = index.cast %bit : index to i32
+            %shifted = scalar.shrui %bits, %shift : i32
+            %one = scalar.constant 1 : i32
+            %flag = scalar.andi %shifted, %one : i32
+            %test = scalar.cmpi ne, %flag, %zero_i32 : i32
+            scf.yield %test : i1
+          } else {
+            %no = scalar.constant false : i1
+            scf.yield %no : i1
+          }
           %score = scf.select %excluded, %neg, %cosine : f32
           view.store %score, %sv[%query, %at] : f32, view<[%batch]x[%count]xf32>
         }
       }
     }
-  } else {
-    // Prepare each row's norm and mask once. Integer flags keep the short
-    // vector's representation explicit across guarded loads.
-    %false = scalar.constant false : i1
-    %empty_norms = vector.splat %f0 : vector<4xf32>
-    %empty_mask = vector.splat %zero_i32 : vector<4xi32>
-    %one_i32 = scalar.constant 1 : i32
-    %inverses, %excluded_rows = scf.for %r = [%i0 to %i4 step %i1](%ns = %empty_norms : vector<4xf32>, %ms = %empty_mask : vector<4xi32>) -> (vector<4xf32>, vector<4xi32>) unroll {
-      %local = index.add %local_row_base, %r : index
-      %row = index.add %row_base, %local : index
-      %valid = index.cmp ult, %row, %count : index
-      %inverse, %excluded = scf.if %valid -> (f32, i1) {
-        %at = index.assume %row [range(%row, 0, 262143), lt(%row, %count)] : index
-        %inv = view.load %nv[%at] : view<[%count]xf32> -> f32
-        %excluded = scf.if %masked -> (i1) {
-          %global0 = index.add %global_base, %at : index
-          %global = index.assume %global0 [range(%global0, 0, 1073741823), lt(%global0, %total)] : index
-          %word0 = index.div %global, %c32 : index
-          %word = index.assume %word0 [range(%word0, 0, 33554431), lt(%word0, %words)] : index
-          %bit = index.rem %global, %c32 : index
-          %bits = view.load %bv[%word] : view<[%words]xi32> -> i32
-          %shift = index.cast %bit : index to i32
-          %shifted = scalar.shrui %bits, %shift : i32
-          %one = scalar.constant 1 : i32
-          %flag = scalar.andi %shifted, %one : i32
-          %test = scalar.cmpi ne, %flag, %zero_i32 : i32
-          scf.yield %test : i1
-        } else {
-          %no = scalar.constant false : i1
-          scf.yield %no : i1
-        }
-        scf.yield %inv, %excluded : f32, i1
-      } else {
-        scf.yield %f0, %false : f32, i1
-      }
-      %next_norms = vector.insert %inverse into %ns[%r] : f32, vector<4xf32>
-      %flag = scf.select %excluded, %one_i32, %zero_i32 : i32
-      %next_mask = vector.insert %flag into %ms[%r] : i32, vector<4xi32>
-      scf.yield %next_norms, %next_mask : vector<4xf32>, vector<4xi32>
-    }
-    %badbits = scalar.constant -8388608 : i32
-    %neg = scalar.bitcast %badbits : i32 to f32
-    %negs = vector.splat %neg : vector<4xf32>
-    %first_row = index.add %row_base, %local_row_base : index
-    %c3 = index.constant 3 : index
-    %last_row = index.add %first_row, %c3 : index
-    %full = index.cmp ult, %last_row, %count : index
-    // Store four adjacent corpus rows together. Query rows have stride count,
-    // so a partial group must use scalar stores to avoid crossing into the next
-    // query's scores. This also covers unaligned final tiles and shard tails.
-    scf.for %q = [%i0 to %i4 step %i1] unroll {
-      %query = index.add %local_query_base, %q : index
-      %four_sums = scf.for %r = [%i0 to %i4 step %i1](%vs = %empty_norms : vector<4xf32>) -> (vector<4xf32>) unroll {
-        %rbase = index.mul %r, %i4 : index
-        %slot = index.add %rbase, %q : index
-        %value = vector.extract %accumulated[%slot] : vector<16xf32> -> f32
-        %updated = vector.insert %value into %vs[%r] : f32, vector<4xf32>
-        scf.yield %updated : vector<4xf32>
-      }
-      %cosines = vector.mulf %four_sums, %inverses : vector<4xf32>
-      %excluded_flags = vector.cmpi ne, %excluded_rows, %empty_mask : vector<4xi32> -> vector<4xi1>
-      %four_scores = vector.select %excluded_flags, %negs, %cosines : vector<4xf32>
-      scf.if %full {
-        %out = index.assume %first_row [range(%first_row, 0, 262140), lt(%first_row, %count)] : index
-        vector.store %four_scores, %sv[%query, %out] : vector<4xf32>, view<[%batch]x[%count]xf32>
-      } else {
-        scf.for %r = [%i0 to %i4 step %i1] unroll {
-          %row = index.add %first_row, %r : index
-          %valid = index.cmp ult, %row, %count : index
-          scf.if %valid {
-            %out = index.assume %row [range(%row, 0, 262143), lt(%row, %count)] : index
-            %value = vector.extract %four_scores[%r] : vector<4xf32> -> f32
-            view.store %value, %sv[%query, %out] : f32, view<[%batch]x[%count]xf32>
-          }
-        }
-      }
-    }
+    kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
   }
   kernel.return
 }

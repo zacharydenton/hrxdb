@@ -344,7 +344,11 @@ fn device_query_strides_widths_and_invalid_rows() -> hrxdb::Result<()> {
                         (a.similarity - b.similarity).abs() < 3e-6,
                         "d={d} batch={batch} q={q}: {a:?} vs {b:?}"
                     );
-                    assert!((a.similarity - scores[a.id as usize]).abs() < 3e-6);
+                    // A batch scans on the matrix cores with FP16 queries: each
+                    // unit query component is rounded to within 2^-11 of itself,
+                    // which moves a cosine by at most 2^-11. One query scans FP32.
+                    let bound = if batch == 1 { 3e-6 } else { 2f32.powi(-11) };
+                    assert!((a.similarity - scores[a.id as usize]).abs() <= bound);
                 }
             }
             assert_eq!(searcher.memory_usage(), reserved);

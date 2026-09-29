@@ -119,10 +119,15 @@ fn row(i: usize, d: usize) -> Vec<f32> {
 }
 
 fn score(id: usize, d: usize, query: &[f32], quantize: bool) -> f64 {
-    score_row(row(id, d), query, quantize)
+    score_row(row(id, d), query, quantize, false)
 }
 
-fn score_row(mut values: Vec<f32>, query: &[f32], quantize: bool) -> f64 {
+/// A batch's score: the batch scan also narrows each normalized query to FP16.
+fn batch_score(id: usize, d: usize, query: &[f32]) -> f64 {
+    score_row(row(id, d), query, true, true)
+}
+
+fn score_row(mut values: Vec<f32>, query: &[f32], quantize: bool, half_query: bool) -> f64 {
     let norm = values
         .iter()
         .map(|&v| (v as f64).powi(2))
@@ -149,7 +154,15 @@ fn score_row(mut values: Vec<f32>, query: &[f32], quantize: bool) -> f64 {
     values
         .iter()
         .zip(query)
-        .map(|(&x, &q)| x as f64 * ((q as f64 / qnorm) as f32) as f64)
+        .map(|(&x, &q)| {
+            let unit = (q as f64 / qnorm) as f32;
+            let unit = if half_query {
+                half::f16::from_f32(unit).to_f32()
+            } else {
+                unit
+            };
+            x as f64 * unit as f64
+        })
         .sum::<f64>()
         * inverse as f64
 }
@@ -599,7 +612,8 @@ fn run_batch(o: Options) -> hrxdb::Result<()> {
             for (got, want) in actual.iter().zip(expected) {
                 if got.id != want.id {
                     near_tie_rank_differences += 1;
-                    if (got.similarity - want.similarity).abs() > 3e-6 {
+                    // Each FP16-query cosine is within 2^-11 of its FP32 one.
+                    if (got.similarity - want.similarity).abs() > 2.0 * 2f32.powi(-11) {
                         return Err(hrxdb::Error::Message(
                             "batch ranking differs beyond rounding tolerance".into(),
                         ));
@@ -614,7 +628,7 @@ fn run_batch(o: Options) -> hrxdb::Result<()> {
                     ));
                 }
                 let error = (got.similarity as f64
-                    - score(got.id as usize, o.dimensions, query, true))
+                    - batch_score(got.id as usize, o.dimensions, query))
                 .abs();
                 max_score_error = max_score_error.max(error);
                 if error > 3e-6 {
@@ -659,7 +673,7 @@ fn run_batch(o: Options) -> hrxdb::Result<()> {
         "batch_p95_ms": batch_distribution.p95_ms,
         "max_returned_score_error": max_score_error, "near_tie_rank_differences": near_tie_rank_differences,
         "timing": "Host completion. Three warmups, changing queries, alternating sequential/batch timing order. Compilation and workspace reservation excluded; query preparation, selection, masking and readback included. No concurrent hrxdb benchmark or GPU tests.",
-        "validation": "Each batch compared with individual GPU searches. ID differences accepted only within 3e-6 score tolerance and counted. All returned scores checked against quantized CPU reference.",
+        "validation": "Each batch compared with individual GPU searches: ID differences accepted within twice 2^-11, the FP16 query rounding, and counted. All returned scores checked within 3e-6 against a quantized CPU reference with FP16 queries.",
         "compiler": reports, "samples": samples, "profile": profile,
     });
     eprintln!(
@@ -866,7 +880,7 @@ fn run_append(o: Options) -> hrxdb::Result<()> {
     let query = row(total + 5, d);
     let scores = searcher.scores(&query)?;
     for &id in &ids {
-        let reference = score_row(replacement(id), &query, true);
+        let reference = score_row(replacement(id), &query, true, false);
         if (scores[id as usize] as f64 - reference).abs() > 3e-6 {
             return Err(hrxdb::Error::Message(
                 "updated score differs from CPU reference".into(),

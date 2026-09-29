@@ -1,0 +1,419 @@
+// Selection for every batch tile after the first, pruned by the running top-k.
+//
+// After the first tile each query holds a sorted running top-k, and its k-th
+// score is a bound no later row below it can beat: rows arrive in increasing
+// insertion ID, and ties rank the lower ID first, so an equal score also loses.
+// `threshold_compact` keeps only a tile's scores strictly above that bound,
+// appending them to a per-query candidate list; excluded rows are negative
+// infinity and NaN compares false, so neither survives. `candidate_merge` then
+// merges each query's few candidates into its running list, 1,024 at a time,
+// and resets the query's count for the next tile. Nothing here sorts rows that
+// cannot enter the result, which is most of every tile after the first.
+//
+// The lists hold `capacity` candidates a query, which bounds workspace. A query
+// that overflows them is reduced in parallel by `overflow_reduce`, retaining
+// k entries per 4,096-row block. Repeated passes leave at most 4,096 candidates
+// for the final merge, so a weak bound never serializes the entire tile.
+amdgpu.target<gfx1151> @target {subgroup_size = 32}
+
+
+// Shared compare-exchange network; every workgroup owns disjoint scratch.
+template.decl @db.sort2048(%scores: buffer, %ids: buffer, %tid: index)
+template.def<@db.sort2048> @db.bitonic2048(%scores: buffer, %ids: buffer, %tid: index) {
+  %zero = index.constant 0 : offset
+  %i0 = index.constant 0 : index
+  %i1 = index.constant 1 : index
+  %i2 = index.constant 2 : index
+  %i4 = index.constant 4 : index
+  %i12 = index.constant 12 : index
+  %c256 = index.constant 256 : index
+  %ss = buffer.view %scores[%zero] : buffer -> view<2048xf32>
+  %ii = buffer.view %ids[%zero] : buffer -> view<2048xi32>
+  scf.for %level = [%i1 to %i12 step %i1] {
+    %span = index.shli %i1, %level : index
+    scf.for %pass = [%i0 to %level step %i1] {
+      %remaining = index.sub %level, %pass : index
+      %shift = index.sub %remaining, %i1 : index
+      %stride0 = index.shli %i1, %shift : index
+      %stride = index.assume %stride0 [range(%stride0, 1, 1024)] : index
+      %twice = index.mul %stride, %i2 : index
+      // Each thread owns four disjoint compare-exchange pairs.
+      scf.for %j = [%i0 to %i4 step %i1] unroll {
+        %off = index.mul %j, %c256 : index
+        %pair = index.add %tid, %off : index
+        %block = index.shrui %pair, %shift : index
+        %mask = index.sub %stride, %i1 : index
+        %within = index.andi %pair, %mask : index
+        %begin = index.mul %block, %twice : index
+        %lo0 = index.add %begin, %within : index
+        %hi0 = index.add %lo0, %stride : index
+        %lo = index.assume %lo0 [range(%lo0, 0, 2047)] : index
+        %hi = index.assume %hi0 [range(%hi0, 0, 2047)] : index
+        %a = view.load %ss[%lo] : view<2048xf32> -> f32
+        %b = view.load %ss[%hi] : view<2048xf32> -> f32
+        %ai = view.load %ii[%lo] : view<2048xi32> -> i32
+        %bi = view.load %ii[%hi] : view<2048xi32> -> i32
+        %greater = scalar.cmpf ogt, %a, %b : f32
+        %equal = scalar.cmpf oeq, %a, %b : f32
+        %earlier = scalar.cmpi ult, %ai, %bi : i32
+        %tie = scalar.andi %equal, %earlier : i1
+        %before = scalar.ori %greater, %tie : i1
+        %direction = index.andi %lo, %span : index
+        %descending = index.cmp eq, %direction, %i0 : index
+        %true = scalar.constant 1 : i1
+        %opposite = scalar.xori %before, %true : i1
+        %keep = scf.select %descending, %before, %opposite : i1
+        %ls = scf.select %keep, %a, %b : f32
+        %hs = scf.select %keep, %b, %a : f32
+        %li = scf.select %keep, %ai, %bi : i32
+        %hi_id = scf.select %keep, %bi, %ai : i32
+        view.store %ls, %ss[%lo] : f32, view<2048xf32>
+        view.store %hs, %ss[%hi] : f32, view<2048xf32>
+        view.store %li, %ii[%lo] : i32, view<2048xi32>
+        view.store %hi_id, %ii[%hi] : i32, view<2048xi32>
+      }
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    }
+  }
+  template.return
+}
+
+// One thread per four scores of one query; a workgroup covers 1,024 rows.
+kernel.def target(@target) export("threshold_compact") @threshold_compact(%rows_arg: i32, %queries_arg: i32) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %tile = index.constant 1024 : index
+  %extra = index.constant 1023 : index
+  %raw = index.cast %rows_arg : i32 to index
+  %rows = index.assume %raw [range(%raw, 1, 262144)] : index
+  %qraw = index.cast %queries_arg : i32 to index
+  %queries = index.assume %qraw [range(%qraw, 1, 64)] : index
+  %rounded = index.add %rows, %extra : index
+  %groups = index.div %rounded, %tile : index
+  kernel.launch.config workgroups(%groups, %queries, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%rows_arg: i32, %queries_arg: i32, %k_arg: i32, %row_base_arg: i32, %capacity_arg: i32, %scores: buffer, %running: buffer, %counts: buffer, %candidate_scores: buffer, %candidate_ids: buffer) {
+  %zero = index.constant 0 : offset
+  %i0 = index.constant 0 : index
+  %i1 = index.constant 1 : index
+  %i4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %c1024 = index.constant 1024 : index
+  %raw = index.cast %rows_arg : i32 to index
+  %rows = index.assume %raw [range(%raw, 1, 262144)] : index
+  %qraw = index.cast %queries_arg : i32 to index
+  %queries = index.assume %qraw [range(%qraw, 1, 64)] : index
+  %kraw = index.cast %k_arg : i32 to index
+  %k = index.assume %kraw [range(%kraw, 1, 1024)] : index
+  %craw = index.cast %capacity_arg : i32 to index
+  %capacity = index.assume %craw [range(%craw, 1, 65536)] : index
+  %base_raw = index.cast %row_base_arg : i32 to index
+  %row_base = index.assume %base_raw [range(%base_raw, 0, 1073741823)] : index
+  %score_count = index.mul %queries, %rows : index
+  %running_count = index.mul %queries, %k : index
+  %candidate_count = index.mul %queries, %capacity : index
+  %sv = buffer.view %scores[%zero] : buffer -> view<[%score_count]xf32>
+  %rv = buffer.view %running[%zero] : buffer -> view<[%running_count]xf32>
+  %nv = buffer.view %counts[%zero] : buffer -> view<[%queries]xi32>
+  %cs = buffer.view %candidate_scores[%zero] : buffer -> view<[%candidate_count]xf32>
+  %ci = buffer.view %candidate_ids[%zero] : buffer -> view<[%candidate_count]xi32>
+  %tid0 = kernel.workitem.id<x> : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
+  %group0 = kernel.workgroup.id<x> : index
+  %group = index.assume %group0 [range(%group0, 0, 255)] : index
+  %query0 = kernel.workgroup.id<y> : index
+  %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %queries)] : index
+  // The running list is sorted, so its last entry is the k-th best score.
+  %kth_row = index.mul %query, %k : index
+  %kth_raw = index.add %kth_row, %k : index
+  %kth_at0 = index.sub %kth_raw, %i1 : index
+  %kth_at = index.assume %kth_at0 [range(%kth_at0, 0, 65535), lt(%kth_at0, %running_count)] : index
+  %threshold = view.load %rv[%kth_at] : view<[%running_count]xf32> -> f32
+  %tile_base = index.mul %group, %c1024 : index
+  %score_base = index.mul %query, %rows : index
+  %candidate_base = index.mul %query, %capacity : index
+  %one_i32 = scalar.constant 1 : i32
+  scf.for %j = [%i0 to %i4 step %i1] unroll {
+    %off = index.mul %j, %c256 : index
+    %local = index.add %tid, %off : index
+    %row = index.add %tile_base, %local : index
+    %valid = index.cmp ult, %row, %rows : index
+    scf.if %valid {
+      %r = index.assume %row [range(%row, 0, 262143), lt(%row, %rows)] : index
+      %at0 = index.add %score_base, %r : index
+      %at = index.assume %at0 [range(%at0, 0, 16777215), lt(%at0, %score_count)] : index
+      %score = view.load %sv[%at] : view<[%score_count]xf32> -> f32
+      %above = scalar.cmpf ogt, %score, %threshold : f32
+      scf.if %above {
+        %slot32 = view.atomic.rmw<addi> %one_i32, %nv[%query] {ordering = relaxed, scope = device} : i32, view<[%queries]xi32> -> i32
+        %slot0 = index.cast %slot32 : i32 to index
+        // Past capacity the count still rises, which is how the merge knows.
+        %fits = index.cmp ult, %slot0, %capacity : index
+        scf.if %fits {
+          %slot = index.assume %slot0 [range(%slot0, 0, 65535), lt(%slot0, %capacity)] : index
+          %out0 = index.add %candidate_base, %slot : index
+          %out = index.assume %out0 [range(%out0, 0, 4194303), lt(%out0, %candidate_count)] : index
+          %global = index.add %row_base, %r : index
+          %id = index.cast %global : index to i32
+          view.store %score, %cs[%out] : f32, view<[%candidate_count]xf32>
+          view.store %id, %ci[%out] : i32, view<[%candidate_count]xi32>
+        }
+      }
+    }
+  }
+  kernel.return
+}
+
+// One workgroup per query. The running list and each chunk of up to 1,024
+// candidates share one 2,048-entry bitonic sort, after which the first k
+// entries are the merged list. A query with no candidates returns at once.
+kernel.def target(@target) export("candidate_merge") @candidate_merge(%queries_arg: i32) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %qraw = index.cast %queries_arg : i32 to index
+  %queries = index.assume %qraw [range(%qraw, 1, 64)] : index
+  kernel.launch.config workgroups(%queries, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%queries_arg: i32, %k_arg: i32, %capacity_arg: i32, %overflow_rows_arg: i32, %counts: buffer, %candidate_scores: buffer, %candidate_ids: buffer, %running_scores: buffer, %running_ids: buffer, %overflow_scores: buffer, %overflow_ids: buffer) {
+  %zero = index.constant 0 : offset
+  %i0 = index.constant 0 : index
+  %i1 = index.constant 1 : index
+  %i2 = index.constant 2 : index
+  %i4 = index.constant 4 : index
+  %i12 = index.constant 12 : index
+  %c256 = index.constant 256 : index
+  %c1024 = index.constant 1024 : index
+  %qraw = index.cast %queries_arg : i32 to index
+  %queries = index.assume %qraw [range(%qraw, 1, 64)] : index
+  %kraw = index.cast %k_arg : i32 to index
+  %k = index.assume %kraw [range(%kraw, 1, 1024)] : index
+  %craw = index.cast %capacity_arg : i32 to index
+  %capacity = index.assume %craw [range(%craw, 1, 65536)] : index
+  %rraw = index.cast %overflow_rows_arg : i32 to index
+  %rows = index.assume %rraw [range(%rraw, 1, 262144)] : index
+  %running_count = index.mul %queries, %k : index
+  %candidate_count = index.mul %queries, %capacity : index
+  %score_count = index.mul %queries, %rows : index
+  %sv = buffer.view %overflow_scores[%zero] : buffer -> view<[%score_count]xf32>
+  %iv = buffer.view %overflow_ids[%zero] : buffer -> view<[%score_count]xi32>
+  %nv = buffer.view %counts[%zero] : buffer -> view<[%queries]xi32>
+  %cs = buffer.view %candidate_scores[%zero] : buffer -> view<[%candidate_count]xf32>
+  %ci = buffer.view %candidate_ids[%zero] : buffer -> view<[%candidate_count]xi32>
+  %rs = buffer.view %running_scores[%zero] : buffer -> view<[%running_count]xf32>
+  %ri = buffer.view %running_ids[%zero] : buffer -> view<[%running_count]xi32>
+  %tid0 = kernel.workitem.id<x> : index
+  %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
+  %query0 = kernel.workgroup.id<x> : index
+  %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %queries)] : index
+  %n32 = view.load %nv[%query] : view<[%queries]xi32> -> i32
+  %n0 = index.cast %n32 : i32 to index
+  %n = index.assume %n0 [range(%n0, 0, 262144)] : index
+  %any = index.cmp ugt, %n, %i0 : index
+  // Overflowed queries consume only the bounded parallel reduction output.
+  %overflowed = index.cmp ugt, %n, %capacity : index
+  %sources = scf.select %overflowed, %rows, %n : index
+  scf.if %any {
+    %scratch_bytes = index.constant 8192 : offset
+    %scratch_s = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+    %scratch_i = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+    %ss = buffer.view %scratch_s[%zero] : buffer -> view<2048xf32>
+    %ii = buffer.view %scratch_i[%zero] : buffer -> view<2048xi32>
+    %badbits = scalar.constant -8388608 : i32
+    %neg = scalar.bitcast %badbits : i32 to f32
+    %sentinel = scalar.constant 2147483647 : i32
+    %running_base = index.mul %query, %k : index
+    %candidate_base = index.mul %query, %capacity : index
+    %score_base = index.mul %query, %rows : index
+    // The running list fills the first half, padded past k.
+    scf.for %j = [%i0 to %i4 step %i1] unroll {
+      %off = index.mul %j, %c256 : index
+      %local = index.add %tid, %off : index
+      %valid = index.cmp ult, %local, %k : index
+      %safe = scf.select %valid, %local, %i0 : index
+      %at0 = index.add %running_base, %safe : index
+      %at = index.assume %at0 [range(%at0, 0, 65535), lt(%at0, %running_count)] : index
+      %s0 = view.load %rs[%at] : view<[%running_count]xf32> -> f32
+      %i0v = view.load %ri[%at] : view<[%running_count]xi32> -> i32
+      %s = scf.select %valid, %s0, %neg : f32
+      %id = scf.select %valid, %i0v, %sentinel : i32
+      view.store %s, %ss[%local] : f32, view<2048xf32>
+      view.store %id, %ii[%local] : i32, view<2048xi32>
+    }
+    scf.for %chunk = [%i0 to %sources step %c1024] {
+      // Candidates fill the second half; the first half already holds the
+      // best 1,024 of everything merged so far, a superset of the top k.
+      scf.for %j = [%i0 to %i4 step %i1] unroll {
+        %off = index.mul %j, %c256 : index
+        %local = index.add %tid, %off : index
+        %source = index.add %chunk, %local : index
+        %valid = index.cmp ult, %source, %sources : index
+        %s, %id = scf.if %overflowed -> (f32, i32) {
+          %safe = scf.select %valid, %source, %i0 : index
+          %r = index.assume %safe [range(%safe, 0, 262143), lt(%safe, %rows)] : index
+          %at0 = index.add %score_base, %r : index
+          %at = index.assume %at0 [range(%at0, 0, 16777215), lt(%at0, %score_count)] : index
+          %s0 = view.load %sv[%at] : view<[%score_count]xf32> -> f32
+          %id0 = view.load %iv[%at] : view<[%score_count]xi32> -> i32
+          %s1 = scf.select %valid, %s0, %neg : f32
+          %id1 = scf.select %valid, %id0, %sentinel : i32
+          scf.yield %s1, %id1 : f32, i32
+        } else {
+          %safe = scf.select %valid, %source, %i0 : index
+          %at0 = index.add %candidate_base, %safe : index
+          %at = index.assume %at0 [range(%at0, 0, 4194303), lt(%at0, %candidate_count)] : index
+          %s0 = view.load %cs[%at] : view<[%candidate_count]xf32> -> f32
+          %i0v = view.load %ci[%at] : view<[%candidate_count]xi32> -> i32
+          %s1 = scf.select %valid, %s0, %neg : f32
+          %id1 = scf.select %valid, %i0v, %sentinel : i32
+          scf.yield %s1, %id1 : f32, i32
+        }
+        %slot = index.add %local, %c1024 : index
+        %to = index.assume %slot [range(%slot, 1024, 2047)] : index
+        view.store %s, %ss[%to] : f32, view<2048xf32>
+        view.store %id, %ii[%to] : i32, view<2048xi32>
+      }
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      template.apply<@db.sort2048>(%scratch_s, %scratch_i, %tid) : (buffer, buffer, index) -> ()
+    }
+    scf.for %j = [%i0 to %i4 step %i1] unroll {
+      %off = index.mul %j, %c256 : index
+      %local = index.add %tid, %off : index
+      %valid = index.cmp ult, %local, %k : index
+      scf.if %valid {
+        %at0 = index.add %running_base, %local : index
+        %at = index.assume %at0 [range(%at0, 0, 65535), lt(%at0, %running_count)] : index
+        %local_at = index.assume %local [range(%local, 0, 1023)] : index
+        %s = view.load %ss[%local_at] : view<2048xf32> -> f32
+        %id = view.load %ii[%local_at] : view<2048xi32> -> i32
+        view.store %s, %rs[%at] : f32, view<[%running_count]xf32>
+        view.store %id, %ri[%at] : i32, view<[%running_count]xi32>
+      }
+    }
+    %leader = index.cmp eq, %tid, %i0 : index
+    scf.if %leader {
+      %zero_i32 = scalar.constant 0 : i32
+      view.store %zero_i32, %nv[%query] : i32, view<[%queries]xi32>
+    }
+  }
+  kernel.return
+}
+
+// Up to four chunks per workgroup, in parallel across both rows and queries.
+// The immutable counter guards every pass; candidate_merge alone resets it.
+kernel.def target(@target) export("overflow_reduce") @overflow_reduce(%rows_arg: i32, %queries_arg: i32) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %tile = index.constant 4096 : index
+  %extra = index.constant 4095 : index
+  %raw = index.cast %rows_arg : i32 to index
+  %rows = index.assume %raw [range(%raw, 1, 262144)] : index
+  %qraw = index.cast %queries_arg : i32 to index
+  %queries = index.assume %qraw [range(%qraw, 1, 64)] : index
+  %rounded = index.add %rows, %extra : index
+  %groups = index.div %rounded, %tile : index
+  kernel.launch.config workgroups(%groups, %queries, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%rows_arg: i32, %queries_arg: i32, %k_arg: i32, %first_arg: i32, %row_base_arg: i32, %capacity_arg: i32, %counts: buffer, %scores: buffer, %ids: buffer, %out_scores: buffer, %out_ids: buffer) {
+  %zero = index.constant 0 : offset
+  %i0 = index.constant 0 : index
+  %i1 = index.constant 1 : index
+  %i4 = index.constant 4 : index
+  %c256 = index.constant 256 : index
+  %c1024 = index.constant 1024 : index
+  %c4095 = index.constant 4095 : index
+  %c4096 = index.constant 4096 : index
+  %raw = index.cast %rows_arg : i32 to index
+  %rows = index.assume %raw [range(%raw, 1, 262144)] : index
+  %qraw = index.cast %queries_arg : i32 to index
+  %queries = index.assume %qraw [range(%qraw, 1, 64)] : index
+  %kraw = index.cast %k_arg : i32 to index
+  %k = index.assume %kraw [range(%kraw, 1, 1024)] : index
+  %query0 = kernel.workgroup.id<y> : index
+  %query = index.assume %query0 [range(%query0, 0, 63), lt(%query0, %queries)] : index
+  %nv = buffer.view %counts[%zero] : buffer -> view<[%queries]xi32>
+  %n = view.load %nv[%query] : view<[%queries]xi32> -> i32
+  %overflowed = scalar.cmpi ugt, %n, %capacity_arg : i32
+  scf.if %overflowed {
+    %tid0 = kernel.workitem.id<x> : index
+    %tid = index.assume %tid0 [range(%tid0, 0, 255)] : index
+    %group0 = kernel.workgroup.id<x> : index
+    %group = index.assume %group0 [range(%group0, 0, 63)] : index
+    %base = index.mul %group, %c4096 : index
+    %remaining = index.sub %rows, %base : index
+    %short = index.cmp ult, %remaining, %c4096 : index
+    %length = scf.select %short, %remaining, %c4096 : index
+    %rounded = index.add %rows, %c4095 : index
+    %groups = index.div %rounded, %c4096 : index
+    %outputs = index.mul %groups, %k : index
+    %input_count = index.mul %queries, %rows : index
+    %output_count = index.mul %queries, %outputs : index
+    %sv = buffer.view %scores[%zero] : buffer -> view<[%input_count]xf32>
+    %iv = buffer.view %ids[%zero] : buffer -> view<[%input_count]xi32>
+    %os = buffer.view %out_scores[%zero] : buffer -> view<[%output_count]xf32>
+    %oi = buffer.view %out_ids[%zero] : buffer -> view<[%output_count]xi32>
+    %input_base = index.mul %query, %rows : index
+    %output_base = index.mul %query, %outputs : index
+    %group_base = index.mul %group, %k : index
+    %outbase = index.add %output_base, %group_base : index
+    %zero32 = scalar.constant 0 : i32
+    %first = scalar.cmpi ne, %first_arg, %zero32 : i32
+    %base_raw = index.cast %row_base_arg : i32 to index
+    %row_base = index.assume %base_raw [range(%base_raw, 0, 1073741823)] : index
+    %scratch_bytes = index.constant 8192 : offset
+    %scratch_s = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+    %scratch_i = buffer.alloca<workgroup> align(16) %scratch_bytes : buffer
+    %ss = buffer.view %scratch_s[%zero] : buffer -> view<2048xf32>
+    %ii = buffer.view %scratch_i[%zero] : buffer -> view<2048xi32>
+    %badbits = scalar.constant -8388608 : i32
+    %neg = scalar.bitcast %badbits : i32 to f32
+    %sentinel = scalar.constant 2147483647 : i32
+    scf.for %j = [%i0 to %i4 step %i1] unroll {
+      %off = index.mul %j, %c256 : index
+      %local = index.add %tid, %off : index
+      view.store %neg, %ss[%local] : f32, view<2048xf32>
+      view.store %sentinel, %ii[%local] : i32, view<2048xi32>
+    }
+    scf.for %chunk = [%i0 to %length step %c1024] {
+      scf.for %j = [%i0 to %i4 step %i1] unroll {
+        %off = index.mul %j, %c256 : index
+        %local = index.add %tid, %off : index
+        %relative = index.add %chunk, %local : index
+        %row = index.add %base, %relative : index
+        %valid = index.cmp ult, %row, %rows : index
+        %safe = scf.select %valid, %row, %i0 : index
+        %at0 = index.add %input_base, %safe : index
+        %at = index.assume %at0 [range(%at0, 0, 16777215), lt(%at0, %input_count)] : index
+        %value = view.load %sv[%at] : view<[%input_count]xf32> -> f32
+        %id0 = scf.if %first -> (i32) {
+          %global = index.add %row_base, %safe : index
+          %id = index.cast %global : index to i32
+          scf.yield %id : i32
+        } else {
+          %id = view.load %iv[%at] : view<[%input_count]xi32> -> i32
+          scf.yield %id : i32
+        }
+        %ordered = scalar.cmpf ord, %value, %value : f32
+        %live = scalar.andi %valid, %ordered : i1
+        %s = scf.select %live, %value, %neg : f32
+        %id = scf.select %valid, %id0, %sentinel : i32
+        %slot = index.add %local, %c1024 : index
+        %to = index.assume %slot [range(%slot, 1024, 2047)] : index
+        view.store %s, %ss[%to] : f32, view<2048xf32>
+        view.store %id, %ii[%to] : i32, view<2048xi32>
+      }
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      template.apply<@db.sort2048>(%scratch_s, %scratch_i, %tid) : (buffer, buffer, index) -> ()
+    }
+    scf.for %j = [%i0 to %i4 step %i1] unroll {
+      %off = index.mul %j, %c256 : index
+      %local = index.add %tid, %off : index
+      %valid = index.cmp ult, %local, %k : index
+      scf.if %valid {
+        %at0 = index.add %outbase, %local : index
+        %at = index.assume %at0 [range(%at0, 0, 16777215), lt(%at0, %output_count)] : index
+        %s = view.load %ss[%local] : view<2048xf32> -> f32
+        %id = view.load %ii[%local] : view<2048xi32> -> i32
+        view.store %s, %os[%at] : f32, view<[%output_count]xf32>
+        view.store %id, %oi[%at] : i32, view<[%output_count]xi32>
+      }
+    }
+  }
+  kernel.return
+}
