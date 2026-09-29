@@ -212,18 +212,26 @@ fn compare_batch_optimized() -> Result<()> {
     compare_batch_kernels(Comparison::Combined)
 }
 
+#[test]
+#[ignore = "requires gfx1151; run alone to measure performance"]
+fn compare_batch_pipeline() -> Result<()> {
+    compare_batch_kernels(Comparison::Pipeline)
+}
+
 #[derive(PartialEq)]
 enum Comparison {
     Scan,
     Selection,
     Replay,
     Combined,
+    Pipeline,
 }
 
 fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     let selection = matches!(comparison, Comparison::Selection | Comparison::Combined);
     let replay = matches!(comparison, Comparison::Replay | Comparison::Combined);
-    let cached = var("CACHED_GRAPHS", 0) != 0;
+    let pipeline = comparison == Comparison::Pipeline;
+    let cached = pipeline || var("CACHED_GRAPHS", 0) != 0;
     let padded_baseline = var("PADDED_SELECTION_BASELINE", 0) != 0;
     let rows = var("ROWS", 6_909_092);
     let dim = var("DIM", 384);
@@ -232,7 +240,11 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     let samples = var("SAMPLES", 15);
     assert!(rows > 0 && samples > 0 && (2..=MAX_BATCH).contains(&batch));
     assert!(
-        batch <= 64 || selection || replay || std::env::var_os("BASELINE_SOURCE").is_some(),
+        batch <= 64
+            || selection
+            || replay
+            || pipeline
+            || std::env::var_os("BASELINE_SOURCE").is_some(),
         "the historical scan supports up to 64 queries; use compare_batch_chunks or supply a compatible BASELINE_SOURCE"
     );
     let device = Device::open(0)?;
@@ -244,6 +256,10 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     baseline.batch.as_mut().unwrap().immediate = !cached;
     candidate.batch.as_mut().unwrap().immediate = !(replay || cached);
     baseline.batch.as_mut().unwrap().padded_selection = padded_baseline;
+    // A scan-only experiment must replace every tile's scan. A pipeline
+    // comparison also retains the unfused reference's separate compaction.
+    baseline.batch.as_mut().unwrap().separate_compact = comparison == Comparison::Scan || pipeline;
+    candidate.batch.as_mut().unwrap().separate_compact = comparison == Comparison::Scan;
     let width = batch.next_power_of_two().max(8);
     let source = |name: &str, default: &str| -> Result<String> {
         match std::env::var(name) {
@@ -267,7 +283,7 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         "BASELINE_SOURCE",
         if selection {
             include_str!("../tests/fixtures/select_two_reductions.loom")
-        } else if replay {
+        } else if replay || pipeline {
             kernels::BATCH_SCAN
         } else {
             include_str!("../tests/fixtures/batch_scan_columns.loom")
@@ -320,6 +336,42 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
     }
     let mut candidate_report = reports.pop().unwrap();
     let mut baseline_report = reports.pop().unwrap();
+    if pipeline {
+        let threshold = source("BASELINE_THRESHOLD_SOURCE", kernels::THRESHOLD)?;
+        for symbol in ["threshold_compact", "candidate_merge", "overflow_reduce"] {
+            let spec =
+                hrx::loom::Specialization::new(symbol).with_report(hrx::loom::ReportMode::Details);
+            let (kernel, report) = compile(&baseline.compiler, &baseline.stream, &threshold, spec)?;
+            let plan = baseline
+                .batch
+                .as_mut()
+                .unwrap()
+                .plans
+                .iter_mut()
+                .find(|p| p.width == width)
+                .unwrap();
+            match symbol {
+                "threshold_compact" => plan.compact = kernel,
+                "candidate_merge" => plan.candidate_merge = kernel,
+                _ => plan.overflow_reduce = kernel,
+            }
+            baseline_report.push(report);
+        }
+        candidate_report.extend(
+            candidate
+                .detailed_compilation_reports()?
+                .into_iter()
+                .filter(|r| {
+                    matches!(
+                        r.symbol.as_str(),
+                        "batch_scan_pruned"
+                            | "candidate_merge"
+                            | "overflow_reduce"
+                            | "threshold_compact"
+                    )
+                }),
+        );
+    }
     let mut times = [Vec::new(), Vec::new()];
     let half = [
         fp16_queries("BASELINE_QUERY_PRECISION", &baseline_report[0], selection)?,
@@ -460,7 +512,7 @@ fn compare_batch_kernels(comparison: Comparison) -> Result<()> {
         "candidate_scan_workgroup": scan_blocks[1],
         "validation": "All returned scores versus FP64 CPU reference for each arm's query precision (3e-6); finite, unique, ordered IDs. Same precision requires exact IDs/score bits. Different precisions allow rank scores and every final-tile score to differ by at most 2^-11.",
         "baseline_samples_ms": times[0], "candidate_samples_ms": times[1],
-        "kernel_family": if selection { "select" } else { "batch_scan" },
+        "kernel_family": if pipeline { "batch_pipeline" } else if selection { "select" } else { "batch_scan" },
         "baseline_submission": if cached { "cached_graph" } else { "immediate" },
         "candidate_submission": if replay || cached { "cached_graph" } else { "immediate" },
         "baseline_padded_selection": padded_baseline,

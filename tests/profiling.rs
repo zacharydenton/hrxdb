@@ -129,8 +129,9 @@ fn profile_tracks_tiles_and_snapshot_changes_and_empty_work() -> Result<()> {
             }
         }
         if db.len() > 262_144 {
-            assert!(profile.stages["batch_scan"].commands > 1);
-            assert!(profile.stages.contains_key("threshold_compact"));
+            assert_eq!(profile.stages["batch_scan"].commands, 1);
+            assert!(profile.stages.contains_key("batch_scan_pruned"));
+            assert!(!profile.stages.contains_key("threshold_compact"));
             assert!(profile.stages.contains_key("candidate_merge"));
         }
     }

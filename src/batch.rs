@@ -45,12 +45,16 @@ pub(crate) struct BatchScratch {
     immediate: bool,
     #[cfg(test)]
     padded_selection: bool,
+    #[cfg(test)]
+    separate_compact: bool,
 }
 
 struct BatchPlan {
     width: usize,
     scan: Kernel,
+    scan_pruned: Kernel,
     selections: std::collections::HashMap<usize, crate::selection::SelectionPlan>,
+    #[cfg(test)]
     compact: Kernel,
     overflow_reduce: Kernel,
     candidate_merge: Kernel,
@@ -83,6 +87,8 @@ impl BatchScratch {
             immediate: false,
             #[cfg(test)]
             padded_selection: false,
+            #[cfg(test)]
+            separate_compact: false,
         })
     }
 
@@ -235,7 +241,7 @@ impl Searcher {
         let mut reports = Vec::new();
         let mut build = |source, mut spec: hrx::loom::Specialization, queries: usize| {
             spec.set_config("db.batch", queries.to_string());
-            if spec.symbol() != "batch_scan" {
+            if !spec.symbol().starts_with("batch_scan") {
                 spec.set_config("db.select.limit", TILE_ROWS.to_string());
             }
             let (kernel, report) = compile(&self.compiler, &self.stream, source, spec)?;
@@ -245,6 +251,9 @@ impl Searcher {
         let mut scan_spec = kernels::named_spec("batch_scan");
         scan_spec.set_config("db.scan.dimensions", self.padded.to_string());
         let scan = build(kernels::BATCH_SCAN, scan_spec, width)?;
+        let mut pruned_spec = kernels::named_spec("batch_scan_pruned");
+        pruned_spec.set_config("db.scan.dimensions", self.padded.to_string());
+        let scan_pruned = build(kernels::BATCH_SCAN, pruned_spec, width)?;
         let mut pruned = |symbol: &str| {
             let mut spec = hrx::loom::Specialization::new(symbol);
             spec.set_report(hrx::loom::ReportMode::Summary);
@@ -252,6 +261,7 @@ impl Searcher {
             reports.push(report);
             Ok::<_, Error>(kernel)
         };
+        #[cfg(test)]
         let compact = pruned("threshold_compact")?;
         let overflow_reduce = pruned("overflow_reduce")?;
         let candidate_merge = pruned("candidate_merge")?;
@@ -265,7 +275,9 @@ impl Searcher {
         self.batch.as_mut().unwrap().plans.push(BatchPlan {
             width,
             scan,
+            scan_pruned,
             selections: std::collections::HashMap::from([(query_count, selection)]),
+            #[cfg(test)]
             compact,
             overflow_reduce,
             candidate_merge,
@@ -600,24 +612,41 @@ impl BatchScratch {
                 constants.push(u32::from(exclusions.is_some()))?;
                 constants.push(start as u32)?;
                 constants.push(corpus.len() as u32)?;
+                let fused = started;
+                #[cfg(test)]
+                let fused = fused && !self.separate_compact;
+                let bindings = [
+                    shard.vectors(corpus.padded_dimensions(), local, rows)?,
+                    query,
+                    shard.inverse_norms(local, rows)?,
+                    exclusions.unwrap_or(self.scores.binding()),
+                    self.scores.binding(),
+                    self.running.0.binding(),
+                    self.pruned_counts.binding(),
+                    self.pruned.0.binding(),
+                    self.pruned.1.binding(),
+                ];
+                if fused {
+                    constants.push(queries as u32)?;
+                    constants.push(k as u32)?;
+                    constants.push(PRUNED as u32)?;
+                }
                 let scan_grid = [(rows.div_ceil(64) * width.div_ceil(64)) as u32, 1, 1];
                 // SAFETY: the tile belongs to this shard, has at most TILE_ROWS
                 // rows, and its dimensions match the compiled kernel. The query
                 // and score buffers reserve width rows. Norms use local row
                 // offsets; the exclusion bitmap uses global insertion IDs.
+                // Later tiles also read the immutable running k-th score and
+                // append at most PRUNED candidates per live query. All counters
+                // were reset by the previous tile's merge; dense scores remain
+                // available for the existing exact overflow reduction.
                 unsafe {
                     commands.dispatch(
-                        &plan.scan,
+                        if fused { &plan.scan_pruned } else { &plan.scan },
                         scan_grid,
                         plan.scan.info().workgroup_size,
                         &constants,
-                        &[
-                            shard.vectors(corpus.padded_dimensions(), local, rows)?,
-                            query,
-                            shard.inverse_norms(local, rows)?,
-                            exclusions.unwrap_or(self.scores.binding()),
-                            self.scores.binding(),
-                        ],
+                        if fused { &bindings } else { &bindings[..5] },
                     )?;
                 }
                 if !started {
@@ -633,29 +662,32 @@ impl BatchScratch {
                     started = true;
                     continue;
                 }
-                let mut compact = Constants::new();
-                compact.push(rows as u32)?;
-                compact.push(queries as u32)?;
-                compact.push(k as u32)?;
-                compact.push(start as u32)?;
-                compact.push(PRUNED as u32)?;
-                // SAFETY: scores hold queries*rows entries, the pruned buffers
-                // queries*PRUNED entries, and running holds queries*k entries.
-                // The previous tile's merge reset all counts before this one.
-                unsafe {
-                    commands.dispatch(
-                        &plan.compact,
-                        [rows.div_ceil(1024) as u32, queries as u32, 1],
-                        [256, 1, 1],
-                        &compact,
-                        &[
-                            self.scores.binding(),
-                            self.running.0.binding(),
-                            self.pruned_counts.binding(),
-                            self.pruned.0.binding(),
-                            self.pruned.1.binding(),
-                        ],
-                    )?;
+                #[cfg(test)]
+                if !fused {
+                    let mut compact = Constants::new();
+                    compact.push(rows as u32)?;
+                    compact.push(queries as u32)?;
+                    compact.push(k as u32)?;
+                    compact.push(start as u32)?;
+                    compact.push(PRUNED as u32)?;
+                    // SAFETY: scores hold queries*rows entries, the pruned
+                    // buffers queries*PRUNED, and running queries*k entries.
+                    // The preceding merge reset all counts before this tile.
+                    unsafe {
+                        commands.dispatch(
+                            &plan.compact,
+                            [rows.div_ceil(1024) as u32, queries as u32, 1],
+                            [256, 1, 1],
+                            &compact,
+                            &[
+                                self.scores.binding(),
+                                self.running.0.binding(),
+                                self.pruned_counts.binding(),
+                                self.pruned.0.binding(),
+                                self.pruned.1.binding(),
+                            ],
+                        )?;
+                    }
                 }
                 // Overflowed queries reduce disjoint 4,096-row blocks in
                 // parallel. Each pass keeps k per block, so the final merge

@@ -3,10 +3,10 @@
 // After the first tile each query holds a sorted running top-k, and its k-th
 // score is a bound no later row below it can beat: rows arrive in increasing
 // insertion ID, and ties rank the lower ID first, so an equal score also loses.
-// `threshold_compact` keeps only a tile's scores strictly above that bound,
-// appending them to a per-query candidate list; excluded rows are negative
-// infinity and NaN compares false, so neither survives. `candidate_merge` then
-// merges each query's few candidates into its running list, 1,024 at a time,
+// The scan appends scores strictly above that bound to per-query lists;
+// `threshold_compact` provides the separate benchmark control. Excluded rows
+// are negative infinity and NaN compares false, so neither survives.
+// `candidate_merge` merges candidates into the running list, up to 1,024 at a time,
 // and resets the query's count for the next tile. Nothing here sorts rows that
 // cannot enter the result, which is most of every tile after the first.
 //
@@ -71,6 +71,64 @@ template.def<@db.sort2048> @db.bitonic2048(%scores: buffer, %ids: buffer, %tid: 
         view.store %hs, %ss[%hi] : f32, view<2048xf32>
         view.store %li, %ii[%lo] : i32, view<2048xi32>
         view.store %hi_id, %ii[%hi] : i32, view<2048xi32>
+      }
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    }
+  }
+  template.return
+}
+
+// Small lists need only 128 entries; all threads reach each barrier.
+template.decl @db.sort128(%scores: buffer, %ids: buffer, %tid: index)
+template.def<@db.sort128> @db.bitonic128(%scores: buffer, %ids: buffer, %tid: index) {
+  %zero = index.constant 0 : offset
+  %i0 = index.constant 0 : index
+  %i1 = index.constant 1 : index
+  %i2 = index.constant 2 : index
+  %i8 = index.constant 8 : index
+  %c64 = index.constant 64 : index
+  %ss = buffer.view %scores[%zero] : buffer -> view<128xf32>
+  %ii = buffer.view %ids[%zero] : buffer -> view<128xi32>
+  %active = index.cmp ult, %tid, %c64 : index
+  scf.for %level = [%i1 to %i8 step %i1] {
+    %span = index.shli %i1, %level : index
+    scf.for %pass = [%i0 to %level step %i1] {
+      %remaining = index.sub %level, %pass : index
+      %shift = index.sub %remaining, %i1 : index
+      %stride0 = index.shli %i1, %shift : index
+      %stride = index.assume %stride0 [range(%stride0, 1, 64)] : index
+      %twice = index.mul %stride, %i2 : index
+      scf.if %active {
+        %block = index.shrui %tid, %shift : index
+        %mask = index.sub %stride, %i1 : index
+        %within = index.andi %tid, %mask : index
+        %begin = index.mul %block, %twice : index
+        %lo0 = index.add %begin, %within : index
+        %hi0 = index.add %lo0, %stride : index
+        %lo = index.assume %lo0 [range(%lo0, 0, 127)] : index
+        %hi = index.assume %hi0 [range(%hi0, 0, 127)] : index
+        %a = view.load %ss[%lo] : view<128xf32> -> f32
+        %b = view.load %ss[%hi] : view<128xf32> -> f32
+        %ai = view.load %ii[%lo] : view<128xi32> -> i32
+        %bi = view.load %ii[%hi] : view<128xi32> -> i32
+        %greater = scalar.cmpf ogt, %a, %b : f32
+        %equal = scalar.cmpf oeq, %a, %b : f32
+        %earlier = scalar.cmpi ult, %ai, %bi : i32
+        %tie = scalar.andi %equal, %earlier : i1
+        %before = scalar.ori %greater, %tie : i1
+        %direction = index.andi %lo, %span : index
+        %descending = index.cmp eq, %direction, %i0 : index
+        %true = scalar.constant 1 : i1
+        %opposite = scalar.xori %before, %true : i1
+        %keep = scf.select %descending, %before, %opposite : i1
+        %ls = scf.select %keep, %a, %b : f32
+        %hs = scf.select %keep, %b, %a : f32
+        %li = scf.select %keep, %ai, %bi : i32
+        %hi_id = scf.select %keep, %bi, %ai : i32
+        view.store %ls, %ss[%lo] : f32, view<128xf32>
+        view.store %hs, %ss[%hi] : f32, view<128xf32>
+        view.store %li, %ii[%lo] : i32, view<128xi32>
+        view.store %hi_id, %ii[%hi] : i32, view<128xi32>
       }
       kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
     }
@@ -163,9 +221,9 @@ kernel.def target(@target) export("threshold_compact") @threshold_compact(%rows_
   kernel.return
 }
 
-// One workgroup per query. The running list and each chunk of up to 1,024
-// candidates share one 2,048-entry bitonic sort, after which the first k
-// entries are the merged list. A query with no candidates returns at once.
+// One workgroup per query. Lists with k <= 64 and at most 64 candidates use a
+// 128-entry sort. Otherwise the running list and chunks of up to 1,024 candidates
+// use a 2,048-entry sort. A query with no candidates returns at once.
 kernel.def target(@target) export("candidate_merge") @candidate_merge(%queries_arg: i32) {
   %one = index.constant 1 : index
   %threads = index.constant 256 : index
@@ -222,69 +280,117 @@ kernel.def target(@target) export("candidate_merge") @candidate_merge(%queries_a
     %running_base = index.mul %query, %k : index
     %candidate_base = index.mul %query, %capacity : index
     %score_base = index.mul %query, %rows : index
-    // The running list fills the first half, padded past k.
-    scf.for %j = [%i0 to %i4 step %i1] unroll {
-      %off = index.mul %j, %c256 : index
-      %local = index.add %tid, %off : index
-      %valid = index.cmp ult, %local, %k : index
-      %safe = scf.select %valid, %local, %i0 : index
-      %at0 = index.add %running_base, %safe : index
-      %at = index.assume %at0 [range(%at0, 0, 262143), lt(%at0, %running_count)] : index
-      %s0 = view.load %rs[%at] : view<[%running_count]xf32> -> f32
-      %i0v = view.load %ri[%at] : view<[%running_count]xi32> -> i32
-      %s = scf.select %valid, %s0, %neg : f32
-      %id = scf.select %valid, %i0v, %sentinel : i32
-      view.store %s, %ss[%local] : f32, view<2048xf32>
-      view.store %id, %ii[%local] : i32, view<2048xi32>
-    }
-    scf.for %chunk = [%i0 to %sources step %c1024] {
-      // Candidates fill the second half; the first half already holds the
-      // best 1,024 of everything merged so far, a superset of the top k.
+    %c64 = index.constant 64 : index
+    %small_k = index.cmp ule, %k, %c64 : index
+    %few = index.cmp ule, %n, %c64 : index
+    %within_capacity = index.cmp ule, %n, %capacity : index
+    %small_list = scalar.andi %small_k, %few : i1
+    %small = scalar.andi %small_list, %within_capacity : i1
+    scf.if %small {
+      %small_s = buffer.view %scratch_s[%zero] : buffer -> view<128xf32>
+      %small_i = buffer.view %scratch_i[%zero] : buffer -> view<128xi32>
+      %active = index.cmp ult, %tid, %c64 : index
+      scf.if %active {
+        %local = index.assume %tid [range(%tid, 0, 63)] : index
+        %valid_r = index.cmp ult, %local, %k : index
+        %safe_r = scf.select %valid_r, %local, %i0 : index
+        %r0 = index.add %running_base, %safe_r : index
+        %r = index.assume %r0 [range(%r0, 0, 262143), lt(%r0, %running_count)] : index
+        %rscore = view.load %rs[%r] : view<[%running_count]xf32> -> f32
+        %rid = view.load %ri[%r] : view<[%running_count]xi32> -> i32
+        %sr = scf.select %valid_r, %rscore, %neg : f32
+        %ir = scf.select %valid_r, %rid, %sentinel : i32
+        %valid_c = index.cmp ult, %local, %n : index
+        %safe_c = scf.select %valid_c, %local, %i0 : index
+        %c0 = index.add %candidate_base, %safe_c : index
+        %c = index.assume %c0 [range(%c0, 0, 16777215), lt(%c0, %candidate_count)] : index
+        %cscore = view.load %cs[%c] : view<[%candidate_count]xf32> -> f32
+        %cid = view.load %ci[%c] : view<[%candidate_count]xi32> -> i32
+        %sc = scf.select %valid_c, %cscore, %neg : f32
+        %ic = scf.select %valid_c, %cid, %sentinel : i32
+        %slot = index.add %local, %c64 : index
+        view.store %sr, %small_s[%local] : f32, view<128xf32>
+        view.store %ir, %small_i[%local] : i32, view<128xi32>
+        view.store %sc, %small_s[%slot] : f32, view<128xf32>
+        view.store %ic, %small_i[%slot] : i32, view<128xi32>
+      }
+      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+      template.apply<@db.sort128>(%scratch_s, %scratch_i, %tid) : (buffer, buffer, index) -> ()
+      %keep = index.cmp ult, %tid, %k : index
+      scf.if %keep {
+        %local = index.assume %tid [range(%tid, 0, 63)] : index
+        %at0 = index.add %running_base, %local : index
+        %at = index.assume %at0 [range(%at0, 0, 262143), lt(%at0, %running_count)] : index
+        %score = view.load %small_s[%local] : view<128xf32> -> f32
+        %id = view.load %small_i[%local] : view<128xi32> -> i32
+        view.store %score, %rs[%at] : f32, view<[%running_count]xf32>
+        view.store %id, %ri[%at] : i32, view<[%running_count]xi32>
+      }
+    } else {
+      // The running list fills the first half, padded past k.
       scf.for %j = [%i0 to %i4 step %i1] unroll {
         %off = index.mul %j, %c256 : index
         %local = index.add %tid, %off : index
-        %source = index.add %chunk, %local : index
-        %valid = index.cmp ult, %source, %sources : index
-        %s, %id = scf.if %overflowed -> (f32, i32) {
-          %safe = scf.select %valid, %source, %i0 : index
-          %r = index.assume %safe [range(%safe, 0, 262143), lt(%safe, %rows)] : index
-          %at0 = index.add %score_base, %r : index
-          %at = index.assume %at0 [range(%at0, 0, 67108863), lt(%at0, %score_count)] : index
-          %s0 = view.load %sv[%at] : view<[%score_count]xf32> -> f32
-          %id0 = view.load %iv[%at] : view<[%score_count]xi32> -> i32
-          %s1 = scf.select %valid, %s0, %neg : f32
-          %id1 = scf.select %valid, %id0, %sentinel : i32
-          scf.yield %s1, %id1 : f32, i32
-        } else {
-          %safe = scf.select %valid, %source, %i0 : index
-          %at0 = index.add %candidate_base, %safe : index
-          %at = index.assume %at0 [range(%at0, 0, 16777215), lt(%at0, %candidate_count)] : index
-          %s0 = view.load %cs[%at] : view<[%candidate_count]xf32> -> f32
-          %i0v = view.load %ci[%at] : view<[%candidate_count]xi32> -> i32
-          %s1 = scf.select %valid, %s0, %neg : f32
-          %id1 = scf.select %valid, %i0v, %sentinel : i32
-          scf.yield %s1, %id1 : f32, i32
-        }
-        %slot = index.add %local, %c1024 : index
-        %to = index.assume %slot [range(%slot, 1024, 2047)] : index
-        view.store %s, %ss[%to] : f32, view<2048xf32>
-        view.store %id, %ii[%to] : i32, view<2048xi32>
-      }
-      kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
-      template.apply<@db.sort2048>(%scratch_s, %scratch_i, %tid) : (buffer, buffer, index) -> ()
-    }
-    scf.for %j = [%i0 to %i4 step %i1] unroll {
-      %off = index.mul %j, %c256 : index
-      %local = index.add %tid, %off : index
-      %valid = index.cmp ult, %local, %k : index
-      scf.if %valid {
-        %at0 = index.add %running_base, %local : index
+        %valid = index.cmp ult, %local, %k : index
+        %safe = scf.select %valid, %local, %i0 : index
+        %at0 = index.add %running_base, %safe : index
         %at = index.assume %at0 [range(%at0, 0, 262143), lt(%at0, %running_count)] : index
-        %local_at = index.assume %local [range(%local, 0, 1023)] : index
-        %s = view.load %ss[%local_at] : view<2048xf32> -> f32
-        %id = view.load %ii[%local_at] : view<2048xi32> -> i32
-        view.store %s, %rs[%at] : f32, view<[%running_count]xf32>
-        view.store %id, %ri[%at] : i32, view<[%running_count]xi32>
+        %s0 = view.load %rs[%at] : view<[%running_count]xf32> -> f32
+        %i0v = view.load %ri[%at] : view<[%running_count]xi32> -> i32
+        %s = scf.select %valid, %s0, %neg : f32
+        %id = scf.select %valid, %i0v, %sentinel : i32
+        view.store %s, %ss[%local] : f32, view<2048xf32>
+        view.store %id, %ii[%local] : i32, view<2048xi32>
+      }
+      scf.for %chunk = [%i0 to %sources step %c1024] {
+        // Candidates fill the second half; the first half already holds the
+        // best 1,024 of everything merged so far, a superset of the top k.
+        scf.for %j = [%i0 to %i4 step %i1] unroll {
+          %off = index.mul %j, %c256 : index
+          %local = index.add %tid, %off : index
+          %source = index.add %chunk, %local : index
+          %valid = index.cmp ult, %source, %sources : index
+          %s, %id = scf.if %overflowed -> (f32, i32) {
+            %safe = scf.select %valid, %source, %i0 : index
+            %r = index.assume %safe [range(%safe, 0, 262143), lt(%safe, %rows)] : index
+            %at0 = index.add %score_base, %r : index
+            %at = index.assume %at0 [range(%at0, 0, 67108863), lt(%at0, %score_count)] : index
+            %s0 = view.load %sv[%at] : view<[%score_count]xf32> -> f32
+            %id0 = view.load %iv[%at] : view<[%score_count]xi32> -> i32
+            %s1 = scf.select %valid, %s0, %neg : f32
+            %id1 = scf.select %valid, %id0, %sentinel : i32
+            scf.yield %s1, %id1 : f32, i32
+          } else {
+            %safe = scf.select %valid, %source, %i0 : index
+            %at0 = index.add %candidate_base, %safe : index
+            %at = index.assume %at0 [range(%at0, 0, 16777215), lt(%at0, %candidate_count)] : index
+            %s0 = view.load %cs[%at] : view<[%candidate_count]xf32> -> f32
+            %i0v = view.load %ci[%at] : view<[%candidate_count]xi32> -> i32
+            %s1 = scf.select %valid, %s0, %neg : f32
+            %id1 = scf.select %valid, %i0v, %sentinel : i32
+            scf.yield %s1, %id1 : f32, i32
+          }
+          %slot = index.add %local, %c1024 : index
+          %to = index.assume %slot [range(%slot, 1024, 2047)] : index
+          view.store %s, %ss[%to] : f32, view<2048xf32>
+          view.store %id, %ii[%to] : i32, view<2048xi32>
+        }
+        kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+        template.apply<@db.sort2048>(%scratch_s, %scratch_i, %tid) : (buffer, buffer, index) -> ()
+      }
+      scf.for %j = [%i0 to %i4 step %i1] unroll {
+        %off = index.mul %j, %c256 : index
+        %local = index.add %tid, %off : index
+        %valid = index.cmp ult, %local, %k : index
+        scf.if %valid {
+          %at0 = index.add %running_base, %local : index
+          %at = index.assume %at0 [range(%at0, 0, 262143), lt(%at0, %running_count)] : index
+          %local_at = index.assume %local [range(%local, 0, 1023)] : index
+          %s = view.load %ss[%local_at] : view<2048xf32> -> f32
+          %id = view.load %ii[%local_at] : view<2048xi32> -> i32
+          view.store %s, %rs[%at] : f32, view<[%running_count]xf32>
+          view.store %id, %ri[%at] : i32, view<[%running_count]xi32>
+        }
       }
     }
     %leader = index.cmp eq, %tid, %i0 : index

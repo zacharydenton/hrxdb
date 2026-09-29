@@ -7,6 +7,11 @@ fn threshold_capacity_boundaries_overflow_and_replay_match_cpu() -> Result<()> {
     // At/below/above capacity, a partial reduction block, and a full tile that
     // needs three reduction levels at k=1024. All scores are exactly -1/0/1.
     for (tile, survivors) in [
+        (8192, 0),
+        (8192, 1),
+        (8192, 63),
+        (8192, 64),
+        (8192, 65),
         (8192, 4095),
         (8192, 4096),
         (8192, 4097),
@@ -29,7 +34,7 @@ fn threshold_capacity_boundaries_overflow_and_replay_match_cpu() -> Result<()> {
         let mut db = Searcher::build(&device, 3, &rows)?;
         db.reserve_batch(3, 1024)?;
         db.batch.as_mut().unwrap().tile_rows = tile;
-        for k in [1, 5, 32, 33, 1024] {
+        for k in [1, 5, 32, 33, 50, 64, 65, 1024] {
             // Reorder queries between replays of the same graph. Counts move
             // between overflowing, compacted and empty query slots.
             for axes in [[0, 1, 2], [2, 0, 1]] {

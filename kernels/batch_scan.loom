@@ -15,24 +15,47 @@
 // for the left operand, queries as [k][query] for the right. Query slots past
 // the batch width stage zeros and are never stored. Results publish through
 // LDS so each lane writes eight adjacent rows of one query's scores.
+// The first tile publishes dense scores. Later tiles also append scores above
+// the immutable running k-th bound; dense output remains the overflow fallback.
+// Compile-time template selection keeps that work out of the first-tile kernel.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
 config.decl @db.batch : %value: index where [range(%value, 8, 256), mul(%value, 8)]
 config.decl @db.scan.dimensions : %value: index where [range(%value, 128, 16384), mul(%value, 128)]
-kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
-  %one = index.constant 1 : index
-  %threads = index.constant 256 : index
-  %rows = index.constant 64 : index
-  %extra = index.constant 63 : index
-  %raw = index.cast %count_arg : i32 to index
-  %count = index.assume %raw [range(%raw, 1, 262144)] : index
-  %rounded = index.add %count, %extra : index
-  %groups = index.div %rounded, %rows : index
-  %batch = config.get @db.batch : index
-  %batch_rounded = index.add %batch, %extra : index
-  %query_groups = index.div %batch_rounded, %rows : index
-  %total_groups = index.mul %groups, %query_groups : index
-  kernel.launch.config workgroups(%total_groups, %one, %one) workgroup_size(%threads, %one, %one) : index
-} launch(%count_arg: i32, %masked_arg: i32, %row_base_arg: i32, %total_arg: i32, %data: buffer, %queries: buffer, %norms: buffer, %bitmap: buffer, %scores: buffer) {
+template.decl @db.batch.keep(%prune: index, %score: f32, %threshold: f32, %query: index, %row: index, %global_base: index, %capacity_arg: i32, %counts: buffer, %candidate_scores: buffer, %candidate_ids: buffer)
+template.def<@db.batch.keep> @db.batch.dense(%prune: index, %score: f32, %threshold: f32, %query: index, %row: index, %global_base: index, %capacity_arg: i32, %counts: buffer, %candidate_scores: buffer, %candidate_ids: buffer) where [eq(%prune, 0)] {
+  template.return
+}
+template.def<@db.batch.keep> @db.batch.pruned(%prune: index, %score: f32, %threshold: f32, %query: index, %row: index, %global_base: index, %capacity_arg: i32, %counts: buffer, %candidate_scores: buffer, %candidate_ids: buffer) where [eq(%prune, 1)] {
+  %above = scalar.cmpf ogt, %score, %threshold : f32
+  scf.if %above {
+    %zero = index.constant 0 : offset
+    %width = config.get @db.batch : index
+    %capacity0 = index.cast %capacity_arg : i32 to index
+    %capacity = index.assume %capacity0 [range(%capacity0, 1, 65536)] : index
+    %size = index.mul %width, %capacity : index
+    %nv = buffer.view %counts[%zero] : buffer -> view<[%width]xi32>
+    %sv = buffer.view %candidate_scores[%zero] : buffer -> view<[%size]xf32>
+    %iv = buffer.view %candidate_ids[%zero] : buffer -> view<[%size]xi32>
+    %one = scalar.constant 1 : i32
+    %slot32 = view.atomic.rmw<addi> %one, %nv[%query] {ordering = relaxed, scope = device} : i32, view<[%width]xi32> -> i32
+    %slot0 = index.cast %slot32 : i32 to index
+    %fits = index.cmp ult, %slot0, %capacity : index
+    scf.if %fits {
+      %slot = index.assume %slot0 [range(%slot0, 0, 65535), lt(%slot0, %capacity)] : index
+      %base = index.mul %query, %capacity : index
+      %out0 = index.add %base, %slot : index
+      %out = index.assume %out0 [range(%out0, 0, 16777215), lt(%out0, %size)] : index
+      %global = index.add %global_base, %row : index
+      %id = index.cast %global : index to i32
+      view.store %score, %sv[%out] : f32, view<[%size]xf32>
+      view.store %id, %iv[%out] : i32, view<[%size]xi32>
+    }
+  }
+  template.return
+}
+
+template.decl @db.batch.scan(%prune: index, %count_arg: i32, %masked_arg: i32, %row_base_arg: i32, %total_arg: i32, %queries_arg: i32, %k_arg: i32, %capacity_arg: i32, %data: buffer, %queries: buffer, %norms: buffer, %bitmap: buffer, %scores: buffer, %running: buffer, %counts: buffer, %candidate_scores: buffer, %candidate_ids: buffer)
+template.def<@db.batch.scan> @db.batch.wmma(%prune: index, %count_arg: i32, %masked_arg: i32, %row_base_arg: i32, %total_arg: i32, %queries_arg: i32, %k_arg: i32, %capacity_arg: i32, %data: buffer, %queries: buffer, %norms: buffer, %bitmap: buffer, %scores: buffer, %running: buffer, %counts: buffer, %candidate_scores: buffer, %candidate_ids: buffer) {
   %zero = index.constant 0 : offset
   %c0 = index.constant 0 : index
   %c1 = index.constant 1 : index
@@ -187,38 +210,131 @@ kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
     %live = index.cmp ult, %query0, %batch : index
     scf.if %live {
       %query = index.assume %query0 [range(%query0, 0, 255), lt(%query0, %batch)] : index
-      scf.for %i = [%c0 to %c8 step %c1] unroll {
-        %local = index.add %lane_row, %i : index
-        %row = index.add %first_row, %i : index
-        %valid = index.cmp ult, %row, %count : index
-        scf.if %valid {
-          %at = index.assume %row [range(%row, 0, 262143), lt(%row, %count)] : index
+      %pruning = index.cmp eq, %prune, %c1 : index
+      %threshold = scf.if %pruning -> (f32) {
+        %n0 = index.cast %queries_arg : i32 to index
+        %n = index.assume %n0 [range(%n0, 1, 256)] : index
+        %active = index.cmp ult, %query, %n : index
+        %bound = scf.if %active -> (f32) {
+          %k0 = index.cast %k_arg : i32 to index
+          %topk = index.assume %k0 [range(%k0, 1, 1024)] : index
+          %size = index.mul %n, %topk : index
+          %rv = buffer.view %running[%zero] : buffer -> view<[%size]xf32>
+          %base = index.mul %query, %topk : index
+          %end = index.add %base, %topk : index
+          %last0 = index.sub %end, %c1 : index
+          %last = index.assume %last0 [range(%last0, 0, 262143), lt(%last0, %size)] : index
+          %value = view.load %rv[%last] : view<[%size]xf32> -> f32
+          scf.yield %value : f32
+        } else {
+          %inf = scalar.constant 0x7f800000 : i32
+          %value = scalar.bitcast %inf : i32 to f32
+          scf.yield %value : f32
+        }
+        scf.yield %bound : f32
+      } else {
+        %value = scalar.constant 0.0 : f32
+        scf.yield %value : f32
+      }
+      %row_end = index.add %first_row, %c8 : index
+      %full = index.cmp ule, %row_end, %count : index
+      %unmasked = scalar.cmpi eq, %masked_arg, %zero_i32 : i32
+      %fast = scalar.andi %full, %unmasked : i1
+      scf.if %fast {
+        // Gather before publishing, so consecutive stores do not interleave
+        // with norm loads. Masked rows and partial packets use the scalar path.
+        %at = index.assume %first_row [range(%first_row, 0, 262136), lt(%first_row, %count)] : index
+        %inverses = vector.load %nv[%at] : view<[%count]xf32> -> vector<8xf32>
+        %packed = scf.for %i = [%c0 to %c8 step %c1](%values = %zero_acc : vector<8xf32>) -> (vector<8xf32>) unroll {
+          %local = index.add %lane_row, %i : index
           %sum = view.load %result[%local, %lane_col] : view<16x16xf32> -> f32
-          %inverse = view.load %nv[%at] : view<[%count]xf32> -> f32
-          %cosine = scalar.mulf %sum, %inverse : f32
-          %excluded = scf.if %masked -> (i1) {
-            %global0 = index.add %global_base, %at : index
-            %global = index.assume %global0 [range(%global0, 0, 1073741823), lt(%global0, %total)] : index
-            %word0 = index.div %global, %c32 : index
-            %word = index.assume %word0 [range(%word0, 0, 33554431), lt(%word0, %words)] : index
-            %bit = index.rem %global, %c32 : index
-            %bits = view.load %bv[%word] : view<[%words]xi32> -> i32
-            %shift = index.cast %bit : index to i32
-            %shifted = scalar.shrui %bits, %shift : i32
-            %one = scalar.constant 1 : i32
-            %flag = scalar.andi %shifted, %one : i32
-            %test = scalar.cmpi ne, %flag, %zero_i32 : i32
-            scf.yield %test : i1
-          } else {
-            %no = scalar.constant false : i1
-            scf.yield %no : i1
+          %inverse = vector.extract %inverses[%i] : vector<8xf32> -> f32
+          %score = scalar.mulf %sum, %inverse : f32
+          %next = vector.insert %score into %values[%i] : f32, vector<8xf32>
+          scf.yield %next : vector<8xf32>
+        }
+        vector.store %packed, %sv[%query, %at] : vector<8xf32>, view<[%batch]x[%count]xf32>
+        scf.for %i = [%c0 to %c8 step %c1] unroll {
+          %score = vector.extract %packed[%i] : vector<8xf32> -> f32
+          %row = index.add %first_row, %i : index
+          template.apply<@db.batch.keep>(%prune, %score, %threshold, %query, %row, %global_base, %capacity_arg, %counts, %candidate_scores, %candidate_ids) : (index, f32, f32, index, index, index, i32, buffer, buffer, buffer) -> ()
+        }
+      } else {
+        scf.for %i = [%c0 to %c8 step %c1] unroll {
+          %local = index.add %lane_row, %i : index
+          %row = index.add %first_row, %i : index
+          %valid = index.cmp ult, %row, %count : index
+          scf.if %valid {
+            %at = index.assume %row [range(%row, 0, 262143), lt(%row, %count)] : index
+            %sum = view.load %result[%local, %lane_col] : view<16x16xf32> -> f32
+            %inverse = view.load %nv[%at] : view<[%count]xf32> -> f32
+            %cosine = scalar.mulf %sum, %inverse : f32
+            %excluded = scf.if %masked -> (i1) {
+              %global0 = index.add %global_base, %at : index
+              %global = index.assume %global0 [range(%global0, 0, 1073741823), lt(%global0, %total)] : index
+              %word0 = index.div %global, %c32 : index
+              %word = index.assume %word0 [range(%word0, 0, 33554431), lt(%word0, %words)] : index
+              %bit = index.rem %global, %c32 : index
+              %bits = view.load %bv[%word] : view<[%words]xi32> -> i32
+              %shift = index.cast %bit : index to i32
+              %shifted = scalar.shrui %bits, %shift : i32
+              %one = scalar.constant 1 : i32
+              %flag = scalar.andi %shifted, %one : i32
+              %test = scalar.cmpi ne, %flag, %zero_i32 : i32
+              scf.yield %test : i1
+            } else {
+              %no = scalar.constant false : i1
+              scf.yield %no : i1
+            }
+            %score = scf.select %excluded, %neg, %cosine : f32
+            view.store %score, %sv[%query, %at] : f32, view<[%batch]x[%count]xf32>
+            template.apply<@db.batch.keep>(%prune, %score, %threshold, %query, %row, %global_base, %capacity_arg, %counts, %candidate_scores, %candidate_ids) : (index, f32, f32, index, index, index, i32, buffer, buffer, buffer) -> ()
           }
-          %score = scf.select %excluded, %neg, %cosine : f32
-          view.store %score, %sv[%query, %at] : f32, view<[%batch]x[%count]xf32>
         }
       }
     }
     kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
   }
+  template.return
+}
+
+kernel.def target(@target) export("batch_scan") @batch_scan(%count_arg: i32) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %rows = index.constant 64 : index
+  %extra = index.constant 63 : index
+  %raw = index.cast %count_arg : i32 to index
+  %count = index.assume %raw [range(%raw, 1, 262144)] : index
+  %rounded = index.add %count, %extra : index
+  %groups = index.div %rounded, %rows : index
+  %batch = config.get @db.batch : index
+  %batch_rounded = index.add %batch, %extra : index
+  %query_groups = index.div %batch_rounded, %rows : index
+  %total_groups = index.mul %groups, %query_groups : index
+  kernel.launch.config workgroups(%total_groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%count_arg: i32, %masked_arg: i32, %row_base_arg: i32, %total_arg: i32, %data: buffer, %queries: buffer, %norms: buffer, %bitmap: buffer, %scores: buffer) {
+  %mode = index.constant 0 : index
+  %unused = scalar.constant 0 : i32
+  template.apply<@db.batch.scan>(%mode, %count_arg, %masked_arg, %row_base_arg, %total_arg, %unused, %unused, %unused, %data, %queries, %norms, %bitmap, %scores, %scores, %scores, %scores, %scores) : (index, i32, i32, i32, i32, i32, i32, i32, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer) -> ()
+  kernel.return
+}
+
+kernel.def target(@target) export("batch_scan_pruned") @batch_scan_pruned(%count_arg: i32) {
+  %one = index.constant 1 : index
+  %threads = index.constant 256 : index
+  %rows = index.constant 64 : index
+  %extra = index.constant 63 : index
+  %raw = index.cast %count_arg : i32 to index
+  %count = index.assume %raw [range(%raw, 1, 262144)] : index
+  %rounded = index.add %count, %extra : index
+  %groups = index.div %rounded, %rows : index
+  %batch = config.get @db.batch : index
+  %batch_rounded = index.add %batch, %extra : index
+  %query_groups = index.div %batch_rounded, %rows : index
+  %total_groups = index.mul %groups, %query_groups : index
+  kernel.launch.config workgroups(%total_groups, %one, %one) workgroup_size(%threads, %one, %one) : index
+} launch(%count_arg: i32, %masked_arg: i32, %row_base_arg: i32, %total_arg: i32, %queries_arg: i32, %k_arg: i32, %capacity_arg: i32, %data: buffer, %queries: buffer, %norms: buffer, %bitmap: buffer, %scores: buffer, %running: buffer, %counts: buffer, %candidate_scores: buffer, %candidate_ids: buffer) {
+  %mode = index.constant 1 : index
+  template.apply<@db.batch.scan>(%mode, %count_arg, %masked_arg, %row_base_arg, %total_arg, %queries_arg, %k_arg, %capacity_arg, %data, %queries, %norms, %bitmap, %scores, %running, %counts, %candidate_scores, %candidate_ids) : (index, i32, i32, i32, i32, i32, i32, i32, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer, buffer) -> ()
   kernel.return
 }

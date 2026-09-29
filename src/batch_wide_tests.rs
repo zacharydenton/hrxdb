@@ -70,7 +70,7 @@ fn wide_workspace_growth_snapshots_and_replay() -> Result<()> {
         for command in profile
             .commands
             .iter()
-            .filter(|c| c.operation == "batch_scan")
+            .filter(|c| c.operation.starts_with("batch_scan"))
         {
             let rows =
                 u32::from_le_bytes(command.constants.as_ref().unwrap()[..4].try_into().unwrap())
