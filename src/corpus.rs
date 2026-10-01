@@ -82,7 +82,7 @@ pub struct CorpusShardView<'a> {
     capacity: usize,
 }
 impl Corpus {
-    /// Context retained by [`Self::build_in`] or [`Self::build_fp16_in`].
+    /// Context retained by [`Self::build_in`], [`Self::build_fp16_in`] or [`Self::load_in`].
     /// Device-based constructors return `None`. Clones retain the same runtime.
     /// Corpus shards remain native buffers; coordinated tensor access uses
     /// [`Self::prepare_search`] and HRX's scoped GPU handoff.

@@ -47,6 +47,7 @@ mod corpus;
 mod host;
 use commands::Commands;
 mod kernels;
+mod persistence;
 mod storage;
 pub use storage::ResidentShard;
 mod device;

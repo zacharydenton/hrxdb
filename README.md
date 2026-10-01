@@ -74,6 +74,13 @@ of FP32 rows, normalizes and quantizes them, and uploads in bounded chunks.
 `Corpus::build_fp16` preserves supplied little-endian FP16 values and computes
 their inverse norms. Finite, nonzero rows are required.
 
+`corpus.save(path)` writes a versioned native file containing the padded FP16
+rows, FP32 inverse norms, and shard counts and capacities. Reload it with
+`Corpus::load_in(&context, path)`: 4 MiB reads overlap the preceding upload,
+without decoding floats or recomputing norms. Loading checks the file layout
+and length, and trusts the saved payload. Save to a temporary file and rename
+it to publish a replacement atomically; `save` itself overwrites its path.
+
 When an encoder already has an HRX `ModelContext`, use
 `Corpus::build_fp16_in(&context, dimensions, rows)` (or `build_in` for FP32).
 The corpus retains that context and uses its GPU and memory budget for native
@@ -102,6 +109,7 @@ After provisioning, `HRX_OFFLINE=1` prevents runtime downloads.
 | Search one query or a batch | `Searcher::search`, `search_batch` |
 | Reuse host result capacity | `search_into`, `search_batch_into`, `scores_into` |
 | Share one corpus across workers | `Corpus::clone`, `Corpus::searcher` |
+| Save and reload native storage | `Corpus::save`, `Corpus::load_in` |
 | Add rows to a live corpus | `Corpus::append`, `append_fp16`, `Searcher::set_corpus` |
 | Replace rows at existing IDs | `Corpus::update`, `update_fp16`, `Corpus::compact` |
 | Gather selected rows for a custom kernel | `Corpus::gather_into` |
