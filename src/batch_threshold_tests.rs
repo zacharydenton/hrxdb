@@ -131,7 +131,7 @@ fn overflow_preserves_varied_scores_across_reduction_blocks() -> Result<()> {
         .collect();
     for k in [1, 5, 33, 1024] {
         let batch = db.search_batch(&queries, k)?;
-        for (query, actual) in queries.chunks_exact(3).zip(batch) {
+        for (query, actual) in queries.as_chunks::<3>().0.iter().zip(batch) {
             assert_eq!(actual, db.search(query, k)?, "k={k}");
         }
     }

@@ -560,14 +560,14 @@ fn selection(c: &mut Criterion) {
         stream
             .read_blocking(running_scores.binding(), &mut bytes)
             .unwrap();
-        for list in bytes.chunks_exact(K * 4) {
-            for (rank, bytes) in list.chunks_exact(4).enumerate() {
+        for list in bytes.as_chunks::<{ K * 4 }>().0 {
+            for (rank, bytes) in list.as_chunks::<4>().0.iter().enumerate() {
                 let expected = if rank < survivors {
                     2.0 + (survivors - 1 - rank) as f32
                 } else {
                     1.0 - (rank - survivors) as f32 * 0.001
                 };
-                assert_eq!(f32::from_le_bytes(bytes.try_into().unwrap()), expected);
+                assert_eq!(f32::from_le_bytes(*bytes), expected);
             }
         }
         if let Some(reference_graph) = reference_graph {
@@ -621,8 +621,10 @@ fn selection(c: &mut Criterion) {
         stream.read_blocking(counts.binding(), &mut bytes).unwrap();
         assert!(
             bytes
-                .chunks_exact(4)
-                .all(|b| u32::from_le_bytes(b.try_into().unwrap()) == survivors as u32)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|b| u32::from_le_bytes(*b) == survivors as u32)
         );
         group.bench_function(format!("survivors{survivors}"), |b| {
             b.iter(|| replay(&mut stream, &mut graph))
