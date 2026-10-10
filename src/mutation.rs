@@ -84,15 +84,9 @@ impl Writer<'_> {
         Ok(staging)
     }
 
-    /// Copy between equal ranges, in pieces within the 4 GiB native limit.
+    /// HRX splits large logical ranges to fit the native queue's packet limits.
     fn copy(&self, destination: View<'_>, source: View<'_>) -> Result<()> {
-        const PIECE: usize = 1 << 30;
-        for at in (0..source.len()).step_by(PIECE) {
-            let bytes = PIECE.min(source.len() - at);
-            self.stream
-                .copy(destination.slice(at, bytes)?, source.slice(at, bytes)?)?;
-        }
-        Ok(())
+        self.stream.copy(destination, source)
     }
 
     /// Write staged rows to destination rows in one dispatch. `routes` pairs a
@@ -747,6 +741,47 @@ impl CorpusStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires gfx1151 and about 9 GiB of free memory"]
+    fn mutation_copy_crosses_four_gib_with_offset_views() -> Result<()> {
+        let mut stream = Stream::open()?;
+        let bytes = (1usize << 32) + 257;
+        let offset = 256;
+        let source = stream.allocate(bytes + offset * 2)?;
+        let destination = stream.allocate(bytes + offset * 2)?;
+        stream.fill(source.binding(), 0x37)?;
+        stream.fill(destination.binding(), 0xa5)?;
+        let probes = [0, (1 << 30) - 16, (1usize << 32) - 16, bytes - 32];
+        for (index, &at) in probes.iter().enumerate() {
+            stream.fill(source.try_slice(offset + at, 32)?, index as u8)?;
+        }
+        let mut scatter = None;
+        let mut writer = Writer {
+            stream: &mut stream,
+            scatter: &mut scatter,
+            padded: 128,
+            allocations: Vec::new(),
+            staging: Vec::new(),
+        };
+        writer.copy(
+            destination.try_slice(offset, bytes)?,
+            source.try_slice(offset, bytes)?,
+        )?;
+        writer.synchronize()?;
+        let mut actual = [0; 32];
+        for (index, &at) in probes.iter().enumerate() {
+            stream.read_blocking(destination.try_slice(offset + at, 32)?, &mut actual)?;
+            assert_eq!(actual, [index as u8; 32], "copy offset {at}");
+        }
+        for at in [0, offset + bytes] {
+            stream.read_blocking(destination.try_slice(at, 32)?, &mut actual)?;
+            assert_eq!(actual, [0xa5; 32], "destination guard {at}");
+        }
+        stream.read_blocking(destination.try_slice(offset + 4096, 32)?, &mut actual)?;
+        assert_eq!(actual, [0x37; 32]);
+        Ok(())
+    }
 
     fn row(i: usize, d: usize) -> Vec<f32> {
         (0..d)

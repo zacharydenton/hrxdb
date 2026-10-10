@@ -2,6 +2,9 @@
 
 ## Unreleased — cached native GPU memory, prepared search, live snapshots
 
+- Use HRX 0.10.1 and cache the compiler's launch geometry for each scan variant.
+  Let HRX split large mutation copies to fit native queue limits; cover copies
+  beyond 4 GiB, offset views and destination guards in a hardware test.
 - Support up to 256 queries in host, device and prepared search, profiling,
   and standalone `TopK`. Schedule adjacent 64-query WMMA blocks over the same
   corpus rows without increasing per-workgroup register or shared-memory use.

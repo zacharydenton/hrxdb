@@ -23,11 +23,11 @@ cargo package --locked
 Use `cargo +1.91.0` to check the minimum supported version explicitly. Cargo
 packaging requires a clean working tree unless you add `--allow-dirty` while
 iterating. The lockfile records the qualified runtime/compiler release;
-the manifest accepts compatible HRX 0.8 updates.
+the manifest accepts compatible HRX 0.10 updates.
 
 ## Hardware validation
 
-Follow the [runtime setup](https://github.com/zacharydenton/hrx-rs/blob/v0.8.11/docs/GPU-NPU.md#native-setup)
+Follow the [runtime setup](https://github.com/zacharydenton/hrx-rs/blob/main/docs/SETUP.md)
 on a supported host. First use provisions the pinned native bundle; after
 provisioning, run with `HRX_OFFLINE=1` to prevent downloads:
 

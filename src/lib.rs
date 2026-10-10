@@ -12,7 +12,7 @@
 //! quantized corpus, not the original FP32 rows.
 //!
 //! Execution requires Linux x86_64, a gfx1151 AMD GPU, and the native runtime
-//! prerequisites in the [hrx-rs documentation](https://docs.rs/hrx-rs/0.8.11/hrx/).
+//! prerequisites in the [hrx-rs documentation](https://docs.rs/hrx-rs/0.10.1/hrx/).
 //! Building and generating documentation do not initialize GPU hardware.
 //!
 //! ```no_run
@@ -203,7 +203,7 @@ pub struct Searcher {
     corpus: Corpus,
     stream: Stream,
     compiler: hrx::loom::Compiler,
-    scans: Vec<(Kernel, Kernel)>,
+    scans: Vec<(Scan, Scan)>,
     query: HostBuffer,
     readback: HostBuffer,
     exclusions: HostBuffer,
@@ -379,6 +379,25 @@ fn encode_fp16(row: &[u8], dimensions: usize, padded: usize, bytes: &mut Vec<u8>
     bytes.extend_from_slice(row);
     bytes.resize(bytes.len() + (padded - dimensions) * 2, 0);
     Ok((1.0 / square_sum.sqrt()) as f32)
+}
+
+#[derive(Clone)]
+struct Scan {
+    kernel: Kernel,
+    launch: hrx::loom::LaunchConfig,
+}
+
+impl Scan {
+    fn compile(
+        compiler: &hrx::loom::Compiler,
+        stream: &Stream,
+        source: &str,
+        spec: hrx::loom::Specialization,
+    ) -> Result<(Self, Compilation)> {
+        let (kernel, report) = compile(compiler, stream, source, spec)?;
+        let launch = kernel.launch_config(&[])?;
+        Ok((Self { kernel, launch }, report))
+    }
 }
 
 fn compile(
@@ -596,13 +615,13 @@ impl Searcher {
         let mut reports = Vec::new();
         for index in 0..corpus.inner.shards.len() {
             let rows = corpus.scan_rows(index);
-            let (scan, sr) = compile(
+            let (scan, sr) = Scan::compile(
                 &compiler,
                 &stream,
                 kernels::SCAN,
                 kernels::scan_spec(rows, padded, config, false),
             )?;
-            let (control, cr) = compile(
+            let (control, cr) = Scan::compile(
                 &compiler,
                 &stream,
                 kernels::SCAN,
@@ -748,13 +767,13 @@ impl Searcher {
         let mut compiled = Vec::with_capacity(self.corpus.inner.shards.len());
         for index in 0..self.corpus.inner.shards.len() {
             let rows = self.corpus.scan_rows(index);
-            let (scan, sr) = compile(
+            let (scan, sr) = Scan::compile(
                 &self.compiler,
                 &self.stream,
                 kernels::SCAN,
                 kernels::scan_spec(rows, self.padded, config, false),
             )?;
-            let (control, cr) = compile(
+            let (control, cr) = Scan::compile(
                 &self.compiler,
                 &self.stream,
                 kernels::SCAN,
@@ -809,16 +828,16 @@ impl Searcher {
         let shards = self.corpus.inner.shards.iter().enumerate();
         for ((index, shard), (scan, control_kernel)) in shards.zip(&self.scans) {
             let rows = self.corpus.scan_rows(index);
-            let groups = rows.div_ceil(self.config.threads / 32 * self.config.rows_per_wave);
+            let scan = if control { control_kernel } else { scan };
             // SAFETY: each data shard fits the 32-bit element address limit.
             // Norms are shard-local; scores use the global row range, which
             // covers the last shard's reserve. The specialized kernel guards
             // tail rows. One stream orders accesses.
             unsafe {
                 commands.dispatch(
-                    if control { control_kernel } else { scan },
-                    [groups as u32, 1, 1],
-                    [self.config.threads as u32, 1, 1],
+                    &scan.kernel,
+                    scan.launch.workgroup_count,
+                    scan.launch.workgroup_size,
                     &Constants::new(),
                     &[
                         shard.vectors(self.padded, 0, shard.capacity)?,

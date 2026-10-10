@@ -61,7 +61,7 @@ IDs are insertion positions. `Corpus::build` normalizes and quantizes FP32 input
 
 First GPU use downloads HRX's native bundle. Execution requires amdgpu/KFD access,
 glibc 2.43+ and compatible system libraries.
-[Native setup](https://github.com/zacharydenton/hrx-rs/blob/main/docs/GPU-NPU.md#native-setup).
+[Native setup](https://github.com/zacharydenton/hrx-rs/blob/main/docs/SETUP.md).
 
 ## Use an existing HRX context
 

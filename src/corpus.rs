@@ -1,6 +1,6 @@
 //! Shared ownership and borrowed bindings for immutable GPU vector storage.
 use crate::{
-    Device, HostBuffer, Result, ScanConfig, Searcher, Shard, allocate_candidates, compile, invalid,
+    Device, HostBuffer, Result, Scan, ScanConfig, Searcher, Shard, allocate_candidates, invalid,
     kernels,
 };
 use hrx::{Stream, View};
@@ -213,7 +213,7 @@ impl Searcher {
                 continue;
             }
             let scan = |control| {
-                compile(
+                Scan::compile(
                     &self.compiler,
                     &self.stream,
                     kernels::SCAN,

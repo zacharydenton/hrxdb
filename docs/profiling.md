@@ -1,6 +1,6 @@
 # Profile search and explain compiler decisions
 
-HRX 0.8.11 supplies device-clock timestamps and detailed Loom compilation
+HRX supplies device-clock timestamps and detailed Loom compilation
 reports. hrxdb exposes both for exhaustive GPU search. Start with a benchmark
 that records ordinary latency, then collects diagnostic evidence:
 
@@ -58,7 +58,7 @@ are dropped after completion; normal query buffers/workspace remain reusable.
 
 The native timestamp API does not expose hardware performance counters or shader
 instruction traces. HRX-system's separate HAL profiling tools have a broader
-surface; hrx-rs 0.8.11 does not expose those services through this search API.
+surface; hrxdb does not expose those services through its search API.
 
 ## Use the Rust API
 
