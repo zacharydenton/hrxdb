@@ -2,7 +2,7 @@
 // and assigns unique destinations; only named logical components are read.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
 config.decl @gather.dimensions : %v:index where [range(%v,1,16384)]
-config.decl @gather.padded : %v:index where [range(%v,128,16384),mul(%v,128)]
+config.decl @gather.padded : %v:index where [range(%v,128,16384),multiple_of(%v,128)]
 config.decl @gather.input_limit : %v:index where [range(%v,1,1073741824)]
 config.decl @gather.output_limit : %v:index where [range(%v,1,1073741824)]
 kernel.def target(@target) export("gather") @gather(%count_arg:i32) {

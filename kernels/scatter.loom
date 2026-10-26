@@ -2,7 +2,7 @@
 // a unique destination row per staged row. Rows move as 32-bit words, so FP16
 // components and FP32 inverse norms are copied bit for bit.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
-config.decl @scatter.words : %v:index where [range(%v,64,8192),mul(%v,64)]
+config.decl @scatter.words : %v:index where [range(%v,64,8192),multiple_of(%v,64)]
 config.decl @scatter.limit : %v:index where [range(%v,1,1073741824)]
 kernel.def target(@target) export("scatter") @scatter(%count_arg:i32) {
   %one=index.constant 1 : index

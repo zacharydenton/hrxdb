@@ -18,8 +18,8 @@
 // the immutable running k-th bound; dense output remains the overflow fallback.
 // Compile-time template selection keeps that work out of the first-tile kernel.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
-config.decl @db.batch : %value: index where [range(%value, 8, 256), mul(%value, 8)]
-config.decl @db.scan.dimensions : %value: index where [range(%value, 128, 16384), mul(%value, 128)]
+config.decl @db.batch : %value: index where [range(%value, 8, 256), multiple_of(%value, 8)]
+config.decl @db.scan.dimensions : %value: index where [range(%value, 128, 16384), multiple_of(%value, 128)]
 template.decl @db.batch.keep(%prune: index, %score: f32, %threshold: f32, %query: index, %row: index, %global_base: index, %capacity_arg: i32, %counts: buffer, %candidate_scores: buffer, %candidate_ids: buffer)
 template.def<@db.batch.keep> @db.batch.dense(%prune: index, %score: f32, %threshold: f32, %query: index, %row: index, %global_base: index, %capacity_arg: i32, %counts: buffer, %candidate_scores: buffer, %candidate_ids: buffer) where [eq(%prune, 0)] {
   template.return

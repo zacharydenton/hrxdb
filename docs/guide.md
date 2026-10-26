@@ -360,7 +360,7 @@ returns all rows, regardless of exclusions supplied to previous searches.
 It performs no copy, allocation, compilation, or GPU work. Applications can bind
 their own Loom kernels to these vectors, together with their own side arrays
 and output buffers. This checkout uses
-`hrx = { package = "hrx-rs", version = "0.10.1" }`. If using a published hrxdb
+`hrx = { package = "hrx-rs", version = "0.12.0" }`. If using a published hrxdb
 release, match its HRX dependency instead: Cargo treats different HRX versions
 as distinct buffer and context types.
 
@@ -668,7 +668,7 @@ a gfx1151 GPU are required for execution. The pinned native HRX bundle needs
 glibc 2.43 or newer (Ubuntu 26.04 is its distribution baseline); see the
 [HRX installation guide](https://github.com/zacharydenton/hrx-rs/blob/main/docs/SETUP.md).
 Building and generating documentation do not initialize the GPU. The crate
-uses the published `hrx-rs 0.10.1` dependency and needs no sibling checkout. HRX provisions its pinned runtime automatically; use
+uses the published `hrx-rs 0.12.0` dependency and needs no sibling checkout. HRX provisions its pinned runtime automatically; use
 `HRX_OFFLINE=1` after provisioning to prohibit downloads.
 
 ```sh

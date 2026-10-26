@@ -2,17 +2,17 @@
 // Loom owns dependent types and loop unrolling; Rust supplies configuration.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
 config.decl @db.scan.count : %value: index where [range(%value, 1, 1073741824)]
-config.decl @db.scan.dimensions : %value: index where [range(%value, 128, 16384), mul(%value, 128)]
-config.decl @db.scan.threads : %value: index where [range(%value, 128, 256), mul(%value, 128)]
+config.decl @db.scan.dimensions : %value: index where [range(%value, 128, 16384), multiple_of(%value, 128)]
+config.decl @db.scan.threads : %value: index where [range(%value, 128, 256), multiple_of(%value, 128)]
 config.decl @db.scan.rows : %value: index where [range(%value, 1, 8)]
-config.decl @db.scan.width : %value: index where [range(%value, 2, 4), mul(%value, 2)]
+config.decl @db.scan.width : %value: index where [range(%value, 2, 4), multiple_of(%value, 2)]
 config.decl @db.scan.mode : %value: index where [range(%value, 0, 1)]
 
 template.decl @db.accumulate(%mode: index, %width: index, %d: index, %column: index, %data: buffer, %row: index, %query: buffer, %acc: f32) -> (f32)
 template.def<@db.accumulate> @db.cosine(%mode: index, %width: index, %d: index, %column: index, %data: buffer, %row: index, %query: buffer, %acc: f32) -> (f32) where [eq(%mode, 0)] {
   %zero = index.constant 0 : offset
   %last = index.sub %d, %width : index
-  %col = index.assume %column [le(%column, %last), mul(%column, 2)] : index
+  %col = index.assume %column [le(%column, %last), multiple_of(%column, 2)] : index
   %n = config.get @db.scan.count : index
   %zero_offset = index.constant 0 : offset
   %xv = buffer.view %data[%zero_offset] : buffer -> view<[%n]x[%d]xf16>
@@ -25,7 +25,7 @@ template.def<@db.accumulate> @db.cosine(%mode: index, %width: index, %d: index, 
 }
 template.def<@db.accumulate> @db.read_control(%mode: index, %width: index, %d: index, %column: index, %data: buffer, %row: index, %query: buffer, %acc: f32) -> (f32) where [eq(%mode, 1)] {
   %last = index.sub %d, %width : index
-  %col = index.assume %column [le(%column, %last), mul(%column, 2)] : index
+  %col = index.assume %column [le(%column, %last), multiple_of(%column, 2)] : index
   %n = config.get @db.scan.count : index
   %zero_offset = index.constant 0 : offset
   %xv = buffer.view %data[%zero_offset] : buffer -> view<[%n]x[%d]xf16>

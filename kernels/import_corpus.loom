@@ -3,7 +3,7 @@
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
 config.decl @import.rows : %v:index where [range(%v,1,1073741824)]
 config.decl @import.dimensions : %v:index where [range(%v,1,16384)]
-config.decl @import.padded : %v:index where [range(%v,128,16384),mul(%v,128)]
+config.decl @import.padded : %v:index where [range(%v,128,16384),multiple_of(%v,128)]
 kernel.def target(@target) export("import_corpus") @import_corpus() {
  %one=index.constant 1 : index
  %threads=index.constant 128 : index

@@ -12,7 +12,7 @@
 //! quantized corpus, not the original FP32 rows.
 //!
 //! Execution requires Linux x86_64, a gfx1151 AMD GPU, and the native runtime
-//! prerequisites in the [hrx-rs documentation](https://docs.rs/hrx-rs/0.10.1/hrx/).
+//! prerequisites in the [hrx-rs documentation](https://docs.rs/hrx-rs/0.12.0/hrx/).
 //! Building and generating documentation do not initialize GPU hardware.
 //!
 //! ```no_run

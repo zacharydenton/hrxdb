@@ -3,8 +3,8 @@
 // Every thread reads eight adjacent queries; widths and dimensions are padded
 // so every packet and workgroup is full.
 amdgpu.target<gfx1151> @target {subgroup_size = 32}
-config.decl @db.batch : %value: index where [range(%value, 8, 256), mul(%value, 8)]
-config.decl @db.scan.dimensions : %value: index where [range(%value, 128, 16384), mul(%value, 128)]
+config.decl @db.batch : %value: index where [range(%value, 8, 256), multiple_of(%value, 8)]
+config.decl @db.scan.dimensions : %value: index where [range(%value, 128, 16384), multiple_of(%value, 128)]
 kernel.def target(@target) export("batch_query_pack") @batch_query_pack() {
   %one = index.constant 1 : index
   %threads = index.constant 128 : index
